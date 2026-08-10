@@ -11,7 +11,7 @@ const errorText = (error: unknown, fallback: string) => typeof error === "string
   ? error : error instanceof Error ? error.message : fallback;
 
 export function Settings({ connection }: { connection: SidecarConnection | null }) {
-  const providerId = useRef(crypto.randomUUID());
+  const providerId = useRef<string>(crypto.randomUUID());
   const [items, setItems] = useState<ModelConfig[]>([]);
   const [preferences, setPreferences] = useState<AppSettings>(defaultSettings);
   const [protocol, setProtocol] = useState<ModelConfig["protocol_id"]>("openai_compatible");
@@ -20,6 +20,7 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   const [busy, setBusy] = useState<"detect" | "save" | "preferences" | "remove" | null>(null);
   const [message, setMessage] = useState("");
   const [testStates, setTestStates] = useState<Record<string, string>>({});
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
 
   async function refresh() {
     if (!connection) return;
@@ -32,13 +33,19 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
     return [...new Set(modelText.split(/[\n,，]+/).map((value) => value.trim()).filter(Boolean))];
   }
 
+  function resetProviderForm() {
+    providerId.current = crypto.randomUUID(); setEditingProviderId(null); setName("");
+    setProtocol("openai_compatible"); setBaseUrl(defaults.openai_compatible);
+    setApiKey(""); setModelText("");
+  }
+
   async function tryDiscover() {
-    if (!connection || !baseUrl.trim() || (protocol !== "ollama" && !apiKey.trim())) {
+    if (!connection || !baseUrl.trim() || (protocol !== "ollama" && !apiKey.trim() && !editingProviderId)) {
       setMessage("请先填写 Base URL 和 API Key。也可以跳过获取，直接手工填写模型 ID。"); return;
     }
     setBusy("detect"); setMessage("正在尝试获取模型；失败不会影响手工配置…");
     try {
-      if (protocol !== "ollama") await storeModelCredential(providerId.current, apiKey);
+      if (protocol !== "ollama" && apiKey.trim()) await storeModelCredential(providerId.current, apiKey);
       const result = await probeModelConfig({ configId: providerId.current, protocolId: protocol,
         baseUrl, modelName: "" });
       setBaseUrl(result.normalizedBaseUrl);
@@ -51,21 +58,29 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
 
   async function saveProvider() {
     const models = enteredModels();
+    const existing = editingProviderId
+      ? items.filter((item) => item.provider_id === editingProviderId) : [];
+    const hasStoredCredential = existing.some((item) => item.has_credential);
     if (!connection || !name.trim() || !baseUrl.trim() || !models.length
-      || (protocol !== "ollama" && !apiKey.trim())) {
+      || (protocol !== "ollama" && !apiKey.trim() && !hasStoredCredential)) {
       setMessage("请填写连接名称、Base URL、API Key，并至少添加一个模型 ID。"); return;
     }
     setBusy("save"); setMessage(`正在保存连接和 ${models.length} 个模型…`);
     try {
       const sharedId = providerId.current;
-      if (protocol !== "ollama") await storeModelCredential(sharedId, apiKey);
+      if (protocol !== "ollama" && apiKey.trim()) await storeModelCredential(sharedId, apiKey);
+      const retainedIds = new Set<string>();
       for (const model of models) {
-        await saveModelConfig(connection, { id: crypto.randomUUID(), name: name.trim(),
+        const previous = existing.find((item) => item.model_name === model);
+        const id = previous?.id ?? crypto.randomUUID(); retainedIds.add(id);
+        await saveModelConfig(connection, { id, name: name.trim(),
           protocol_id: protocol, base_url: baseUrl, model_name: model,
           credential_ref: protocol === "ollama" ? null : sharedId });
       }
-      providerId.current = crypto.randomUUID(); setName(""); setApiKey(""); setModelText("");
-      await refresh(); setMessage(`连接已保存，共添加 ${models.length} 个模型。可稍后再做连通性验证。`);
+      for (const item of existing) if (!retainedIds.has(item.id)) await deleteModelConfig(connection, item.id);
+      if (protocol === "ollama" && hasStoredCredential) await deleteModelCredential(sharedId);
+      const wasEditing = !!editingProviderId; resetProviderForm(); await refresh();
+      setMessage(`连接已${wasEditing ? "更新" : "保存"}，共配置 ${models.length} 个模型。`);
     } catch (error) { setMessage(errorText(error, "连接保存失败")); }
     finally { setBusy(null); }
   }
@@ -80,6 +95,13 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   const providers = Object.values(items.reduce<Record<string, ModelConfig[]>>((result, item) => {
     (result[item.provider_id] ||= []).push(item); return result;
   }, {}));
+  function editProvider(group: ModelConfig[]) {
+    const first = group[0]; providerId.current = first.provider_id;
+    setEditingProviderId(first.provider_id); setName(first.name); setProtocol(first.protocol_id);
+    setBaseUrl(first.base_url); setApiKey(""); setModelText(group.map((item) => item.model_name).join("\n"));
+    setMessage("正在编辑连接。API Key 留空会保留原值，填写新 Key 才会覆盖。");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
   async function removeProvider(group: ModelConfig[]) {
     if (!connection || !window.confirm(`删除连接“${group[0].name}”及其 ${group.length} 个模型？`)) return;
     setBusy("remove");
@@ -106,7 +128,7 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   return <main className="settings-page"><header className="topbar"><div><p className="eyebrow">SETTINGS</p>
     <h1>设置</h1><p>一个连接可配置多个模型；API Key 只进入操作系统安全存储。</p></div></header>
     <section className="settings-content"><div className="settings-provider-grid"><section className="model-form"><div>
-      <h2>添加模型连接</h2><p>模型 ID 以换行或逗号分隔。自动获取是可选辅助，失败也能手工保存。</p></div>
+      <h2>{editingProviderId ? "编辑模型连接" : "添加模型连接"}</h2><p>模型 ID 以换行或逗号分隔。自动获取是可选辅助，失败也能手工保存。</p></div>
       <label>连接名称<input required value={name} onChange={(event) => setName(event.target.value)}
         placeholder="例如：SenseAudio Token Plan" /></label>
       <label>协议<select value={protocol} onChange={(event) => { const value = event.target.value as typeof protocol;
@@ -114,21 +136,24 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
         <option value="anthropic">Anthropic</option><option value="ollama">Ollama 本地</option></select></label>
       <label>Base URL<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></label>
       {protocol !== "ollama" && <label>API Key<input required type="password" autoComplete="new-password"
-        value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="不会写入 SQLite" /></label>}
+        value={apiKey} onChange={(event) => setApiKey(event.target.value)}
+        placeholder={editingProviderId ? "留空保留现有 API Key" : "不会写入 SQLite"} /></label>}
       <label>模型 ID（每行一个）<textarea rows={6} value={modelText}
         onChange={(event) => setModelText(event.target.value)}
         placeholder={"senseaudio-s2\ndeepseek-v4-pro\nqwen3.6-27b"} /></label>
       <div className="detected-models"><button type="button" disabled={!!busy || !connection} onClick={tryDiscover}>
         {busy === "detect" ? "正在尝试获取…" : "尝试获取模型（可选）"}</button>
         <button type="button" disabled={!!busy || !connection} onClick={saveProvider}>
-          {busy === "save" ? "正在保存…" : `保存连接与模型${enteredModels().length ? `（${enteredModels().length}）` : ""}`}</button></div>
+          {busy === "save" ? "正在保存…" : `${editingProviderId ? "保存修改" : "保存连接与模型"}${enteredModels().length ? `（${enteredModels().length}）` : ""}`}</button>
+        {editingProviderId && <button className="secondary-action" type="button" disabled={!!busy} onClick={resetProviderForm}>取消编辑</button>}</div>
       {message && <p className="settings-message">{message}</p>}
     </section>
     <div className="model-list"><div className="section-title"><span>已配置连接</span><em>{providers.length}</em></div>
       {providers.length ? providers.map((group) => <article className="provider-card" key={group[0].provider_id}>
         <div className="provider-heading"><span className="verified">已配置</span><div><strong>{group[0].name}</strong>
           <small>{group[0].protocol_id} · {group.length} 个模型</small><code>{group[0].base_url}</code></div>
-          <button disabled={!!busy} onClick={() => removeProvider(group)}>删除连接</button></div>
+          <div className="provider-actions"><button disabled={!!busy} onClick={() => editProvider(group)}>编辑</button>
+            <button className="danger" disabled={!!busy} onClick={() => removeProvider(group)}>删除</button></div></div>
         <div className="provider-models">{group.map((item) => <div className="provider-model" key={item.id}>
           <div><strong>{item.model_name}</strong>{testStates[item.id] && <small className={testStates[item.id].startsWith("连接成功") ? "test-ok" : "test-note"}>{testStates[item.id]}</small>}</div>
           <button disabled={testStates[item.id] === "正在测试…"} onClick={() => testSavedModel(item)}>测试连接</button>
