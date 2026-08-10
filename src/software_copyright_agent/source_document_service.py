@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
 from .domain import TaskStatus
+from .font_assets import FontAsset
 from .service import new_id, utc_now
 from .source_document import (
     GENERATOR_VERSION,
@@ -76,6 +77,11 @@ class SourceDocumentService:
         task_root = self._data_root / "tasks" / task_id
         preview_path = task_root / PurePosixPath(preview["artifact_relative_path"])
         preview_payload = json.loads(preview_path.read_text(encoding="utf-8"))
+        required_text = "".join(
+            entry.get("text", "")
+            for page in preview_payload["pages"] for entry in page["entries"]
+        ) + str(software_name) + str(version_name) + "源程序代码文档构成封面正文第页共"
+        font_summary = FontAsset.bundled_cjk().validate(required_text)
 
         stage_id = new_id()
         now = utc_now()
@@ -111,6 +117,7 @@ class SourceDocumentService:
                 str(version_name),
                 preview_payload["pages"],
             )
+            summary["cjk_font_preflight"] = font_summary
             digest = hashlib.sha256(temporary_path.read_bytes()).hexdigest()
             os.replace(str(temporary_path), str(artifact_path))
         except Exception as error:

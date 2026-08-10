@@ -45,8 +45,12 @@ class SourceDocumentBuilderTests(unittest.TestCase):
             self.assertIn("示例软件", "\n".join(p.text for p in document.paragraphs))
             with zipfile.ZipFile(output) as archive:
                 xml = archive.read("word/document.xml").decode("utf-8")
+                names = archive.namelist()
+                font_table = archive.read("word/fontTable.xml").decode("utf-8")
             self.assertEqual(xml.count('w:type="page"'), 1)
             self.assertEqual(xml.count("<w:sectPr"), 2)
+            self.assertEqual(sum(name.endswith(".odttf") for name in names), 1)
+            self.assertIn("embedRegular", font_table)
 
     def test_rejects_incomplete_preview(self) -> None:
         builder = SourceDocumentBuilder(

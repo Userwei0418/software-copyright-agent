@@ -9,6 +9,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor
 
+from .font_assets import DEFAULT_CJK_FAMILY, embed_font_in_docx
+
 
 GENERATOR_VERSION = "source-docx-v1"
 
@@ -23,7 +25,7 @@ class SourceDocumentTemplate:
     cover_pattern: str = "editorial_cover"
     page_size: str = "A4"
     code_font: str = "Courier New"
-    east_asia_font: str = "PingFang SC"
+    east_asia_font: str = DEFAULT_CJK_FAMILY
     code_size_pt: float = 8.0
     code_line_height_pt: float = 11.0
     code_pages: int = 59
@@ -44,10 +46,10 @@ class SourceDocumentBuilder:
         pages = list(pages)
         self._validate_pages(pages)
         document = Document()
-        document.core_properties.title = "{0} {1} Source Code".format(
+        document.core_properties.title = "{0} {1} 源程序代码".format(
             software_name, version
         )
-        document.core_properties.subject = "Software Source Code"
+        document.core_properties.subject = "软件源程序代码"
         document.core_properties.author = ""
         document.core_properties.comments = ""
         self._configure_styles(document)
@@ -73,12 +75,14 @@ class SourceDocumentBuilder:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         document.save(str(output_path))
+        font_summary = embed_font_in_docx(output_path)
         return {
             "total_pages_expected": 1 + len(pages),
             "code_pages": len(pages),
             "lines_per_page": self.template.lines_per_page,
             "code_lines": sum(page["line_count"] for page in pages),
             "template": asdict(self.template),
+            "cjk_font": font_summary,
         }
 
     def _validate_pages(self, pages: list) -> None:
@@ -134,39 +138,39 @@ class SourceDocumentBuilder:
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         title.paragraph_format.space_after = Pt(10)
         run = title.add_run(software_name)
-        self._set_run_font(run, "Calibri", 26, RGBColor(32, 55, 72), bold=True)
+        self._set_run_font(run, self.template.east_asia_font, 26, RGBColor(32, 55, 72), bold=True)
 
         subtitle = document.add_paragraph()
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
         subtitle.paragraph_format.space_after = Pt(34)
-        run = subtitle.add_run("{0}  SOURCE CODE".format(version))
-        self._set_run_font(run, "Calibri", 15, RGBColor(43, 81, 99))
+        run = subtitle.add_run("{0}  源程序代码".format(version))
+        self._set_run_font(run, self.template.east_asia_font, 15, RGBColor(43, 81, 99))
 
         meta = document.add_paragraph()
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
         meta.paragraph_format.space_after = Pt(4)
-        run = meta.add_run("DOCUMENT: 1 COVER + 59 SOURCE PAGES")
-        self._set_run_font(run, "Calibri", 10, RGBColor(80, 80, 80))
+        run = meta.add_run("文档构成：封面 1 页 + 源代码正文 59 页")
+        self._set_run_font(run, self.template.east_asia_font, 10, RGBColor(80, 80, 80))
 
     def _set_header(self, section, software_name: str, version: str) -> None:
         paragraph = section.header.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         paragraph.paragraph_format.space_after = Pt(0)
-        run = paragraph.add_run("{0}  {1}  SOURCE CODE".format(software_name, version))
-        self._set_run_font(run, "Calibri", 8, RGBColor(90, 90, 90))
+        run = paragraph.add_run("{0}  {1}  源程序代码".format(software_name, version))
+        self._set_run_font(run, self.template.east_asia_font, 8, RGBColor(90, 90, 90))
 
     def _set_footer(self, section) -> None:
         paragraph = section.footer.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         paragraph.paragraph_format.space_before = Pt(0)
-        run = paragraph.add_run("PAGE ")
-        self._set_run_font(run, "Calibri", 8, RGBColor(100, 100, 100))
+        run = paragraph.add_run("第 ")
+        self._set_run_font(run, self.template.east_asia_font, 8, RGBColor(100, 100, 100))
         self._add_field(paragraph, "PAGE")
-        run = paragraph.add_run(" / ")
-        self._set_run_font(run, "Calibri", 8, RGBColor(100, 100, 100))
+        run = paragraph.add_run(" 页 / 共 ")
+        self._set_run_font(run, self.template.east_asia_font, 8, RGBColor(100, 100, 100))
         self._add_field(paragraph, "NUMPAGES")
-        run = paragraph.add_run("")
-        self._set_run_font(run, "Calibri", 8, RGBColor(100, 100, 100))
+        run = paragraph.add_run(" 页")
+        self._set_run_font(run, self.template.east_asia_font, 8, RGBColor(100, 100, 100))
 
     def _add_code_line(self, document: Document, entry: dict) -> None:
         paragraph = document.add_paragraph()

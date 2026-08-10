@@ -89,3 +89,5 @@
 决定：macOS 与 Windows 发布包必须内置同一套许可兼容的开源 CJK 字体。DOCX 生成和渲染前先探测字体可用性；缺失时阻断中文项目出件，不允许静默回退为缺字字体。
 
 原因：真实 LibreOffice 渲染验证表明，macOS 已安装的受系统保护中文字体可能被识别但无法渲染字形。仅在 OOXML 中声明字体名不能保证跨平台输出一致。
+
+实施记录：首个实现采用 Noto Sans CJK SC Regular，保持上游文件不变并附带 OFL 1.1。字体通过 OOXML `embedRegular` 内嵌进 DOCX；仅设置系统字体名、`SAL_FONTPATH` 或临时用户字体目录均不能满足当前 macOS headless LibreOffice 的真实渲染门禁。

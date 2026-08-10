@@ -24,6 +24,7 @@
 - 使用 `inspect` CLI 查看事实值、置信度和证据关联。
 - 将确定性分页预览生成 A4 DOCX：1 页封面 + 59 页源代码正文。
 - 对 DOCX 运行版本化记录和 SHA-256 留痕；代码不足时阻断出件。
+- 内置并嵌入 Noto Sans CJK SC 字体，中文名称、页眉页脚和中文源码不依赖系统字体。
 
 ## 运行
 
@@ -93,7 +94,7 @@ PYTHONPATH=src python3 -m software_copyright_agent \
   qa-source-docx TASK_ID --json
 ```
 
-门禁会验证产物哈希、A4 分节、显式分页、页码字段、实际 60 页、页面尺寸一致性和空白页。可用 `COPYRIGHT_AGENT_SOFFICE=/path/to/soffice` 指定应用自带或外部 LibreOffice；未通过时命令返回退出码 3，渲染器故障返回退出码 2。
+门禁会验证产物哈希、A4 分节、显式分页、页码字段、内嵌字体结构、字体与许可证哈希、所需 Unicode 字形、实际 60 页、页面尺寸一致性和空白页。可用 `COPYRIGHT_AGENT_SOFFICE=/path/to/soffice` 指定应用自带或外部 LibreOffice；未通过时命令返回退出码 3，渲染器故障返回退出码 2。
 
 运行测试：
 
@@ -108,7 +109,7 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
 - 当前 CLI 是验证领域内核的纵向切片，不是最终用户界面。
 - `.gitignore` 当前实现常用 glob、目录、锚定和否定规则，不承诺覆盖 Git 的全部边缘语义。
 - A/B/C 当前是确定性初筛；后续模型只对未排除候选做语义重排，不能恢复安全规则排除项。
-- macOS LibreOffice 无法可靠使用受系统保护的 CJK 字体；跨平台发布前必须内置开源 CJK 字体并加入字体探测门禁。
 - 自动 QA 能阻断结构、页数、尺寸和全空白页问题，但不能替代最终人工视觉抽检；QA 报告会明确保留 `visual_review_required=true`。
+- 当前内置字体覆盖常用简体中文；遇到字体 cmap 不包含的扩展字符时会阻断出件，而不是静默显示方框。
 
 开发计划和每轮进度分别见 `DEVELOPMENT_PLAN.md` 与 `PROGRESS.md`。

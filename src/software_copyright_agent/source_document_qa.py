@@ -6,14 +6,17 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
 from PIL import Image, ImageChops
 
+from .font_assets import FontAsset
 
-QA_POLICY_VERSION = "source-docx-qa-v1"
+
+QA_POLICY_VERSION = "source-docx-qa-v2"
 
 
 class SourceDocumentQaError(RuntimeError):
@@ -44,9 +47,11 @@ class QaResult:
 
 
 class LibreOfficeRenderer:
-    def __init__(self, timeout_seconds: int = 120, dpi: int = 100) -> None:
+    def __init__(self, timeout_seconds: int = 120, dpi: int = 100,
+                 cjk_font: FontAsset = None) -> None:
         self.timeout_seconds = timeout_seconds
         self.dpi = dpi
+        self.cjk_font = cjk_font or FontAsset.bundled_cjk()
 
     def render(self, document_path: Path, output_dir: Path) -> RenderResult:
         configured_soffice = os.environ.get("COPYRIGHT_AGENT_SOFFICE")
@@ -65,10 +70,16 @@ class LibreOfficeRenderer:
             environment["XDG_CACHE_HOME"] = str(Path(profile) / "xdg_cache")
             Path(environment["XDG_CONFIG_HOME"]).mkdir()
             Path(environment["XDG_CACHE_HOME"]).mkdir()
+            user_fonts = Path(profile) / "Library" / "Fonts"
+            user_fonts.mkdir(parents=True)
+            shutil.copyfile(self.cjk_font.path, user_fonts / self.cjk_font.path.name)
             stable_temp = "/private/tmp" if Path("/private/tmp").is_dir() else profile
             environment["TMPDIR"] = stable_temp
             environment["TEMP"] = stable_temp
             environment["TMP"] = stable_temp
+            environment["SAL_FONTPATH"] = os.pathsep.join(
+                [str(self.cjk_font.path.parent), str(user_fonts)]
+            )
             converted = subprocess.run(
                 [soffice, "-env:UserInstallation={0}".format(profile_uri),
                  "--invisible", "--headless", "--norestore", "--convert-to", "pdf",
@@ -109,15 +120,17 @@ class LibreOfficeRenderer:
 
 
 class SourceDocumentQaInspector:
-    def __init__(self, expected_pages: int = 60) -> None:
+    def __init__(self, expected_pages: int = 60, cjk_font: FontAsset = None) -> None:
         self.expected_pages = expected_pages
+        self.cjk_font = cjk_font or FontAsset.bundled_cjk()
 
     def inspect(self, document_path: Path, expected_sha256: str, render: RenderResult) -> QaResult:
         checks: List[QaCheck] = []
         actual_sha = hashlib.sha256(document_path.read_bytes()).hexdigest()
         checks.append(self._check("artifact.sha256", expected_sha256, actual_sha))
         with zipfile.ZipFile(document_path) as archive:
-            document_xml = archive.read("word/document.xml").decode("utf-8")
+            document_bytes = archive.read("word/document.xml")
+            document_xml = document_bytes.decode("utf-8")
             footer_xml = "\n".join(
                 archive.read(name).decode("utf-8")
                 for name in archive.namelist() if name.startswith("word/footer")
@@ -125,12 +138,26 @@ class SourceDocumentQaInspector:
             header_count = sum(
                 1 for name in archive.namelist() if name.startswith("word/header")
             )
+            embedded_fonts = [name for name in archive.namelist() if name.endswith(".odttf")]
+            font_table_xml = archive.read("word/fontTable.xml").decode("utf-8")
+            settings_xml = archive.read("word/settings.xml").decode("utf-8")
+            content_types_xml = archive.read("[Content_Types].xml").decode("utf-8")
         checks.append(self._check("structure.sections", 2, document_xml.count("<w:sectPr")))
         checks.append(self._check("structure.page_breaks", 58, document_xml.count('w:type="page"')))
         checks.append(self._check("structure.a4_sections", 2, self._a4_section_count(document_xml)))
         checks.append(self._check("structure.header_parts", 1, header_count))
         checks.append(self._check("structure.page_field", True, "PAGE" in footer_xml))
         checks.append(self._check("structure.numpages_field", True, "NUMPAGES" in footer_xml))
+        checks.append(self._check("font.embedded_parts", 1, len(embedded_fonts)))
+        checks.append(self._check("font.embed_regular", True, "embedRegular" in font_table_xml))
+        checks.append(self._check("font.embed_setting", True, "embedTrueTypeFonts" in settings_xml))
+        checks.append(self._check("font.content_type", True, "obfuscatedFont" in content_types_xml))
+        root = ET.fromstring(document_bytes)
+        namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
+        document_text = "".join(node.text or "" for node in root.iter(namespace))
+        font_summary = self.cjk_font.validate(document_text)
+        checks.append(self._check("font.sha256", self.cjk_font.expected_sha256, font_summary["sha256"]))
+        checks.append(self._check("font.missing_codepoints", 0, font_summary["missing_codepoints"]))
         checks.append(self._check("render.page_count", self.expected_pages, len(render.page_paths)))
 
         dimensions = []
@@ -159,6 +186,7 @@ class SourceDocumentQaInspector:
             "page_dimensions": list(dimensions[0]) if dimensions else None,
             "document_sha256": actual_sha,
             "visual_review_required": True,
+            "cjk_font": font_summary,
         }
         return QaResult(passed, tuple(checks), summary, render)
 
