@@ -111,6 +111,19 @@ class SidecarFastApiTests(unittest.TestCase):
         self.assertIsNone(cleared["manual_model_id"])
         self.assertIsNone(cleared["diagram_model_id"])
 
+    def test_model_credentials_are_encrypted_and_session_protected(self) -> None:
+        provider_id = "33333333-3333-4333-8333-333333333333"
+        secret = "sk-sidecar-encrypted-secret"
+        path = f"/api/v1/model-credentials/{provider_id}"
+        self.assertEqual(self.client.put(path, json={"api_key": secret}).status_code, 401)
+        stored = self.client.put(path, headers=self.headers, json={"api_key": secret})
+        self.assertEqual(stored.status_code, 200)
+        self.assertTrue(self.client.get(f"{path}/status", headers=self.headers).json()["available"])
+        self.assertEqual(self.client.get(path, headers=self.headers).json()["api_key"], secret)
+        self.assertNotIn(secret.encode(), (self.data_dir / "app.db").read_bytes())
+        self.assertEqual(self.client.delete(path, headers=self.headers).status_code, 204)
+        self.assertFalse(self.client.get(f"{path}/status", headers=self.headers).json()["available"])
+
     def test_scan_project_returns_summary_facts_and_confirmations(self) -> None:
         project = self.data_dir / "project"
         (project / "src").mkdir(parents=True)

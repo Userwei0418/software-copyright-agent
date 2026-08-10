@@ -33,6 +33,7 @@ from .diagram_plan_service import DiagramPlanError
 from .drawio_service import DrawioGenerationError
 from .storage import Database
 from .model_config import ModelConfigInput, ModelConfigService
+from .credential_vault import CredentialVault
 from .app_settings import AppSettingsService
 
 
@@ -105,6 +106,10 @@ class ModelConfigRequest(StrictModel):
     credential_ref: Optional[str] = Field(default=None, max_length=100)
 
 
+class CredentialRequest(StrictModel):
+    api_key: str = Field(min_length=8, max_length=8192)
+
+
 class AppSettingsRequest(StrictModel):
     manual_model_id: Optional[str] = Field(default=None, max_length=64)
     diagram_model_id: Optional[str] = Field(default=None, max_length=64)
@@ -149,6 +154,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     source_materials_service = SourceMaterialsService(database, data_dir)
     manual_workspace_service = ManualWorkspaceService(database, data_dir)
     model_config_service = ModelConfigService(database)
+    credential_vault = CredentialVault(database, data_dir)
     app_settings_service = AppSettingsService(database)
     api = DiagramAssetApi(service, session_token)
     app = FastAPI(title="Software Copyright Agent Sidecar", version=SIDECAR_VERSION,
@@ -158,7 +164,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
         CORSMiddleware,
         allow_origins=ALLOWED_DESKTOP_ORIGINS,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=[SESSION_HEADER, "Content-Type"],
     )
 
@@ -237,6 +243,59 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 "error": {"code": "unauthorized", "message": "Invalid session token"}
             })
         return {"items": model_config_service.list()}
+
+    @app.put("/api/v1/model-credentials/{provider_id}")
+    def store_model_credential(provider_id: str, payload: CredentialRequest,
+                               token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            credential_vault.store(provider_id, payload.api_key)
+            return {"stored": True}
+        except ValueError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "credential_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/model-credentials/{provider_id}")
+    def read_model_credential(provider_id: str,
+                              token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return {"api_key": credential_vault.read(provider_id)}
+        except ValueError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "credential_not_found", "message": str(error)}
+            })
+
+    @app.get("/api/v1/model-credentials/{provider_id}/status")
+    def model_credential_status(provider_id: str,
+                                token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return {"available": credential_vault.has(provider_id)}
+        except ValueError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "credential_error", "message": str(error)}
+            })
+
+    @app.delete("/api/v1/model-credentials/{provider_id}")
+    def delete_stored_model_credential(provider_id: str,
+                                       token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        credential_vault.delete(provider_id)
+        return Response(status_code=204)
 
     @app.post("/api/v1/model-configs")
     def save_model_config(payload: ModelConfigRequest,

@@ -11,7 +11,6 @@ use tauri_plugin_shell::ShellExt;
 
 const PROTOCOL_VERSION: u32 = 1;
 const SIDECAR_NAME: &str = "copyright-agent-sidecar";
-const KEYRING_SERVICE: &str = "com.local.software-copyright-agent.model-api";
 
 #[derive(Default)]
 struct SidecarState {
@@ -261,40 +260,65 @@ fn reveal_exported_document(path: String) -> Result<(), String> {
     reveal_in_file_manager(&path)
 }
 
+fn active_sidecar(state: &State<'_, SidecarState>) -> Result<SidecarConnection, String> {
+    state.session.lock().map_err(|_| "sidecar state poisoned")?.as_ref()
+        .map(|session| session.connection.clone()).ok_or("本地服务尚未连接".into())
+}
+
+async fn read_model_credential(state: &State<'_, SidecarState>, config_id: &str) -> Result<String, String> {
+    validate_config_id(config_id)?;
+    let connection = active_sidecar(state)?;
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/v1/model-credentials/{config_id}", connection.base_url))
+        .header("X-Session-Token", connection.session_token).send().await
+        .map_err(|_| "无法读取加密凭据库")?;
+    if !response.status().is_success() { return Err("未找到该模型的 API Key".into()); }
+    response.json::<serde_json::Value>().await.ok()
+        .and_then(|value| value.get("api_key").and_then(|key| key.as_str()).map(str::to_owned))
+        .filter(|value| !value.is_empty()).ok_or("加密凭据解密失败".into())
+}
+
 #[tauri::command]
-fn store_model_credential(config_id: String, api_key: String) -> Result<(), String> {
+async fn store_model_credential(state: State<'_, SidecarState>, config_id: String, api_key: String) -> Result<(), String> {
     validate_config_id(&config_id)?;
     if api_key.trim().len() < 8 { return Err("API Key 长度不足".into()); }
-    keyring::Entry::new(KEYRING_SERVICE, &config_id)
-        .map_err(|_| "无法连接系统安全存储")?
-        .set_password(api_key.trim()).map_err(|_| "API Key 保存到系统安全存储失败".to_string())
+    let connection = active_sidecar(&state)?;
+    let response = reqwest::Client::new()
+        .put(format!("{}/api/v1/model-credentials/{config_id}", connection.base_url))
+        .header("X-Session-Token", connection.session_token)
+        .json(&serde_json::json!({"api_key": api_key.trim()})).send().await
+        .map_err(|_| "API Key 写入加密凭据库失败")?;
+    if !response.status().is_success() { return Err("API Key 加密保存失败".into()); }
+    if read_model_credential(&state, &config_id).await? == api_key.trim() { Ok(()) }
+        else { Err("API Key 保存后回读校验失败".into()) }
 }
 
 #[tauri::command]
-fn delete_model_credential(config_id: String) -> Result<(), String> {
+async fn delete_model_credential(state: State<'_, SidecarState>, config_id: String) -> Result<(), String> {
     validate_config_id(&config_id)?;
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &config_id)
-        .map_err(|_| "无法连接系统安全存储")?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err("API Key 删除失败".into()),
-    }
+    let connection = active_sidecar(&state)?;
+    let response = reqwest::Client::new()
+        .delete(format!("{}/api/v1/model-credentials/{config_id}", connection.base_url))
+        .header("X-Session-Token", connection.session_token).send().await
+        .map_err(|_| "加密凭据删除失败")?;
+    if response.status().is_success() { Ok(()) } else { Err("加密凭据删除失败".into()) }
 }
 
 #[tauri::command]
-fn has_model_credential(config_id: String) -> Result<bool, String> {
+async fn has_model_credential(state: State<'_, SidecarState>, config_id: String) -> Result<bool, String> {
     validate_config_id(&config_id)?;
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &config_id)
-        .map_err(|_| "无法连接系统安全存储")?;
-    match entry.get_password() {
-        Ok(value) => Ok(!value.is_empty()),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(_) => Err("无法读取系统安全存储中的 API Key".into()),
-    }
+    let connection = active_sidecar(&state)?;
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/v1/model-credentials/{config_id}/status", connection.base_url))
+        .header("X-Session-Token", connection.session_token).send().await
+        .map_err(|_| "无法检查加密凭据状态")?;
+    if !response.status().is_success() { return Err("无法检查加密凭据状态".into()); }
+    Ok(response.json::<serde_json::Value>().await.ok()
+        .and_then(|value| value.get("available").and_then(|item| item.as_bool())).unwrap_or(false))
 }
 
 #[tauri::command]
-async fn probe_model_config(request: ModelProbeRequest) -> Result<ModelProbeResult, String> {
+async fn probe_model_config(state: State<'_, SidecarState>, request: ModelProbeRequest) -> Result<ModelProbeResult, String> {
     validate_config_id(&request.config_id)?;
     let base = normalize_model_base_url(&request.protocol_id, &request.base_url)?;
     if !base.starts_with("https://") && !base.starts_with("http://127.0.0.1")
@@ -308,9 +332,7 @@ async fn probe_model_config(request: ModelProbeRequest) -> Result<ModelProbeResu
         _ => return Err("不支持的模型协议".into()),
     };
     let credential = if credential_required {
-        Some(keyring::Entry::new(KEYRING_SERVICE, &request.config_id)
-            .map_err(|_| "无法连接系统安全存储")?.get_password()
-            .map_err(|_| "未找到该模型的 API Key")?)
+        Some(read_model_credential(&state, &request.config_id).await?)
     } else { None };
     let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()
         .map_err(|_| "无法创建模型连接")?;
@@ -346,7 +368,7 @@ async fn probe_model_config(request: ModelProbeRequest) -> Result<ModelProbeResu
 }
 
 #[tauri::command]
-async fn test_model_connection(request: ModelProbeRequest) -> Result<ModelConnectionTestResult, String> {
+async fn test_model_connection(state: State<'_, SidecarState>, request: ModelProbeRequest) -> Result<ModelConnectionTestResult, String> {
     validate_config_id(&request.config_id)?;
     if request.model_name.trim().is_empty() { return Err("请选择要测试的模型".into()); }
     let base = normalize_model_base_url(&request.protocol_id, &request.base_url)?;
@@ -355,9 +377,8 @@ async fn test_model_connection(request: ModelProbeRequest) -> Result<ModelConnec
         return Err("远程模型地址必须使用 HTTPS；本机服务可使用 HTTP".into());
     }
     let credential = if request.protocol_id == "ollama" { None } else {
-        Some(keyring::Entry::new(KEYRING_SERVICE, &request.config_id)
-            .map_err(|_| "无法连接系统安全存储")?.get_password()
-            .map_err(|_| "该连接的 API Key 不存在，请删除后重新配置")?)
+        Some(read_model_credential(&state, &request.config_id).await
+            .map_err(|_| "该连接的 API Key 不存在，请编辑连接后重新填写")?)
     };
     let client = reqwest::Client::builder().timeout(Duration::from_secs(45)).build()
         .map_err(|_| "无法创建模型连接")?;

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -333,6 +333,16 @@ CREATE TABLE app_settings (
 );
 """
 
+MIGRATION_013 = """
+CREATE TABLE model_credentials (
+    provider_id TEXT PRIMARY KEY,
+    nonce BLOB NOT NULL,
+    ciphertext BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -466,6 +476,16 @@ class Database:
                     """INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (12, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
                     ("migration-012",),
+                )
+            applied_v13 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 13"
+            ).fetchone()
+            if applied_v13 is None:
+                connection.executescript(MIGRATION_013)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (13, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-013",),
                 )
 
     @contextmanager

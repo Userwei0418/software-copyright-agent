@@ -133,7 +133,7 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
 
   const available = items.filter((item) => item.enabled);
   return <main className="settings-page"><header className="topbar"><div><p className="eyebrow">SETTINGS</p>
-    <h1>设置</h1><p>一个连接可配置多个模型；API Key 只进入操作系统安全存储。</p></div></header>
+    <h1>设置</h1><p>一个连接可配置多个模型；API Key 经 AES-256-GCM 加密后本地保存。</p></div></header>
     <section className="settings-content"><div className="settings-provider-grid"><section className="model-form"><div>
       <h2>{editingProviderId ? "编辑模型连接" : "添加模型连接"}</h2><p>模型 ID 以换行或逗号分隔。自动获取是可选辅助，失败也能手工保存。</p></div>
       <label>连接名称<input required value={name} onChange={(event) => setName(event.target.value)}
@@ -145,7 +145,7 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
       {protocol !== "ollama" && <label>API Key<input required type="password" autoComplete="new-password"
         value={apiKey} onChange={(event) => setApiKey(event.target.value)}
         placeholder={editingProviderId && credentialStates[editingProviderId] === false
-          ? "API Key 已缺失，请重新输入" : editingProviderId ? "留空保留现有 API Key" : "不会写入 SQLite"} /></label>}
+          ? "API Key 已缺失，请重新输入" : editingProviderId ? "留空保留现有 API Key" : "数据库只保存加密密文"} /></label>}
       <label>模型 ID（每行一个）<textarea rows={6} value={modelText}
         onChange={(event) => setModelText(event.target.value)}
         placeholder={"senseaudio-s2\ndeepseek-v4-pro\nqwen3.6-27b"} /></label>
