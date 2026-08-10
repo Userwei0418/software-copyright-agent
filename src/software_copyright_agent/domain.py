@@ -47,6 +47,8 @@ class ScannedFile:
     modified_ns: int
     sha256: str
     category: FileCategory
+    language: Optional[str]
+    is_binary: bool
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,8 @@ class ScanResult:
     ignored_count: int
     skipped_symlink_count: int
     total_bytes: int
+    ignored_by_reason: dict
+    secret_findings: tuple
 
 
 @dataclass(frozen=True)
@@ -65,5 +69,6 @@ class PersistedScan:
     source_id: str
     snapshot_id: str
     manifest_path: Path
+    scan_report_path: Path
     result: ScanResult
     warning: Optional[str] = None

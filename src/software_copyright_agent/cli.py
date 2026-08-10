@@ -51,8 +51,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "file_count": len(persisted.result.files),
         "total_bytes": persisted.result.total_bytes,
         "ignored_count": persisted.result.ignored_count,
+        "ignored_by_reason": persisted.result.ignored_by_reason,
         "skipped_symlink_count": persisted.result.skipped_symlink_count,
+        "binary_file_count": sum(
+            1 for item in persisted.result.files if item.is_binary
+        ),
+        "secret_finding_count": len(persisted.result.secret_findings),
         "manifest_path": str(persisted.manifest_path),
+        "scan_report_path": str(persisted.scan_report_path),
     }
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
@@ -61,7 +67,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("Project: {0}".format(summary["project_root"]))
         print("Files: {0}".format(summary["file_count"]))
         print("Ignored: {0}".format(summary["ignored_count"]))
+        print("Secret findings: {0}".format(summary["secret_finding_count"]))
         print("Manifest: {0}".format(summary["manifest_path"]))
+        print("Scan report: {0}".format(summary["scan_report_path"]))
     return 0
 
 

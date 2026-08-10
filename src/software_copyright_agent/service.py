@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -93,11 +94,23 @@ class ScanProjectService:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         self._write_manifest_atomic(manifest_path, result)
 
+        scan_report_relative = Path("qa") / "scan-report.json"
+        scan_report_path = task_root / scan_report_relative
+        scan_report_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_json_atomic(scan_report_path, self._scan_report(result))
+
+        categories = Counter(item.category.value for item in result.files)
+        languages = Counter(item.language for item in result.files if item.language)
         summary = {
             "file_count": len(result.files),
             "ignored_count": result.ignored_count,
+            "ignored_by_reason": result.ignored_by_reason,
             "skipped_symlink_count": result.skipped_symlink_count,
             "total_bytes": result.total_bytes,
+            "binary_file_count": sum(1 for item in result.files if item.is_binary),
+            "secret_finding_count": len(result.secret_findings),
+            "categories": dict(sorted(categories.items())),
+            "languages": dict(sorted(languages.items())),
         }
 
         finished_at = utc_now()
@@ -142,6 +155,7 @@ class ScanProjectService:
             source_id=source_id,
             snapshot_id=snapshot_id,
             manifest_path=manifest_path,
+            scan_report_path=scan_report_path,
             result=result,
         )
 
@@ -182,12 +196,53 @@ class ScanProjectService:
                                 "modified_ns": item.modified_ns,
                                 "sha256": item.sha256,
                                 "category": item.category.value,
+                                "language": item.language,
+                                "is_binary": item.is_binary,
                             },
                             ensure_ascii=False,
                             sort_keys=True,
                         )
                     )
                     stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(str(temporary_path), str(path))
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
+
+    @staticmethod
+    def _scan_report(result: object) -> object:
+        return {
+            "schema_version": 1,
+            "root_fingerprint": result.root_fingerprint,
+            "file_count": len(result.files),
+            "total_bytes": result.total_bytes,
+            "ignored_count": result.ignored_count,
+            "ignored_by_reason": result.ignored_by_reason,
+            "binary_files": [
+                item.relative_path for item in result.files if item.is_binary
+            ],
+            "secret_findings": [
+                {
+                    "path": finding.relative_path,
+                    "line_number": finding.line_number,
+                    "rule_id": finding.rule_id,
+                }
+                for finding in result.secret_findings
+            ],
+        }
+
+    @staticmethod
+    def _write_json_atomic(path: Path, value: object) -> None:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix="report-", suffix=".tmp", dir=str(path.parent)
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+                json.dump(value, stream, ensure_ascii=False, sort_keys=True, indent=2)
+                stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(str(temporary_path), str(path))

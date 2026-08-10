@@ -27,8 +27,11 @@ class ScanProjectServiceTests(unittest.TestCase):
             persisted = ScanProjectService(database, data_root).execute(project)
 
             self.assertTrue(persisted.manifest_path.is_file())
+            self.assertTrue(persisted.scan_report_path.is_file())
             rows = persisted.manifest_path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(json.loads(rows[0])["path"], "main.py")
+            report = json.loads(persisted.scan_report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["schema_version"], 1)
 
             connection = sqlite3.connect(str(database.path))
             try:
