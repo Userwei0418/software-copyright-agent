@@ -13,6 +13,7 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
   const [message, setMessage] = useState("");
   const [pagePreview, setPagePreview] = useState<CodePagePreview | null>(null);
   const [activePage, setActivePage] = useState(0);
+  const [strategy, setStrategy] = useState<"standard" | "relaxed" | "maximum">("standard");
   useEffect(() => {
     setSnapshot(null);
     setPagePreview(null);
@@ -29,7 +30,8 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
     setMessage({ "source-plan": "正在分析源码并生成 A/B/C 筛选计划…",
       "code-preview": "正在进行 59 页代码分页预检…", "source-docx": "正在生成源代码 DOCX…" }[action]);
     try {
-      setSnapshot(await runSourceMaterialAction(connection, taskId, action));
+      setSnapshot(await runSourceMaterialAction(connection, taskId, action,
+        action === "source-plan" ? strategy : undefined));
       if (action === "code-preview") setPagePreview(null);
       setMessage("本步已完成，结果已持久化。");
     } catch (error) { setMessage(error instanceof Error ? error.message : "操作失败"); }
@@ -85,6 +87,11 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
             disabled={!snapshot?.actions.source_docx || !!working} onClick={() => run("source-docx")}
             button={snapshot?.source_document ? "重新生成 DOCX" : "生成 DOCX"} />
         </div>
+        <div className="strategy-panel"><div><strong>源码筛选严格度</strong>
+          <small>降级会扩大入选范围，但始终排除敏感文件、二进制、第三方 vendor 和生成/压缩代码。</small></div>
+          <div>{(["standard", "relaxed", "maximum"] as const).map((value) => <button
+            className={strategy === value ? "active" : ""} onClick={() => setStrategy(value)} key={value}>
+            {{ standard: "标准", relaxed: "宽松", maximum: "最大覆盖" }[value]}</button>)}</div></div>
         {snapshot && <><div className="material-metrics">
           <Metric label="入选文件" value={snapshot.source_plan?.summary.selected_files ?? "—"} />
           <Metric label="入选代码行" value={snapshot.source_plan?.summary.selected_code_lines ?? "—"} />
@@ -96,6 +103,9 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
               <div className="blocker-actions"><button disabled={!!working} onClick={rescan}>
                 重新扫描当前项目</button><button className="secondary" onClick={onBackToOverview}>
                 返回项目概览</button></div>}</div>}
+          {snapshot.code_preview && !snapshot.code_preview.summary.sufficient &&
+            snapshot.source_plan?.summary.strategy === "maximum" && <div className="eligibility-warning">
+              <strong>三档策略仍不足</strong><p>当前项目在排除敏感、二进制和生成代码后仍无法满足 59 页，暂不建议继续生成软著材料。</p></div>}
           {snapshot.code_preview && <div className="page-preview-entry"><div><strong>代码分页 v{snapshot.code_preview.version}</strong>
             <small>已生成 {snapshot.code_preview.summary.generated_pages} 页，可检查首页、中间页和末页的真实内容。</small></div>
             <button onClick={openPagePreview}>{pagePreview ? "刷新分页预览" : "查看分页内容"}</button></div>}

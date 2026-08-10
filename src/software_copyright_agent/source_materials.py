@@ -74,7 +74,7 @@ class SourceMaterialsService:
             preview_payload and preview_payload["summary"].get("sufficient")
         )
         actions = {
-            "source_plan": status == "completed",
+            "source_plan": status in {"completed", "completed_with_warnings"},
             "code_preview": plan_payload is not None
             and status in {"completed", "completed_with_warnings"},
             "source_docx": preview_sufficient
@@ -90,8 +90,8 @@ class SourceMaterialsService:
             "blockers": blockers,
         }
 
-    def build_source_plan(self, task_id: str) -> dict:
-        self._source_plan.execute(task_id)
+    def build_source_plan(self, task_id: str, strategy: str = "standard") -> dict:
+        self._source_plan.execute(task_id, strategy)
         return self.snapshot(task_id)
 
     def build_code_preview(self, task_id: str) -> dict:

@@ -125,7 +125,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     scan_service = ScanProjectService(database, data_dir)
     inspection_service = InspectionService(database)
     confirmation_service = ConfirmationService(database)
-    catalog_service = ProjectCatalogService(database)
+    catalog_service = ProjectCatalogService(database, data_dir)
     source_materials_service = SourceMaterialsService(database, data_dir)
     manual_workspace_service = ManualWorkspaceService(database, data_dir)
     api = DiagramAssetApi(service, session_token)
@@ -136,7 +136,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
         CORSMiddleware,
         allow_origins=ALLOWED_DESKTOP_ORIGINS,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=[SESSION_HEADER, "Content-Type"],
     )
 
@@ -280,6 +280,21 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 "error": {"code": "task_not_found", "message": str(error)}
             })
 
+    @app.delete("/api/v1/tasks/{task_id}")
+    def delete_task(task_id: str,
+                    token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            catalog_service.delete_task(task_id)
+        except ValueError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "task_not_found", "message": str(error)}
+            })
+        return Response(status_code=204)
+
     @app.post("/api/v1/tasks/{task_id}/confirmations/{field_key}")
     def answer_confirmation(task_id: str, field_key: str,
                             payload: ConfirmationAnswerRequest,
@@ -325,9 +340,11 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
 
     @app.post("/api/v1/tasks/{task_id}/source-materials/source-plan")
     def build_source_plan(task_id: str,
+                          strategy: Literal["standard", "relaxed", "maximum"] = "standard",
                           token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
         return source_material_response(
-            source_materials_service.build_source_plan, task_id, token
+            lambda value: source_materials_service.build_source_plan(value, strategy),
+            task_id, token
         )
 
     @app.get("/api/v1/tasks/{task_id}/source-materials/code-preview/pages")

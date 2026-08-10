@@ -166,6 +166,14 @@ class SidecarFastApiTests(unittest.TestCase):
             item["key"] == "project.version" and item["value"] == "V1.2.3"
             for item in rescanned.json()["inspection"]["facts"]
         ))
+        deleted = self.client.delete(
+            f"/api/v1/tasks/{payload['task_id']}", headers=self.headers
+        )
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(self.client.get(
+            f"/api/v1/tasks/{payload['task_id']}/inspection", headers=self.headers
+        ).status_code, 404)
+        self.assertTrue((project / "src" / "main.ts").is_file())
 
 
 if __name__ == "__main__":

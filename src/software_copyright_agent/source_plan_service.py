@@ -7,7 +7,8 @@ from pathlib import Path, PurePosixPath
 
 from .domain import TaskStatus
 from .service import new_id, utc_now
-from .source_selection import SOURCE_SELECTION_RULES_VERSION, SourcePlan, SourceSelector
+from .source_selection import (SOURCE_SELECTION_RULES_VERSION, SOURCE_SELECTION_STRATEGIES,
+                               SourcePlan, SourceSelector)
 from .state_machine import TaskStateMachine
 from .storage import Database
 from .unit_of_work import UnitOfWork
@@ -33,7 +34,9 @@ class SourcePlanService:
         self._selector = SourceSelector()
         self._state_machine = TaskStateMachine()
 
-    def execute(self, task_id: str) -> PersistedSourcePlan:
+    def execute(self, task_id: str, strategy: str = "standard") -> PersistedSourcePlan:
+        if strategy not in SOURCE_SELECTION_STRATEGIES:
+            raise SourcePlanError("Unknown source selection strategy: {0}".format(strategy))
         self._database.initialize()
         with self._database.connect() as connection:
             row = connection.execute(
@@ -45,7 +48,8 @@ class SourcePlanService:
             ).fetchone()
             if row is None:
                 raise SourcePlanError("Task or snapshot not found: {0}".format(task_id))
-            if row["status"] != TaskStatus.COMPLETED.value:
+            if row["status"] not in {TaskStatus.COMPLETED.value,
+                                     TaskStatus.COMPLETED_WITH_WARNINGS.value}:
                 raise SourcePlanError(
                     "Task metadata must be completed before source planning: {0}".format(
                         row["status"]
@@ -84,13 +88,13 @@ class SourcePlanService:
             version = unit_of_work.source_plans.next_version(task_id)
 
         try:
-            plan = self._selector.build(scan_root, manifest_path, secret_paths)
+            plan = self._selector.build(scan_root, manifest_path, secret_paths, strategy)
             artifact_relative = Path("intermediate") / "source-selection" / (
                 "plan.v{0}.json".format(version)
             )
             artifact_path = task_root / artifact_relative
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
-            payload = self._payload(task_id, version, plan)
+            payload = self._payload(task_id, version, plan, strategy)
             self._write_json_atomic(artifact_path, payload)
         except Exception as error:
             self._record_failure(task_id, stage_id, error)
@@ -106,11 +110,12 @@ class SourcePlanService:
             "grades": {
                 grade: sum(1 for item in plan.candidates if item.grade == grade)
                 for grade in ("A", "B", "C")
-            },
+            }, "strategy": strategy,
         }
         with UnitOfWork(self._database) as unit_of_work:
             unit_of_work.source_plans.add_run(
-                run_id, task_id, stage_id, version, SOURCE_SELECTION_RULES_VERSION,
+                run_id, task_id, stage_id, version,
+                SOURCE_SELECTION_RULES_VERSION + ":" + strategy,
                 summary, artifact_relative.as_posix(), finished_at,
             )
             for candidate in plan.candidates:
@@ -152,12 +157,14 @@ class SourcePlanService:
             )
 
     @staticmethod
-    def _payload(task_id: str, version: int, plan: SourcePlan) -> dict:
+    def _payload(task_id: str, version: int, plan: SourcePlan,
+                 strategy: str = "standard") -> dict:
         return {
             "schema_version": 1,
             "task_id": task_id,
             "version": version,
             "rules_version": SOURCE_SELECTION_RULES_VERSION,
+            "strategy": strategy,
             "summary": {
                 "total_source_files": plan.total_source_files,
                 "selected_files": plan.selected_files,

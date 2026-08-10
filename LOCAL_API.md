@@ -35,6 +35,7 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | POST | `/api/v1/projects/scan` | 扫描系统选择器授权的目录或 ZIP，并返回事实摘要 |
 | GET | `/api/v1/tasks?limit=20` | 列出最近持久化任务，不返回原始项目路径 |
 | POST | `/api/v1/tasks/{task_id}/rescan` | 使用已持久化的项目来源创建新扫描任务 |
+| DELETE | `/api/v1/tasks/{task_id}` | 删除任务、SQLite 关联记录与应用内产物，不删除原项目 |
 | GET | `/api/v1/tasks/{task_id}/inspection` | 读取任务状态、事实、证据和待确认项 |
 | POST | `/api/v1/tasks/{task_id}/confirmations/{field_key}` | 回答待确认项并返回刷新后的任务检查结果 |
 | GET | `/api/v1/tasks/{task_id}/source-materials` | 读取源码筛选、分页预检、DOCX 状态和阻塞原因 |
@@ -61,6 +62,7 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 重新扫描端点不接受新路径，只从 task ID 反查已授权的持久化项目来源；它创建新任务和快照，不覆盖旧材料，并继承原任务中与新待确认项匹配的标量 confirmed Fact。
 
 源码材料三个 POST 端点均是显式用户操作，不会因读取状态自动执行。代码不足 59 页时预检会持久化为警告，并禁止生成灌水 DOCX。
+`source-plan` 支持 `strategy=standard|relaxed|maximum`：标准策略优先 A/B 业务代码，宽松策略补充项目通用支持代码，最大覆盖策略还可纳入测试、Mock、迁移和示例代码。三档均不纳入敏感命中、二进制、vendor、生成文件和压缩代码。
 分页样本端点不接受文件路径或页码输入，只从 SQLite 定位当前任务最新产物，并校验产物仍位于该任务数据目录内。
 已生成的源代码 DOCX 在快照中附带 `integrity.status`：sidecar 重新计算 SHA-256 并与 SQLite 登记值比对，只有 `verified` 才允许桌面端定位文件。桌面 `reveal_source_document` 命令只接受 task ID，不接受前端文件路径。
 

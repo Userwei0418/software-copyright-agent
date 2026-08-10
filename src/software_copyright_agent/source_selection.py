@@ -5,6 +5,11 @@ from typing import Iterable, List, Optional, Set
 
 
 SOURCE_SELECTION_RULES_VERSION = "source-selection-v1"
+SOURCE_SELECTION_STRATEGIES = {
+    "standard": {"minimum_score": 50, "relax_path_exclusions": False},
+    "relaxed": {"minimum_score": 25, "relax_path_exclusions": False},
+    "maximum": {"minimum_score": 0, "relax_path_exclusions": True},
+}
 
 EXCLUDED_SEGMENTS = {
     "test": "test_code",
@@ -67,7 +72,11 @@ class SourceSelector:
         scan_root: Path,
         manifest_path: Path,
         secret_paths: Iterable[str] = (),
+        strategy: str = "standard",
     ) -> SourcePlan:
+        if strategy not in SOURCE_SELECTION_STRATEGIES:
+            raise ValueError("Unknown source selection strategy: {0}".format(strategy))
+        policy = SOURCE_SELECTION_STRATEGIES[strategy]
         secrets: Set[str] = set(secret_paths)
         candidates: List[SourceCandidate] = []
         for line in manifest_path.read_text(encoding="utf-8").splitlines():
@@ -75,7 +84,9 @@ class SourceSelector:
             if item["category"] != "source":
                 continue
             relative_path = item["path"]
-            exclusion = self._exclusion(relative_path, item, secrets)
+            exclusion = self._exclusion(
+                relative_path, item, secrets, policy["relax_path_exclusions"]
+            )
             target = scan_root.joinpath(*PurePosixPath(relative_path).parts)
             code_lines = self._count_code_lines(target) if exclusion is None else 0
             score, reasons = self._score(relative_path, code_lines)
@@ -92,7 +103,7 @@ class SourceSelector:
                 selected = True
             else:
                 grade = "C"
-                selected = False
+                selected = score >= policy["minimum_score"]
                 reasons = reasons + ("low_business_relevance",)
             candidates.append(
                 SourceCandidate(
@@ -125,7 +136,8 @@ class SourceSelector:
         )
 
     @staticmethod
-    def _exclusion(relative_path: str, item: dict, secret_paths: Set[str]) -> Optional[str]:
+    def _exclusion(relative_path: str, item: dict, secret_paths: Set[str],
+                   relax_path_exclusions: bool = False) -> Optional[str]:
         if item.get("is_binary"):
             return "binary_source"
         if relative_path in secret_paths:
@@ -134,11 +146,20 @@ class SourceSelector:
         lowered_parts = [part.lower() for part in path.parts]
         for part in lowered_parts[:-1]:
             if part in EXCLUDED_SEGMENTS:
+                if relax_path_exclusions and EXCLUDED_SEGMENTS[part] in {
+                    "test_code", "mock_code", "fixture_code", "migration_code",
+                    "demo_code", "sample_code", "example_code",
+                }:
+                    continue
                 return EXCLUDED_SEGMENTS[part]
         lowered_name = path.name.lower()
         if any(marker in lowered_name for marker in (".test.", ".spec.", ".generated.")):
+            if relax_path_exclusions and ".generated." not in lowered_name:
+                return None
             return "generated_or_test_file"
         if path.stem.lower().endswith(("_test", "_spec", ".min")):
+            if relax_path_exclusions and not path.stem.lower().endswith(".min"):
+                return None
             return "generated_or_test_file"
         return None
 

@@ -1,11 +1,14 @@
 import json
+import shutil
+from pathlib import Path
 
 from .storage import Database
 
 
 class ProjectCatalogService:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, data_root: Path = None) -> None:
         self._database = database
+        self._data_root = data_root.expanduser().resolve() if data_root else None
 
     def list_recent(self, limit: int = 20) -> list:
         if not isinstance(limit, int) or limit < 1 or limit > 100:
@@ -41,3 +44,45 @@ class ProjectCatalogService:
                 "created_at": row["created_at"], "updated_at": row["updated_at"],
             })
         return items
+
+    def delete_task(self, task_id: str) -> None:
+        self._database.initialize()
+        with self._database.connect() as connection:
+            task = connection.execute(
+                "SELECT source_id, snapshot_id FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            if task is None:
+                raise ValueError("Task not found: {0}".format(task_id))
+            for table in (
+                "diagram_asset_revisions", "diagram_artifact_runs", "diagram_plan_runs",
+                "manual_plan_runs", "source_document_qa_runs", "source_document_runs",
+                "code_preview_runs",
+            ):
+                connection.execute("DELETE FROM {0} WHERE task_id = ?".format(table), (task_id,))
+            plan_ids = [row[0] for row in connection.execute(
+                "SELECT id FROM source_plan_runs WHERE task_id = ?", (task_id,)
+            ).fetchall()]
+            for plan_id in plan_ids:
+                connection.execute("DELETE FROM source_candidates WHERE plan_run_id = ?", (plan_id,))
+            for table in ("source_plan_runs", "confirmation_requests", "facts", "task_events",
+                          "task_stages"):
+                connection.execute("DELETE FROM {0} WHERE task_id = ?".format(table), (task_id,))
+            connection.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            snapshot_id = task["snapshot_id"]
+            if snapshot_id and connection.execute(
+                "SELECT 1 FROM tasks WHERE snapshot_id = ?", (snapshot_id,)
+            ).fetchone() is None:
+                connection.execute("DELETE FROM evidence WHERE snapshot_id = ?", (snapshot_id,))
+                connection.execute("DELETE FROM project_snapshots WHERE id = ?", (snapshot_id,))
+            source_id = task["source_id"]
+            if connection.execute(
+                "SELECT 1 FROM tasks WHERE source_id = ?", (source_id,)
+            ).fetchone() is None and connection.execute(
+                "SELECT 1 FROM project_snapshots WHERE source_id = ?", (source_id,)
+            ).fetchone() is None:
+                connection.execute("DELETE FROM project_sources WHERE id = ?", (source_id,))
+        if self._data_root is not None:
+            task_path = (self._data_root / "tasks" / task_id).resolve()
+            tasks_root = (self._data_root / "tasks").resolve()
+            if tasks_root in task_path.parents and task_path.is_dir():
+                shutil.rmtree(task_path)

@@ -61,6 +61,15 @@ class SourceSelectorTests(unittest.TestCase):
             self.assertEqual(candidates["tests/test_order.py"].exclusion_code, "test_code")
             self.assertEqual(candidates["migrations/001_init.py"].exclusion_code, "migration_code")
 
+            relaxed = SourceSelector().build(root, data, strategy="relaxed")
+            maximum = SourceSelector().build(root, data, strategy="maximum")
+            relaxed_by_path = {item.relative_path: item for item in relaxed.candidates}
+            maximum_by_path = {item.relative_path: item for item in maximum.candidates}
+            self.assertTrue(relaxed_by_path["src/utils/helper.py"].selected)
+            self.assertFalse(relaxed_by_path["tests/test_order.py"].selected)
+            self.assertTrue(maximum_by_path["tests/test_order.py"].selected)
+            self.assertTrue(maximum_by_path["migrations/001_init.py"].selected)
+
     def test_service_filename_is_ranked_as_business_code(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

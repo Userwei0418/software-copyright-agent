@@ -55,6 +55,7 @@ export type SourceMaterialsSnapshot = {
   source_plan: null | { version: number; created_at: string; summary: {
     total_source_files: number; selected_files: number; selected_code_lines: number;
     excluded_files: number; grades: Record<"A" | "B" | "C", number>;
+    strategy: "standard" | "relaxed" | "maximum";
   }; candidates: Array<{ relative_path: string; grade: string; score: number;
     code_lines: number; language: string | null }> };
   code_preview: null | { version: number; created_at: string; summary: {
@@ -232,6 +233,14 @@ export async function listRecentTasks(
   return (await requireJson<{ items: RecentTask[] }>(response, "最近任务读取失败")).items;
 }
 
+export async function deleteTask(connection: SidecarConnection, taskId: string): Promise<void> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}`,
+    { method: "DELETE", headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  if (!response.ok) throw new Error(`任务删除失败 (${response.status})`);
+}
+
 export async function loadInspection(
   connection: SidecarConnection,
   taskId: string,
@@ -276,9 +285,11 @@ export async function loadSourceMaterials(
 export async function runSourceMaterialAction(
   connection: SidecarConnection, taskId: string,
   action: "source-plan" | "code-preview" | "source-docx",
+  strategy?: "standard" | "relaxed" | "maximum",
 ): Promise<SourceMaterialsSnapshot> {
+  const query = action === "source-plan" && strategy ? `?strategy=${strategy}` : "";
   const response = await fetch(
-    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/${action}`,
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/${action}${query}`,
     { method: "POST", headers: { "X-Session-Token": connection.sessionToken } },
   );
   return requireJson(response, "源码材料生成失败");

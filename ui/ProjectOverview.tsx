@@ -1,7 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import {
-  answerConfirmation, listRecentTasks, loadInspection, ProjectScanResult, RecentTask,
+  answerConfirmation, deleteTask, listRecentTasks, loadInspection, ProjectScanResult, RecentTask,
   scanProject, SidecarConnection,
 } from "./api";
 
@@ -113,6 +113,32 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
     }
   }
 
+  async function removeTask(task: RecentTask) {
+    if (!connection || !window.confirm(`删除任务“${task.display_name}”及其应用内产物？\n原项目文件不会被删除。`)) return;
+    setBusy(true);
+    try {
+      await deleteTask(connection, task.task_id);
+      setRecent((items) => items.filter((item) => item.task_id !== task.task_id));
+      if (result?.task_id === task.task_id) { setResult(null); onTaskCreated(""); }
+      setMessage("任务及其应用内产物已删除，原项目未受影响。");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "任务删除失败"); }
+    finally { setBusy(false); }
+  }
+
+  async function clearTasks() {
+    if (!connection || !recent.length || !window.confirm(
+      `清理列表中 ${recent.length} 个任务及应用内产物？\n原项目文件不会被删除。`)) return;
+    setBusy(true);
+    try {
+      for (const task of recent) await deleteTask(connection, task.task_id);
+      setRecent([]); setResult(null); onTaskCreated("");
+      setMessage("最近任务已清理，原项目未受影响。");
+    } catch (error) {
+      setRecent(await listRecentTasks(connection));
+      setMessage(error instanceof Error ? error.message : "批量清理未完成");
+    } finally { setBusy(false); }
+  }
+
   const pending = result?.inspection.confirmations.filter((item) => item.status === "pending") ?? [];
   return <main className="overview-page">
     <header className="topbar overview-topbar"><div><p className="eyebrow">PROJECT INTAKE</p>
@@ -135,12 +161,13 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
         </button>
         <p className="intake-message">{message}</p>
         {recent.length > 0 && <div className="recent-projects"><div className="section-title">
-          <span>最近任务</span><em>{recent.length}</em></div>
-          {recent.slice(0, 6).map((task) => <button key={task.task_id}
+          <span>最近任务</span><button onClick={clearTasks} disabled={busy}>清理全部</button></div>
+          {recent.slice(0, 6).map((task) => <div className="recent-row" key={task.task_id}><button
             onClick={() => openRecent(task)} disabled={busy || !task.snapshot_id}>
             <span><strong>{task.display_name}</strong><small>{task.source_kind === "zip" ? "ZIP" : "目录"}</small></span>
             <b>{task.status === "waiting_for_user" ? "待确认" : "已完成"}</b>
-          </button>)}
+          </button><button className="delete-task" disabled={busy} onClick={() => removeTask(task)}
+            aria-label={`删除 ${task.display_name}`}>×</button></div>)}
         </div>}
       </div>
 
