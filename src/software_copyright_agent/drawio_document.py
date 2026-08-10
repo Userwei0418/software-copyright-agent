@@ -474,7 +474,14 @@ class InternalSvgRenderer:
     def _draw_vertex(self, svg: ET.Element, cell: ET.Element) -> None:
         x, y, width, height = self._rect(cell)
         style = self._style(cell.get("style", ""))
+        parent = svg
         if cell.get("id") != "diagram-title":
+            parent = ET.SubElement(svg, "g", {
+                "data-node-key": cell.get("id", ""),
+                "data-x": self._number(x), "data-y": self._number(y),
+                "data-width": self._number(width), "data-height": self._number(height),
+                "tabindex": "0", "role": "button",
+            })
             attributes = {
                 "x": self._number(x), "y": self._number(y),
                 "width": self._number(width), "height": self._number(height),
@@ -484,12 +491,12 @@ class InternalSvgRenderer:
             }
             if style.get("dashed") == "1":
                 attributes["stroke-dasharray"] = "7 5"
-            ET.SubElement(svg, "rect", attributes)
+            ET.SubElement(parent, "rect", attributes)
         lines = self._text_lines(cell.get("value", ""))
         if not lines:
             return
         font_size = float(style.get("fontSize", "12"))
-        text = ET.SubElement(svg, "text", {
+        text = ET.SubElement(parent, "text", {
             "x": self._number(x + (0 if cell.get("id") == "diagram-title" else width / 2)),
             "y": self._number(y + (font_size if cell.get("id") == "diagram-title" else
                                      height / 2 - (len(lines) - 1) * 8 + 4)),

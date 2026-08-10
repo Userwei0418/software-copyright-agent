@@ -210,6 +210,10 @@ class DemoService:
             self.assertIn("#f0fdf4", rendered)
             self.assertIn("<polyline", rendered)
             svg_root = ET.parse(svg).getroot()
+            draggable = next(item for item in svg_root.iter()
+                             if item.get("data-node-key") == "module-a")
+            self.assertEqual((draggable.get("data-x"), draggable.get("data-y")),
+                             ("150", "90"))
             polyline = next(item for item in svg_root.iter() if item.tag.endswith("polyline"))
             points = [tuple(float(value) for value in item.split(","))
                       for item in polyline.get("points").split()]

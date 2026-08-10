@@ -26,6 +26,19 @@ export type DiagramAsset = {
 
 export type WorkspaceSnapshot = { task_id: string; assets: DiagramAsset[] };
 
+export type OverlayOperation = {
+  action: "node.move" | "node.resize" | "node.style" | "node.label" | "node.hide" |
+    "edge.route" | "edge.style" | "edge.label";
+  target: string;
+  payload: Record<string, unknown>;
+  expected_target_fingerprint?: string;
+};
+
+export type RevisionDetail = {
+  revision_id: string;
+  operations: OverlayOperation[];
+};
+
 export async function connectSidecar(): Promise<SidecarConnection> {
   return invoke<SidecarConnection>("start_sidecar");
 }
@@ -42,14 +55,52 @@ export async function loadWorkspace(
   return response.json() as Promise<WorkspaceSnapshot>;
 }
 
+async function requireJson<T>(response: Response, fallback: string): Promise<T> {
+  if (response.ok) return response.json() as Promise<T>;
+  const payload = await response.json().catch(() => null) as
+    { error?: { message?: string } } | null;
+  throw new Error(payload?.error?.message ?? `${fallback} (${response.status})`);
+}
+
 export async function loadPreview(
   connection: SidecarConnection,
   revisionId: string,
-): Promise<Blob> {
+): Promise<string> {
   const response = await fetch(
     `${connection.baseUrl}/api/v1/diagram-revisions/${revisionId}/preview.svg`,
     { headers: { "X-Session-Token": connection.sessionToken } },
   );
   if (!response.ok) throw new Error(`预览加载失败 (${response.status})`);
-  return response.blob();
+  return response.text();
+}
+
+export async function loadRevision(
+  connection: SidecarConnection,
+  revisionId: string,
+): Promise<RevisionDetail> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/diagram-revisions/${revisionId}`,
+    { headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson<RevisionDetail>(response, "修订读取失败");
+}
+
+export async function saveRevision(
+  connection: SidecarConnection,
+  taskId: string,
+  diagramKey: DiagramAsset["diagram_key"],
+  operations: OverlayOperation[],
+): Promise<AssetRevision> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/diagram-assets/${diagramKey}/revisions`,
+    {
+      method: "POST",
+      headers: {
+        "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ edit_source: "manual", operations }),
+    },
+  );
+  return requireJson<AssetRevision>(response, "修订保存失败");
 }

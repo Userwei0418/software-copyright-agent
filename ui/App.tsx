@@ -1,8 +1,9 @@
 import { FormEvent, useEffect, useState } from "react";
 import {
-  connectSidecar, DiagramAsset, loadPreview, loadWorkspace,
-  SidecarConnection, WorkspaceSnapshot,
+  connectSidecar, DiagramAsset, loadPreview, loadRevision, loadWorkspace,
+  OverlayOperation, saveRevision, SidecarConnection, WorkspaceSnapshot,
 } from "./api";
+import { InteractiveDiagram } from "./InteractiveDiagram";
 
 const fallbackAssets: DiagramAsset[] = [
   { diagram_key: "system_architecture", title: "系统总体架构图", revision_count: 0,
@@ -17,7 +18,9 @@ export function App() {
   const [taskId, setTaskId] = useState("");
   const [selected, setSelected] = useState("system_architecture");
   const [message, setMessage] = useState("正在启动本地服务…");
-  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [previewSvg, setPreviewSvg] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     connectSidecar().then((value) => {
@@ -31,13 +34,10 @@ export function App() {
 
   useEffect(() => {
     const revisionId = active.latest_revision?.revision_id;
-    if (!connection || !revisionId) { setPreviewSrc(null); return; }
-    let objectUrl: string | null = null;
-    loadPreview(connection, revisionId).then((blob) => {
-      objectUrl = URL.createObjectURL(blob);
-      setPreviewSrc(objectUrl);
+    if (!connection || !revisionId) { setPreviewSvg(null); return; }
+    loadPreview(connection, revisionId).then((source) => {
+      setPreviewSvg(source);
     }).catch(() => setMessage("SVG 预览加载失败"));
-    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [connection, active.latest_revision?.revision_id]);
 
   async function submit(event: FormEvent) {
@@ -53,17 +53,43 @@ export function App() {
     }
   }
 
+  async function moveNode(key: string, x: number, y: number) {
+    const revisionId = active.latest_revision?.revision_id;
+    if (!connection || !workspace || !revisionId) return;
+    setSaving(true);
+    setMessage(`正在保存节点 ${key}…`);
+    try {
+      const detail = await loadRevision(connection, revisionId);
+      const move: OverlayOperation = { action: "node.move", target: key, payload: { x, y } };
+      const operations = detail.operations.filter(
+        (operation) => !(operation.action === "node.move" && operation.target === key),
+      );
+      operations.push(move);
+      const saved = await saveRevision(
+        connection, workspace.task_id, active.diagram_key, operations,
+      );
+      const refreshed = await loadWorkspace(connection, workspace.task_id);
+      setWorkspace(refreshed);
+      setMessage(`节点已保存 · revision v${saved.version}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "节点保存失败，已恢复原位置");
+      throw error;
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">著</span><div>
         <strong>软著材料助手</strong><small>本地证据化工作台</small>
       </div></div>
       <nav>
-        <button className="nav-item">项目概览</button>
-        <button className="nav-item">源码材料</button>
+        <button className="nav-item" disabled>项目概览 <small>待开发</small></button>
+        <button className="nav-item" disabled>源码材料 <small>待开发</small></button>
         <button className="nav-item active">图表资产</button>
-        <button className="nav-item">说明书</button>
-        <button className="nav-item">质量检查</button>
+        <button className="nav-item" disabled>说明书 <small>待开发</small></button>
+        <button className="nav-item" disabled>质量检查 <small>待开发</small></button>
       </nav>
       <div className="side-status"><i className={connection ? "online" : "offline"} />
         <span>{message}</span></div>
@@ -99,23 +125,30 @@ export function App() {
         <div className="canvas-panel">
           <div className="canvas-toolbar"><div><strong>{active.title}</strong>
             <span>{active.revision_count} 个修订版本</span></div>
-            <div className="toolbar-actions"><button>历史版本</button><button className="primary">编辑图表</button></div>
+            <div className="toolbar-actions"><button disabled>历史版本</button>
+              <button className="primary" disabled={!previewSvg || saving}>
+                {saving ? "正在保存…" : "拖拽编辑已开启"}
+              </button></div>
           </div>
           <div className="canvas">
-            {previewSrc ?
-              <img src={previewSrc} alt={active.title} /> :
+            {previewSvg ?
+              <InteractiveDiagram svg={previewSvg} disabled={saving}
+                onMove={moveNode} onSelect={setSelectedNode} /> :
               <div className="empty-state"><div className="empty-diagram">
                 <span /><span /><span /><i /><i />
               </div><h2>准备好后在这里查看和编辑</h2>
                 <p>载入已有任务，或先完成图表语义生成。</p></div>}
           </div>
-          <footer><span>缩放 100%</span><span>自动保存关闭</span><span>证据关联开启</span></footer>
+          <footer><span>缩放 自适应</span><span>拖动结束后保存</span><span>证据关联开启</span></footer>
         </div>
 
         <aside className="inspector">
           <div className="section-title"><span>属性与 AI 修改</span></div>
           <div className="info-block"><label>当前资产</label><strong>{active.title}</strong>
             <small>{active.latest_revision ? `revision v${active.latest_revision.version}` : "尚无修订"}</small></div>
+          <div className="info-block"><label>选中节点</label>
+            <strong>{selectedNode ?? "尚未选择"}</strong>
+            <small>{selectedNode ? "拖动节点以创建新修订版本" : "在画布中点击任意节点"}</small></div>
           <div className="ai-card"><span>AI</span><h3>对话修改图表</h3>
             <p>例如：突出核心生成流程，减少回退线的视觉干扰。</p>
             <textarea placeholder="描述你希望如何调整…" disabled={!active.latest_revision} />
