@@ -89,6 +89,16 @@ def persist(connection, temporary, destination):
 """,
                 encoding="utf-8",
             )
+            orders = source / "orders"
+            orders.mkdir()
+            (orders / "__init__.py").write_text("", encoding="utf-8")
+            (orders / "repository.py").write_text(
+                "class OrderRepository: pass\n", encoding="utf-8"
+            )
+            (orders / "service.py").write_text(
+                "from .repository import OrderRepository\n",
+                encoding="utf-8",
+            )
             tests = root / "tests"
             tests.mkdir()
             (tests / "test_api.py").write_text(
@@ -128,6 +138,11 @@ def persist(connection, temporary, destination):
                 {item["kind"] for item in facts["reliability.recovery"].value},
                 {"atomic_file_replace", "failed_output_cleanup"},
             )
+            self.assertIn(
+                {"source_module": "orders.service", "target_module": "orders.repository",
+                 "source": "src/orders/service.py", "line": 1},
+                facts["architecture.dependencies"].value,
+            )
             self.assertEqual(
                 facts["data.lifecycle"].value[0]["states"], ["created", "paid"]
             )
@@ -136,7 +151,8 @@ def persist(connection, temporary, destination):
                         "interfaces.contracts", "interfaces.errors", "configuration.items",
                         "runtime.entrypoints", "testing.strategy", "data.lifecycle",
                         "workflow.transitions", "data.transactions",
-                        "reliability.recovery", "deployment.method"):
+                        "reliability.recovery", "architecture.modules",
+                        "architecture.dependencies", "deployment.method"):
                 self.assertTrue(facts[key].evidence_refs)
                 self.assertTrue(all(ref in evidence for ref in facts[key].evidence_refs))
             self.assertTrue(all(item.content_hash for item in evidence.values()

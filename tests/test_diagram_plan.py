@@ -21,7 +21,19 @@ class DiagramPlanBuilderTests(unittest.TestCase):
             ),
             PlanningFact("fact-modules", "project.modules", ["engine"], 0.8,
                          ("e-modules",)),
-        ))
+            PlanningFact(
+                "fact-architecture-modules", "architecture.modules",
+                [{"name": "engine.service"}, {"name": "engine.repository"}],
+                0.98, ("e-architecture-modules",),
+            ),
+            PlanningFact(
+                "fact-dependencies", "architecture.dependencies",
+                [{"source_module": "engine.service",
+                  "target_module": "engine.repository",
+                  "source": "src/engine/service.py", "line": 1}],
+                0.98, ("e-dependency",),
+            ),
+        ), {"dependency:src/engine/service.py": ("e-dependency-exact",)})
 
         workflow = next(item for item in plan.diagrams if item.key == "core_business_flow")
         architecture = next(item for item in plan.diagrams if item.key == "system_architecture")
@@ -30,8 +42,13 @@ class DiagramPlanBuilderTests(unittest.TestCase):
         self.assertEqual(len(workflow.edges), 2)
         self.assertTrue(all(edge.evidence_ids == ("e-transition",)
                             for edge in workflow.edges))
-        self.assertEqual(architecture.status, "needs_evidence")
-        self.assertIn("有代码证据的模块依赖关系", architecture.missing_information)
+        self.assertEqual(architecture.status, "ready")
+        self.assertEqual(len(architecture.edges), 1)
+        self.assertEqual(
+            architecture.edges[0].source_locator,
+            {"relative_path": "src/engine/service.py", "line": 1},
+        )
+        self.assertEqual(architecture.edges[0].evidence_ids, ("e-dependency-exact",))
         self.assertTrue(plan.validation["passed"])
 
 

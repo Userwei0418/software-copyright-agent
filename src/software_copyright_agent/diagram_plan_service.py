@@ -54,6 +54,13 @@ class DiagramPlanService:
                 ORDER BY CASE status WHEN 'confirmed' THEN 0 ELSE 1 END, created_at DESC""",
                 (task_id,),
             ).fetchall()
+            evidence_rows = connection.execute(
+                """SELECT e.id, e.relative_path, e.locator_json FROM evidence e
+                JOIN tasks t ON t.snapshot_id = e.snapshot_id
+                WHERE t.id = ? AND e.relative_path IS NOT NULL
+                ORDER BY e.relative_path, e.id""",
+                (task_id,),
+            ).fetchall()
         by_key = {}
         for row in rows:
             by_key.setdefault(row["fact_key"], PlanningFact(
@@ -74,7 +81,19 @@ class DiagramPlanService:
             version = unit_of_work.diagram_plans.next_version(task_id)
 
         try:
-            plan = self._builder.build(by_key.values())
+            evidence_by_path = {}
+            for row in evidence_rows:
+                locator = json.loads(row["locator_json"])
+                category = "dependency" if "internal_imports" in locator else (
+                    "transition" if "transitions" in locator else None
+                )
+                if category is not None:
+                    key = category + ":" + row["relative_path"]
+                    evidence_by_path.setdefault(key, []).append(row["id"])
+            plan = self._builder.build(
+                by_key.values(),
+                {path: tuple(ids) for path, ids in evidence_by_path.items()},
+            )
             if not plan.validation["passed"]:
                 raise DiagramPlanError("Diagram plan validation failed")
             relative = Path("intermediate") / "diagram-planning" / "plan.v{0}.json".format(version)

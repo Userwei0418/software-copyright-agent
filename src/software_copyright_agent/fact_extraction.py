@@ -243,11 +243,14 @@ class DeterministicFactExtractor:
         transitions = []
         transaction_mechanisms = []
         recovery_mechanisms = []
+        module_dependencies = []
+        python_modules = self._python_module_inventory(scan.files)
         refs = {
             "storage": [], "tables": [], "interfaces": [], "contracts": [],
             "errors": [], "lifecycles": [], "deployment": [], "config": [],
             "entrypoints": [],
             "transitions": [], "transactions": [], "recovery": [],
+            "module_dependencies": [],
         }
         total_bytes = 0
         selected_files = 0
@@ -376,6 +379,20 @@ class DeterministicFactExtractor:
                 refs["entrypoints"].append(ref)
 
             if PurePosixPath(item.relative_path).suffix.lower() == ".py":
+                import_matches = self._internal_import_matches(
+                    text, item.relative_path, python_modules
+                )
+                if import_matches:
+                    module_dependencies.extend(import_matches)
+                    ref = "structure:imports:{0}".format(item.relative_path)
+                    evidence.append(self._pattern_evidence(
+                        ref, item.relative_path, {"internal_imports": import_matches},
+                        "; ".join("{0}->{1}".format(edge["source_module"],
+                                                     edge["target_module"])
+                                  for edge in import_matches),
+                        file_hashes, 0.98,
+                    ))
+                    refs["module_dependencies"].append(ref)
                 transition_matches = self._allowed_transition_matches(text)
                 if transition_matches:
                     transitions.extend(
@@ -490,6 +507,33 @@ class DeterministicFactExtractor:
             facts.append(FactCandidate(
                 "reliability.recovery", recovery_mechanisms, 0.85,
                 tuple(refs["recovery"]),
+            ))
+        if python_modules:
+            module_ref = "structure:python-modules"
+            module_values = [
+                {"name": item["name"], "source": path}
+                for path, item in sorted(python_modules.items())
+            ]
+            evidence.append(EvidenceCandidate(
+                ref=module_ref, kind="derived", relative_path=None,
+                locator={"source": "manifest", "python_module_count": len(module_values)},
+                excerpt=None, content_hash=scan.root_fingerprint, confidence=0.98,
+            ))
+            facts.append(FactCandidate(
+                "architecture.modules", module_values, 0.98, (module_ref,)
+            ))
+        if module_dependencies:
+            unique_dependencies = []
+            seen_dependencies = set()
+            for edge in module_dependencies:
+                identity = (edge["source_module"], edge["target_module"])
+                if identity in seen_dependencies:
+                    continue
+                seen_dependencies.add(identity)
+                unique_dependencies.append(edge)
+            facts.append(FactCandidate(
+                "architecture.dependencies", unique_dependencies, 0.98,
+                tuple(refs["module_dependencies"]),
             ))
         testing_evidence, testing_fact = self._testing_fact(scan)
         evidence.extend(testing_evidence)
@@ -702,6 +746,82 @@ class DeterministicFactExtractor:
                     if target is not None:
                         edges.append({"from": source, "to": target,
                                       "line": getattr(source_node, "lineno", node.lineno)})
+        return edges
+
+    @staticmethod
+    def _python_module_inventory(files: Iterable[object]) -> Dict[str, dict]:
+        modules = {}
+        for item in files:
+            path = PurePosixPath(item.relative_path)
+            if path.suffix.lower() != ".py" or item.is_binary:
+                continue
+            parts_lower = {part.lower() for part in path.parts}
+            if parts_lower & STRUCTURAL_EXCLUDED_PARTS or path.stem.lower().startswith("test_"):
+                continue
+            parts = list(path.parts)
+            if parts and parts[0] in {"src", "app", "lib"}:
+                parts = parts[1:]
+            is_package = bool(parts and parts[-1] == "__init__.py")
+            if is_package:
+                parts = parts[:-1]
+            elif parts:
+                parts[-1] = PurePosixPath(parts[-1]).stem
+            if not parts or not all(part.isidentifier() for part in parts):
+                continue
+            modules[item.relative_path] = {
+                "name": ".".join(parts), "is_package": is_package,
+            }
+        return modules
+
+    @staticmethod
+    def _internal_import_matches(text: str, relative_path: str,
+                                 modules: Dict[str, dict]) -> List[dict]:
+        current = modules.get(relative_path)
+        if current is None:
+            return []
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return []
+        known = {item["name"] for item in modules.values()}
+        current_parts = current["name"].split(".")
+        package_parts = current_parts if current["is_package"] else current_parts[:-1]
+        edges = []
+        seen = set()
+        for node in ast.walk(tree):
+            candidates = []
+            if isinstance(node, ast.Import):
+                candidates.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    keep = max(0, len(package_parts) - (node.level - 1))
+                    base_parts = package_parts[:keep]
+                    if node.module:
+                        base_parts.extend(node.module.split("."))
+                    base = ".".join(base_parts)
+                else:
+                    base = node.module or ""
+                candidates.extend(
+                    "{0}.{1}".format(base, alias.name).strip(".")
+                    for alias in node.names
+                )
+            for candidate in candidates:
+                matches = sorted(
+                    (name for name in known
+                     if candidate == name or candidate.startswith(name + ".")),
+                    key=len, reverse=True,
+                )
+                if not matches:
+                    continue
+                target = matches[0]
+                identity = (current["name"], target)
+                if target == current["name"] or identity in seen:
+                    continue
+                seen.add(identity)
+                edges.append({
+                    "source_module": current["name"], "target_module": target,
+                    "source": relative_path, "line": node.lineno,
+                })
         return edges
 
     @staticmethod

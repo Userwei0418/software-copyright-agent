@@ -6,6 +6,8 @@ from .manual_plan import PlanningFact
 
 
 DIAGRAM_PLAN_RULES_VERSION = "diagram-plan-v1"
+MAX_ARCHITECTURE_MODULES = 12
+MAX_ARCHITECTURE_EDGES = 20
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,7 @@ class DiagramDefinition:
     nodes: tuple
     edges: tuple
     missing_information: tuple
+    metadata: dict
 
 
 @dataclass(frozen=True)
@@ -48,10 +51,12 @@ class DiagramPlan:
 
 
 class DiagramPlanBuilder:
-    def build(self, facts: Iterable[PlanningFact]) -> DiagramPlan:
+    def build(self, facts: Iterable[PlanningFact],
+              evidence_by_path: Dict[str, tuple] = None) -> DiagramPlan:
         by_key: Dict[str, PlanningFact] = {fact.key: fact for fact in facts}
-        architecture = self._architecture(by_key)
-        workflow = self._workflow(by_key)
+        evidence_by_path = evidence_by_path or {}
+        architecture = self._architecture(by_key, evidence_by_path)
+        workflow = self._workflow(by_key, evidence_by_path)
         diagrams = (architecture, workflow)
         validation = self._validate(diagrams)
         return DiagramPlan(
@@ -61,13 +66,36 @@ class DiagramPlanBuilder:
             validation,
         )
 
-    def _architecture(self, facts: Dict[str, PlanningFact]) -> DiagramDefinition:
+    def _architecture(self, facts: Dict[str, PlanningFact],
+                      evidence_by_path: Dict[str, tuple]) -> DiagramDefinition:
         nodes: List[DiagramNode] = []
-        for fact_key, kind in (
-            ("runtime.entrypoints", "entrypoint"),
-            ("project.modules", "module"),
-            ("data.storage", "storage"),
-        ):
+        architecture_modules = facts.get("architecture.modules")
+        module_fact_key = "architecture.modules" if architecture_modules else "project.modules"
+        module_fact = facts.get(module_fact_key)
+        module_labels = self._labels(module_fact.value) if module_fact else []
+        dependency_fact = facts.get("architecture.dependencies")
+        dependency_values = dependency_fact.value if (
+            dependency_fact is not None and isinstance(dependency_fact.value, list)
+        ) else []
+        degrees = {label: 0 for label in module_labels}
+        for item in dependency_values:
+            if not isinstance(item, dict):
+                continue
+            for key in ("source_module", "target_module"):
+                label = str(item.get(key))
+                if label in degrees:
+                    degrees[label] += 1
+        selected_modules = sorted(module_labels, key=lambda label: (-degrees[label], label))[
+            :MAX_ARCHITECTURE_MODULES
+        ]
+        if module_fact is not None:
+            for index, label in enumerate(selected_modules):
+                nodes.append(DiagramNode(
+                    "module-{0}".format(self._slug(label, index)), label, "module",
+                    module_fact.id, module_fact.evidence_ids,
+                ))
+        for fact_key, kind in (("runtime.entrypoints", "entrypoint"),
+                               ("data.storage", "storage")):
             fact = facts.get(fact_key)
             if fact is None:
                 continue
@@ -76,21 +104,59 @@ class DiagramPlanBuilder:
                     "{0}-{1}".format(kind, self._slug(label, index)), label, kind,
                     fact.id, fact.evidence_ids,
                 ))
+        node_by_label = {node.label: node.key for node in nodes if node.kind == "module"}
+        edges = []
+        selected_dependencies = []
+        if dependency_fact is not None:
+            selected_dependencies = [item for item in dependency_values
+                                     if isinstance(item, dict)
+                                     and str(item.get("source_module")) in node_by_label
+                                     and str(item.get("target_module")) in node_by_label]
+            selected_dependencies.sort(key=lambda item: (
+                -(degrees[str(item.get("source_module"))] +
+                  degrees[str(item.get("target_module"))]),
+                str(item.get("source_module")), str(item.get("target_module")),
+                int(item.get("line") or 0),
+            ))
+            for index, item in enumerate(selected_dependencies[:MAX_ARCHITECTURE_EDGES]):
+                source = node_by_label[str(item.get("source_module"))]
+                target = node_by_label[str(item.get("target_module"))]
+                edges.append(DiagramEdge(
+                    "dependency-{0}".format(index + 1), source, target,
+                    "内部导入", "dependency", dependency_fact.id,
+                    evidence_by_path.get("dependency:" + str(item.get("source")),
+                                         dependency_fact.evidence_ids),
+                    {"relative_path": item.get("source"), "line": item.get("line")},
+                ))
         missing = []
         if not any(node.kind == "module" for node in nodes):
             missing.append("模块节点")
-        missing.append("有代码证据的模块依赖关系")
+        if not edges:
+            missing.append("有代码证据的模块依赖关系")
+        status = "ready" if any(node.kind == "module" for node in nodes) and edges \
+            else "needs_evidence"
+        metadata = {
+            "selection": "highest_internal_degree_v1",
+            "source_module_count": len(module_labels),
+            "source_edge_count": len(dependency_values),
+            "selected_module_count": len(selected_modules),
+            "selected_module_edge_count_before_limit": len(selected_dependencies),
+            "selected_edge_count": len(edges),
+            "module_limit": MAX_ARCHITECTURE_MODULES,
+            "edge_limit": MAX_ARCHITECTURE_EDGES,
+        }
         return DiagramDefinition(
-            "system_architecture", "系统总体架构图", "needs_evidence",
-            tuple(nodes), (), tuple(missing),
+            "system_architecture", "系统总体架构图", status,
+            tuple(nodes), tuple(edges), tuple(missing), metadata,
         )
 
-    def _workflow(self, facts: Dict[str, PlanningFact]) -> DiagramDefinition:
+    def _workflow(self, facts: Dict[str, PlanningFact],
+                  evidence_by_path: Dict[str, tuple]) -> DiagramDefinition:
         fact = facts.get("workflow.transitions")
         if fact is None or not isinstance(fact.value, list):
             return DiagramDefinition(
                 "core_business_flow", "核心业务流程图", "needs_evidence",
-                (), (), ("显式状态转换边",),
+                (), (), ("显式状态转换边",), {},
             )
         states = sorted({str(edge[key]) for edge in fact.value
                          if isinstance(edge, dict) for key in ("from", "to") if key in edge})
@@ -107,7 +173,9 @@ class DiagramPlanBuilder:
             edges.append(DiagramEdge(
                 "transition-{0}".format(index + 1), node_by_label[item["from"]],
                 node_by_label[item["to"]], "状态转换", "transition",
-                fact.id, fact.evidence_ids,
+                fact.id, evidence_by_path.get(
+                    "transition:" + str(item.get("source")), fact.evidence_ids
+                ),
                 {"relative_path": item.get("source"), "line": item.get("line")},
             ))
         status = "ready" if nodes and edges else "needs_evidence"
@@ -115,6 +183,7 @@ class DiagramPlanBuilder:
         return DiagramDefinition(
             "core_business_flow", "核心业务流程图", status,
             nodes, tuple(edges), missing,
+            {"source_transition_count": len(fact.value)},
         )
 
     @staticmethod
