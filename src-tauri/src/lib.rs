@@ -78,6 +78,13 @@ struct ModelProbeResult {
     warning: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelConnectionTestResult {
+    ok: bool,
+    elapsed_ms: u128,
+}
+
 const SENSEAUDIO_MODELS: &[&str] = &[
     "senseaudio-s2", "senseaudio-s2-flash", "senseaudio-s2-lite", "senseaudio-s1",
     "senseaudio-vl-1.0-260319", "senseaudio-vl-lite-1.0-260319",
@@ -326,6 +333,52 @@ async fn probe_model_config(request: ModelProbeRequest) -> Result<ModelProbeResu
         normalized_base_url: base, discovery_source: "token_api".into(), warning: None })
 }
 
+#[tauri::command]
+async fn test_model_connection(request: ModelProbeRequest) -> Result<ModelConnectionTestResult, String> {
+    validate_config_id(&request.config_id)?;
+    if request.model_name.trim().is_empty() { return Err("请选择要测试的模型".into()); }
+    let base = normalize_model_base_url(&request.protocol_id, &request.base_url)?;
+    if !base.starts_with("https://") && !base.starts_with("http://127.0.0.1")
+        && !base.starts_with("http://localhost") {
+        return Err("远程模型地址必须使用 HTTPS；本机服务可使用 HTTP".into());
+    }
+    let credential = if request.protocol_id == "ollama" { None } else {
+        Some(keyring::Entry::new(KEYRING_SERVICE, &request.config_id)
+            .map_err(|_| "无法连接系统安全存储")?.get_password()
+            .map_err(|_| "该连接的 API Key 不存在，请删除后重新配置")?)
+    };
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(45)).build()
+        .map_err(|_| "无法创建模型连接")?;
+    let started = std::time::Instant::now();
+    let response = match request.protocol_id.as_str() {
+        "openai_compatible" => client.post(format!("{base}/chat/completions"))
+            .bearer_auth(credential.as_ref().unwrap()).json(&serde_json::json!({
+                "model": request.model_name, "messages": [{"role": "user", "content": "仅回复 OK"}],
+                "max_tokens": 2, "temperature": 0
+            })).send().await,
+        "anthropic" => client.post(format!("{base}/messages"))
+            .header("x-api-key", credential.as_ref().unwrap())
+            .header("anthropic-version", "2023-06-01").json(&serde_json::json!({
+                "model": request.model_name, "messages": [{"role": "user", "content": "仅回复 OK"}],
+                "max_tokens": 2, "temperature": 0
+            })).send().await,
+        "ollama" => client.post(format!("{base}/api/chat")).json(&serde_json::json!({
+                "model": request.model_name, "messages": [{"role": "user", "content": "仅回复 OK"}],
+                "stream": false, "options": {"num_predict": 2, "temperature": 0}
+            })).send().await,
+        _ => return Err("不支持的模型协议".into()),
+    }.map_err(|error| format!("连接失败：{error}"))?;
+    let elapsed_ms = started.elapsed().as_millis();
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let detail = response.text().await.unwrap_or_default();
+        let concise: String = detail.chars().take(240).collect();
+        return Err(if concise.is_empty() { format!("测试失败（HTTP {status}）") }
+            else { format!("测试失败（HTTP {status}）：{concise}") });
+    }
+    Ok(ModelConnectionTestResult { ok: true, elapsed_ms })
+}
+
 fn normalize_model_base_url(protocol: &str, raw: &str) -> Result<String, String> {
     let mut base = raw.trim().trim_end_matches('/').to_owned();
     let suffixes: &[&str] = match protocol {
@@ -505,7 +558,8 @@ pub fn run() {
             reveal_exported_document,
             store_model_credential,
             delete_model_credential,
-            probe_model_config
+            probe_model_config,
+            test_model_connection
         ])
         .run(tauri::generate_context!())
         .expect("error while running desktop application");

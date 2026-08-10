@@ -385,6 +385,11 @@ export async function probeModelConfig(config: { configId: string; protocolId: s
     "probe_model_config", { request: config });
 }
 
+export async function testModelConnection(config: { configId: string; protocolId: string;
+  baseUrl: string; modelName: string }) {
+  return invoke<{ ok: boolean; elapsedMs: number }>("test_model_connection", { request: config });
+}
+
 export async function loadAppSettings(connection: SidecarConnection): Promise<AppSettings> {
   const response = await localFetch(connection, "/api/v1/settings", {
     headers: { "X-Session-Token": connection.sessionToken },

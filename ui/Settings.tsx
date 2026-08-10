@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AppSettings, deleteModelConfig, deleteModelCredential, listModelConfigs,
   loadAppSettings, ModelConfig, probeModelConfig, saveAppSettings, saveModelConfig,
-  SidecarConnection, storeModelCredential } from "./api";
+  SidecarConnection, storeModelCredential, testModelConnection } from "./api";
 
 const defaults = { openai_compatible: "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com/v1", ollama: "http://127.0.0.1:11434" };
@@ -19,6 +19,7 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   const [apiKey, setApiKey] = useState(""); const [modelText, setModelText] = useState("");
   const [busy, setBusy] = useState<"detect" | "save" | "preferences" | "remove" | null>(null);
   const [message, setMessage] = useState("");
+  const [testStates, setTestStates] = useState<Record<string, string>>({});
 
   async function refresh() {
     if (!connection) return;
@@ -90,10 +91,21 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
     finally { setBusy(null); }
   }
 
+  async function testSavedModel(item: ModelConfig) {
+    setTestStates((current) => ({ ...current, [item.id]: "正在测试…" }));
+    try {
+      const result = await testModelConnection({ configId: item.provider_id,
+        protocolId: item.protocol_id, baseUrl: item.base_url, modelName: item.model_name });
+      setTestStates((current) => ({ ...current, [item.id]: `连接成功 · ${result.elapsedMs} ms` }));
+    } catch (error) {
+      setTestStates((current) => ({ ...current, [item.id]: errorText(error, "连接测试失败") }));
+    }
+  }
+
   const available = items.filter((item) => item.enabled);
   return <main className="settings-page"><header className="topbar"><div><p className="eyebrow">SETTINGS</p>
     <h1>设置</h1><p>一个连接可配置多个模型；API Key 只进入操作系统安全存储。</p></div></header>
-    <section className="settings-content"><div className="settings-stack"><section className="model-form"><div>
+    <section className="settings-content"><div className="settings-provider-grid"><section className="model-form"><div>
       <h2>添加模型连接</h2><p>模型 ID 以换行或逗号分隔。自动获取是可选辅助，失败也能手工保存。</p></div>
       <label>连接名称<input required value={name} onChange={(event) => setName(event.target.value)}
         placeholder="例如：SenseAudio Token Plan" /></label>
@@ -112,6 +124,16 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
           {busy === "save" ? "正在保存…" : `保存连接与模型${enteredModels().length ? `（${enteredModels().length}）` : ""}`}</button></div>
       {message && <p className="settings-message">{message}</p>}
     </section>
+    <div className="model-list"><div className="section-title"><span>已配置连接</span><em>{providers.length}</em></div>
+      {providers.length ? providers.map((group) => <article className="provider-card" key={group[0].provider_id}>
+        <div className="provider-heading"><span className="verified">已配置</span><div><strong>{group[0].name}</strong>
+          <small>{group[0].protocol_id} · {group.length} 个模型</small><code>{group[0].base_url}</code></div>
+          <button disabled={!!busy} onClick={() => removeProvider(group)}>删除连接</button></div>
+        <div className="provider-models">{group.map((item) => <div className="provider-model" key={item.id}>
+          <div><strong>{item.model_name}</strong>{testStates[item.id] && <small className={testStates[item.id].startsWith("连接成功") ? "test-ok" : "test-note"}>{testStates[item.id]}</small>}</div>
+          <button disabled={testStates[item.id] === "正在测试…"} onClick={() => testSavedModel(item)}>测试连接</button>
+        </div>)}</div></article>) : <div className="settings-empty">尚未配置连接</div>}
+    </div></div>
     <section className="preference-form"><div className="section-title"><span>生成与文档默认设置</span></div>
       <div className="preference-grid"><label>说明书默认模型<select value={preferences.manual_model_id ?? ""}
         onChange={(event) => setPreferences({ ...preferences, manual_model_id: event.target.value || null })}>
@@ -129,12 +151,5 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
       <label className="check-setting"><input type="checkbox" checked={preferences.auto_preview}
         onChange={(event) => setPreferences({ ...preferences, auto_preview: event.target.checked })} />生成完成后自动打开预览</label></div>
       <button disabled={!!busy || !connection} onClick={savePreferences}>{busy === "preferences" ? "正在保存…" : "保存通用设置"}</button>
-    </section></div>
-    <div className="model-list"><div className="section-title"><span>已配置连接</span><em>{providers.length}</em></div>
-      {providers.length ? providers.map((group) => <article key={group[0].provider_id}><span className="verified">已配置</span>
-        <div><strong>{group[0].name}</strong><small>{group[0].protocol_id} · {group.length} 个模型</small>
-          <code>{group[0].base_url}</code><small>{group.map((item) => item.model_name).join(" · ")}</small></div>
-        <button disabled={!!busy} onClick={() => removeProvider(group)}>删除连接</button></article>)
-        : <div className="settings-empty">尚未配置连接</div>}
-    </div></section></main>;
+    </section></section></main>;
 }
