@@ -969,3 +969,19 @@
 1. 建立 Tauri v2 桌面项目骨架、sidecar 启动管理和握手校验。
 2. 完成资产工作台首屏：资产列表、SVG 预览、revision 历史与状态。
 3. 接入拖拽移动并保存 `node.move` revision，形成第一个桌面编辑闭环。
+
+### 2026-08-10：Tauri 桌面壳与资产工作台首屏
+
+- 新增 React 19、TypeScript 与 Vite 前端，形成项目侧栏、图表资产列表、SVG 主预览、revision 状态和 AI/属性检查器四区工作台。
+- 新增 Tauri v2 Rust 桌面壳，通过 `invoke("start_sidecar")` 启动和复用 Python sidecar；应用退出时回收子进程。
+- 每次启动生成 256 位随机会话令牌，校验 sidecar 的 host、端口、协议版本、程序版本和 PID 握手，再执行带令牌健康检查。
+- 前端只从 Rust 获取本次连接信息；工作台快照和 SVG 均通过认证 HTTP 请求读取，SVG 先转为 Blob URL，不把会话令牌放入 URL。
+- sidecar CORS 收紧为 Tauri 桌面 WebView 的两个明确 origin，不允许任意网页调用；新增允许与恶意 origin 回归测试。
+- 前端生产构建通过，产物主 JS gzip 约 63 KiB；Python 全量 61 项测试通过。
+- 当前开发机未安装 Rust，因此本轮尚未执行 `cargo check`；external binary 的跨平台构建与真实桌面进程验证列入下一轮。
+
+下一步：
+
+1. 增加 PyInstaller sidecar 构建脚本，按 macOS、Windows 和 Linux target triple 输出 Tauri external binary。
+2. 安装或在 CI 配置 Rust 工具链，执行 `cargo check` 与 Tauri 桌面启动验收。
+3. 接入画布拖拽与 `node.move` 保存，增加撤销、重做和 revision 历史切换。

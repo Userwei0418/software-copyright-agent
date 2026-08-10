@@ -7,6 +7,10 @@ __pycache__/
 venv/
 build/
 dist/
+node_modules/
+*.tsbuildinfo
+src-tauri/target/
+src-tauri/gen/
 .DS_Store
 *.db
 *.db-shm

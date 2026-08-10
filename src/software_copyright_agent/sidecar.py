@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from .diagram_asset_service import DiagramAssetService
@@ -97,6 +98,13 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     app = FastAPI(title="Software Copyright Agent Sidecar", version=SIDECAR_VERSION,
                   docs_url=None, redoc_url=None)
     app.add_middleware(RequestSizeLimitMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["tauri://localhost", "http://tauri.localhost"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=[SESSION_HEADER, "Content-Type"],
+    )
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError):

@@ -7,7 +7,7 @@
 - 只允许 sidecar 监听 `127.0.0.1` 随机端口。
 - 每次桌面应用启动生成至少 32 字符的随机会话令牌。
 - 所有 `/api/v1` 请求必须携带该令牌；路由分发前使用常量时间比较验证。
-- 不启用通配 CORS，不接受客户端提供的文件路径。
+- 不启用通配 CORS；只精确放行 `tauri://localhost` 和 Windows 使用的 `http://tauri.localhost`，不接受客户端提供的文件路径。
 - SVG 预览路径来自已持久化 revision，并再次校验必须位于对应任务目录内。
 - 单次保存最多 500 个白名单 overlay 操作。
 - FastAPI 传输层限制请求体为 1 MiB，禁用 Swagger/ReDoc 公开页面且不配置通配 CORS。

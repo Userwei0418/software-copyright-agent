@@ -1,6 +1,6 @@
 # Software Copyright Agent
 
-一个完全独立于 Codex、本地优先的软件著作权材料辅助生成工具。目前正在推进 M3 源代码文档纵向切片。
+一个完全独立于 Codex、本地优先的软件著作权材料辅助生成工具。目前已建立 Tauri 桌面壳、FastAPI sidecar 与资产工作台首屏纵切。
 
 ## 当前可运行能力
 
@@ -151,9 +151,18 @@ COPYRIGHT_AGENT_SESSION_TOKEN="至少32字符的每次启动随机令牌" \
 
 sidecar 只绑定 `127.0.0.1` 随机端口，并在标准输出写入单行 JSON 握手。FastAPI、Pydantic 和 Uvicorn 是正式运行依赖，会随应用 sidecar 一起打包；它们不属于需要用户额外安装的外部程序。
 
+开发资产工作台前端：
+
+```bash
+pnpm install
+pnpm dev
+```
+
+生产前端可用 `pnpm build` 构建；在离线环境中也可直接运行 `./node_modules/.bin/tsc -b && ./node_modules/.bin/vite build`。Tauri 开发运行还需要 Rust 工具链，并需要先把 Python sidecar 构建为 `src-tauri/binaries/copyright-agent-sidecar-<target-triple>`。
+
 ## 当前限制
 
-- 尚未接入模型协议、说明书正文生成和桌面 UI；Draw.io 兼容文件和 SVG 已能由应用独立生成。
+- 尚未接入模型协议、说明书正文生成和桌面画布编辑；资产工作台首屏已经接入 sidecar 的工作台快照与 SVG 预览接口。
 - 当前 CLI 是验证领域内核的纵向切片，不是最终用户界面。
 - `.gitignore` 当前实现常用 glob、目录、锚定和否定规则，不承诺覆盖 Git 的全部边缘语义。
 - A/B/C 当前是确定性初筛；后续模型只对未排除候选做语义重排，不能恢复安全规则排除项。
