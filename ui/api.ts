@@ -108,7 +108,19 @@ export type FormalManualDocument = {
   docx_relative_path: string; sha256: string; created_at: string;
   integrity: { status: "verified" | "missing" | "mismatch"; size_bytes: number | null };
   qa: { section_count: number; figure_count: number; screenshot_count: number;
-    warning_count: number; warnings: string[]; design_preset: string; named_override: string };
+    warning_count: number; warnings: string[]; design_preset: string; named_override: string;
+    quality?: FormalManualQa["summary"] };
+};
+
+export type FormalManualQa = {
+  id: string; job_id: string; document_artifact_id: string; document_version: number;
+  qa_version: number; policy_version: string; renderer_kind: "deterministic_companion";
+  passed: boolean; page_count: number; created_at: string;
+  checks: Array<{ key: string; passed: boolean; severity: "blocker" | "warning";
+    expected: unknown; actual: unknown; message: string }>;
+  summary: { passed: boolean; rendered_pages: number; warning_count: number;
+    blocker_count: number; underfilled_pages: number[]; renderer_kind: string;
+    renderer_disclosure: string; [key: string]: unknown };
 };
 
 export type FormalManualJob = {
@@ -133,6 +145,7 @@ export type FormalManualPreview = {
 
 export type FormalManualGenerationResult = {
   job: FormalManualJob; document: FormalManualDocument;
+  quality: FormalManualQa;
   draft: { status: string; section_count: number; errors: unknown[] };
   figures: { status: string; count: number; errors: unknown[] };
   screenshots: { status: string; count: number; assessment: { status: string; reason: string } };
@@ -517,6 +530,32 @@ export async function loadFormalManualPreview(connection: SidecarConnection, job
     `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents/${version}/preview`,
     { headers: { "X-Session-Token": connection.sessionToken } });
   return requireJson<FormalManualPreview>(response, "说明书预览读取失败");
+}
+
+export async function loadFormalManualQa(connection: SidecarConnection, jobId: string,
+  version: number) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents/${version}/qa`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return requireJson<FormalManualQa>(response, "说明书逐页质检结果读取失败");
+}
+
+export async function runFormalManualQa(connection: SidecarConnection, jobId: string,
+  version: number) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents/${version}/qa`,
+    { method: "POST", headers: { "X-Session-Token": connection.sessionToken } });
+  return requireJson<{ document: FormalManualDocument; qa_run: FormalManualQa }>(
+    response, "说明书逐页质量检查失败");
+}
+
+export async function loadFormalManualQaPage(connection: SidecarConnection, jobId: string,
+  version: number, pageNumber: number): Promise<string> {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents/${version}/qa/pages/${pageNumber}.png`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  if (!response.ok) throw new Error(`说明书预览页读取失败 (${response.status})`);
+  return URL.createObjectURL(await response.blob());
 }
 
 export async function loadFormalManualImage(connection: SidecarConnection, jobId: string,

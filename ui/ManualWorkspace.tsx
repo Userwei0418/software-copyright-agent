@@ -1,10 +1,10 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import {
-  exportManualDocument, FormalManualDocument, FormalManualJob, FormalManualPreview,
+  exportManualDocument, FormalManualDocument, FormalManualJob, FormalManualQa,
   generateFormalManual, listFormalManualDocuments, listFormalManualJobs, listModelConfigs,
-  loadAppSettings, loadFormalManualImage, loadFormalManualPreview, ModelConfig,
-  revealExportedDocument, SidecarConnection,
+  loadAppSettings, loadFormalManualQa, loadFormalManualQaPage, ModelConfig,
+  revealExportedDocument, runFormalManualQa, SidecarConnection,
 } from "./api";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
@@ -17,9 +17,11 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   const [jobs, setJobs] = useState<FormalManualJob[]>([]);
   const [documents, setDocuments] = useState<FormalManualDocument[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<FormalManualDocument | null>(null);
-  const [preview, setPreview] = useState<FormalManualPreview | null>(null);
-  const [images, setImages] = useState<Record<string, string>>({});
+  const [quality, setQuality] = useState<FormalManualQa | null>(null);
+  const [previewPage, setPreviewPage] = useState(1);
+  const [previewPageUrl, setPreviewPageUrl] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState("");
   const [exportedPath, setExportedPath] = useState<string | null>(null);
 
@@ -34,8 +36,8 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   }, [connection]);
 
   useEffect(() => {
-    setJobs([]); setDocuments([]); setSelectedDocument(null); setPreview(null);
-    setExportedPath(null); releaseImages(images); setImages({});
+    setJobs([]); setDocuments([]); setSelectedDocument(null); setQuality(null);
+    setExportedPath(null); releasePreviewPage(previewPageUrl); setPreviewPageUrl(null);
     if (!connection || !taskId) return;
     setMessage("正在读取正式说明书版本…");
     loadVersions(connection, taskId).then(({ jobItems, documentItems }) => {
@@ -44,20 +46,20 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
     }).catch((error) => setMessage(error instanceof Error ? error.message : "说明书版本读取失败"));
   }, [connection, taskId]);
 
-  useEffect(() => () => releaseImages(images), [images]);
+  useEffect(() => () => releasePreviewPage(previewPageUrl), [previewPageUrl]);
 
   async function generate() {
     if (!connection || !taskId || !modelId) return;
-    setGenerating(true); setPreview(null); setExportedPath(null);
-    setMessage("AI 正在研究项目证据、撰写正文并生成图表，完成后将自动装配 Word 文档…");
+    setGenerating(true); setQuality(null); setExportedPath(null);
+    setMessage("AI 正在研究证据、撰写正文和生成图表，随后将装配 Word 并逐页质检…");
     try {
       const result = await generateFormalManual(connection, taskId, modelId);
       const versions = await loadVersions(connection, taskId);
       setJobs(versions.jobItems); setDocuments(versions.documentItems);
       setSelectedDocument(result.document);
-      setMessage(result.document.qa.warning_count
-        ? `正式说明书 v${result.document.version} 已生成，含 ${result.document.qa.warning_count} 项非阻塞提示。`
-        : `正式说明书 v${result.document.version} 已生成，可以立即预览或导出。`);
+      setMessage(result.quality.passed
+        ? `正式说明书 v${result.document.version} 已生成并通过 ${result.quality.page_count} 页质量检查。`
+        : `正式说明书 v${result.document.version} 已生成，但未通过质量检查，请查看检查项。`);
       await openPreview(result.document);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "正式说明书生成失败");
@@ -66,26 +68,46 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
 
   async function openPreview(document = selectedDocument) {
     if (!connection || !document) return;
-    setMessage("正在载入说明书内容与图片…");
+    setMessage("正在载入逐页质量检查预览…");
     try {
-      const value = await loadFormalManualPreview(connection, document.job_id, document.version);
-      const loaded: Record<string, string> = {};
-      await Promise.all([
-        ...value.figures.map(async (item) => {
-          try { loaded[`figure:${item.figure_key}`] = await loadFormalManualImage(
-            connection, document.job_id, "figure", item.figure_key); } catch { /* non-blocking */ }
-        }),
-        ...value.screenshots.map(async (item) => {
-          try { loaded[`screenshot:${item.screenshot_key}`] = await loadFormalManualImage(
-            connection, document.job_id, "screenshot", item.screenshot_key); } catch { /* non-blocking */ }
-        }),
-      ]);
-      releaseImages(images); setImages(loaded); setPreview(value); setMessage("");
+      const value = await loadFormalManualQa(connection, document.job_id, document.version);
+      const url = await loadFormalManualQaPage(connection, document.job_id, document.version, 1);
+      releasePreviewPage(previewPageUrl); setPreviewPageUrl(url); setPreviewPage(1);
+      setQuality(value); setMessage("");
     } catch (error) { setMessage(error instanceof Error ? error.message : "说明书预览失败"); }
   }
 
+  async function changePreviewPage(page: number) {
+    if (!connection || !selectedDocument || !quality || page < 1 || page > quality.page_count) return;
+    setMessage(`正在载入第 ${page} 页…`);
+    try {
+      const url = await loadFormalManualQaPage(
+        connection, selectedDocument.job_id, selectedDocument.version, page);
+      releasePreviewPage(previewPageUrl); setPreviewPageUrl(url); setPreviewPage(page); setMessage("");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "说明书预览页读取失败"); }
+  }
+
+  async function runQualityCheck() {
+    if (!connection || !selectedDocument) return;
+    setChecking(true); setMessage("正在逐页渲染并检查说明书…");
+    try {
+      const result = await runFormalManualQa(
+        connection, selectedDocument.job_id, selectedDocument.version);
+      setSelectedDocument(result.document);
+      setDocuments((current) => current.map((item) => item.id === result.document.id
+        ? result.document : item));
+      setQuality(result.qa_run);
+      const url = await loadFormalManualQaPage(
+        connection, result.document.job_id, result.document.version, 1);
+      releasePreviewPage(previewPageUrl); setPreviewPageUrl(url); setPreviewPage(1);
+      setMessage(result.qa_run.passed ? "逐页质量检查通过，可以导出。" :
+        "质量检查未通过，请查看检查结果后重新生成或修订。");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "说明书质量检查失败"); }
+    finally { setChecking(false); }
+  }
+
   async function exportDocument() {
-    if (!selectedDocument) return;
+    if (!selectedDocument || selectedDocument.status !== "qa_passed") return;
     const destination = await save({ title: "导出软件说明书",
       defaultPath: selectedDocument.filename,
       filters: [{ name: "Word 文档", extensions: ["docx"] }] });
@@ -124,16 +146,21 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
             selectedDocument.qa.screenshot_count} 张截图 · {(selectedDocument.integrity.size_bytes || 0) / 1024 / 1024 < 0.1
               ? `${Math.round((selectedDocument.integrity.size_bytes || 0) / 1024)} KiB`
               : `${((selectedDocument.integrity.size_bytes || 0) / 1024 / 1024).toFixed(2)} MiB`}</small></div></div>
-          <div><button onClick={() => openPreview()}>程序内查看</button><button className="primary"
-            onClick={exportedPath ? showExport : exportDocument}>{exportedPath ? "在文件夹中显示" : "导出…"}</button></div>
+          <div><button disabled={checking} onClick={selectedDocument.status === "assembled"
+            ? runQualityCheck : () => openPreview()}>{checking ? "正在质检…" :
+              selectedDocument.status === "assembled" ? "执行逐页质检" : "逐页预览"}</button><button className="primary"
+            disabled={selectedDocument.status !== "qa_passed"}
+            onClick={exportedPath ? showExport : exportDocument}>{exportedPath ? "在文件夹中显示" :
+              selectedDocument.status === "qa_passed" ? "导出…" : "质检通过后可导出"}</button></div>
         </section>}
 
         {documents.length > 0 && <section className="manual-versions"><header><strong>文档版本</strong>
           <small>{documents.length} 个可用版本</small></header><div>{documents.map((item) => <button
             className={selectedDocument?.id === item.id ? "active" : ""} key={item.id}
-            onClick={() => { setSelectedDocument(item); setPreview(null); setExportedPath(null); }}>
+            onClick={() => { setSelectedDocument(item); setQuality(null); setExportedPath(null); }}>
             <b>v{item.version}</b><span>{item.created_at.replace("T", " ").slice(0, 16)}</span>
-            <em>{item.integrity.status === "verified" ? "完整性已验证" : "文件异常"}</em></button>)}</div></section>}
+            <em>{item.integrity.status !== "verified" ? "文件异常" : item.status === "qa_passed" ?
+              "质量检查通过" : item.status === "qa_failed" ? "质量检查未通过" : "待质量检查"}</em></button>)}</div></section>}
 
         {jobs.length > 0 && <details className="manual-advanced"><summary>高级：查看生成阶段留痕</summary>
           <p>阶段状态仅用于进度、失败定位和独立重试，不再要求用户逐项点击。</p>
@@ -145,36 +172,22 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
         <button className="diagram-link" onClick={onOpenDiagrams}>进入图表资产页继续微调可编辑 Draw.io</button>
       </section>}
 
-    {preview && selectedDocument && <div className="document-viewer manual-document-viewer" role="dialog" aria-modal="true">
-      <div className="document-viewer-panel"><header><div><strong>{preview.document.project_name} 软件说明书</strong>
-        <small>{preview.document.project_version} · 文档 v{preview.document.version}</small></div><div>
-        <button onClick={exportedPath ? showExport : exportDocument}>{exportedPath ? "在文件夹中显示" : "导出 DOCX…"}</button>
-        <button onClick={() => setPreview(null)}>关闭</button></div></header>
-        <div className="manual-preview-body"><article className="manual-preview-paper"><section className="manual-preview-cover">
-          <span>软件著作权登记材料</span><h2>{preview.document.project_name}</h2><h3>软件说明书</h3>
-          <p>{preview.document.project_version}</p></section>{preview.sections.map((section, index) => <section
-          className="manual-preview-section" key={section.section_key}><h2>{index + 1}　{section.title}</h2>
-          {section.blocks.map((block, blockIndex) => <PreviewBlock block={block} key={blockIndex}
-            figureUrl={block.type === "figure_request" ? images[`figure:${block.figure_key}`] : undefined} />)}
-          {preview.screenshots.filter((item) => item.section_key === section.section_key).map((item) => <div
-            className="manual-preview-figure" key={item.screenshot_key}>{images[`screenshot:${item.screenshot_key}`] &&
-            <img src={images[`screenshot:${item.screenshot_key}`]} alt={item.title} />}<small>界面　{item.title}</small>
-            {descriptionLines(item.description).map(([label, value]) => <p className="screenshot-detail" key={label}>
-              <b>{label}：</b>{value}</p>)}</div>)}</section>)}</article></div>
+    {quality && selectedDocument && <div className="document-viewer manual-document-viewer" role="dialog" aria-modal="true">
+      <div className="document-viewer-panel"><header><div><strong>{selectedDocument.project_name} 软件说明书</strong>
+        <small>{selectedDocument.project_version} · 文档 v{selectedDocument.version} · {
+          quality.passed ? "质量检查通过" : "质量检查未通过"}</small></div><div>
+        <button disabled={selectedDocument.status !== "qa_passed"}
+          onClick={exportedPath ? showExport : exportDocument}>{exportedPath ? "在文件夹中显示" : "导出 DOCX…"}</button>
+        <button onClick={() => setQuality(null)}>关闭</button></div></header>
+        <div className="manual-page-toolbar"><button disabled={previewPage <= 1}
+          onClick={() => changePreviewPage(previewPage - 1)}>上一页</button><span>第 {previewPage} / {
+            quality.page_count} 页</span><button disabled={previewPage >= quality.page_count}
+          onClick={() => changePreviewPage(previewPage + 1)}>下一页</button></div>
+        <div className="manual-preview-body">{previewPageUrl && <img className="manual-qa-page"
+          src={previewPageUrl} alt={`说明书第 ${previewPage} 页`} />}</div>
+        <footer className="manual-render-disclosure">{quality.summary.renderer_disclosure}</footer>
       </div></div>}
   </main>;
-}
-
-function PreviewBlock({ block, figureUrl }: { block: FormalManualPreview["sections"][number]["blocks"][number];
-  figureUrl?: string }) {
-  if (block.type === "paragraph") return <p>{block.text}</p>;
-  if (block.type === "list") return <div>{block.lead && <p>{block.lead}</p>}<ul>{block.items.map((item) =>
-    <li key={item}>{item}</li>)}</ul></div>;
-  if (block.type === "table") return <div className="manual-preview-table"><small>表　{block.title}</small><table><thead><tr>
-    {block.headers.map((item) => <th key={item}>{item}</th>)}</tr></thead><tbody>{block.rows.map((row, index) =>
-      <tr key={index}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>)}</tbody></table></div>;
-  return figureUrl ? <div className="manual-preview-figure"><img src={figureUrl} alt={block.title} />
-    <small>图　{block.title}</small></div> : <div className="manual-preview-warning">图表尚未生成：{block.title}</div>;
 }
 
 async function loadVersions(connection: SidecarConnection, taskId: string) {
@@ -185,19 +198,11 @@ async function loadVersions(connection: SidecarConnection, taskId: string) {
   return { jobItems, documentItems };
 }
 
-function releaseImages(items: Record<string, string>) {
-  Object.values(items).forEach((url) => URL.revokeObjectURL(url));
+function releasePreviewPage(url: string | null) {
+  if (url) URL.revokeObjectURL(url);
 }
 
 function stepLabel(key: string) {
   return ({ research: "项目研究", draft: "结构化正文", diagrams: "专业图表",
     screenshots: "界面截图", assemble_docx: "Word 装配", render_qa: "逐页质检" } as Record<string, string>)[key] || key;
-}
-
-function descriptionLines(description: Record<string, string>): Array<[string, string]> {
-  const fields: Array<[string, string]> = [["page_purpose", "页面用途"], ["entry_conditions", "进入条件"],
-    ["visible_regions", "可见区域与控件"], ["typical_workflow", "典型操作流程"],
-    ["backend_interactions", "后台、接口与数据交互"],
-    ["result_validation_recovery", "结果、校验与异常恢复"]];
-  return fields.map(([key, label]) => [label, description[key]] as [string, string]).filter(([, value]) => !!value);
 }

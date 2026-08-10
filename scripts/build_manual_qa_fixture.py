@@ -6,11 +6,13 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from software_copyright_agent.manual_document import FormalManualBuilder
+from software_copyright_agent.manual_qa import ManualCompanionRenderer
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
+    parser.add_argument("--companion-dir", type=Path)
     args = parser.parse_args()
     output = args.output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -44,6 +46,17 @@ def main() -> None:
     screenshots = [{"screenshot_key": "workspace", "section_key": "ui_operations", "title": "说明书工作台", "source": "user", "image_relative_path": screenshot.relative_to(output.parent).as_posix(), "description": description}]
     context = {"software_name": "软著材料助手", "software_version": "V1.0"}
     FormalManualBuilder().build(output, context, sections, figures, screenshots, output.parent)
+    if args.companion_dir:
+        companion_dir = args.companion_dir.expanduser().resolve()
+        result = ManualCompanionRenderer().render(
+            companion_dir,
+            {"project_name": context["software_name"],
+             "project_version": context["software_version"]},
+            sections, figures, screenshots, output.parent,
+        )
+        print("companion_pages={0} companion_pdf={1}".format(
+            len(result.page_paths), result.pdf_path
+        ))
     print(output)
 
 

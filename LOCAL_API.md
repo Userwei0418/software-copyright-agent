@@ -151,12 +151,16 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 - `POST /api/v1/manual-jobs/{job_id}/screenshots/finalize`：完成或安全跳过截图阶段。
 - `GET /api/v1/manual-jobs/{job_id}/screenshots`：读取截图清单与章节说明。
 - `GET /api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}.png`：校验完整性后读取截图。
-- `POST /api/v1/tasks/{task_id}/manual-jobs/generate`：一次用户操作串联研究、正文、图表、截图决策和 DOCX 装配。
+- `POST /api/v1/tasks/{task_id}/manual-jobs/generate`：一次用户操作串联研究、正文、图表、截图决策、DOCX 装配和逐页质量检查。
 - `POST /api/v1/manual-jobs/{job_id}/documents`：仅重试当前任务的 Word 装配阶段。
 - `GET /api/v1/manual-jobs/{job_id}/documents`：列出正式说明书 DOCX 版本。
 - `GET /api/v1/manual-jobs/{job_id}/documents/{version}`：读取指定文档版本、摘要和完整性状态。
 - `GET /api/v1/manual-jobs/{job_id}/documents/{version}/preview`：读取程序内结构预览所需章节、图表和截图索引。
-- `GET /api/v1/manual-jobs/{job_id}/documents/{version}/download`：完整性验证后下载指定 DOCX。
+- `POST /api/v1/manual-jobs/{job_id}/documents/{version}/qa`：对既有 DOCX 重试逐页质量检查。
+- `GET /api/v1/manual-jobs/{job_id}/documents/{version}/qa`：读取检查项、页数、问题清单和渲染声明。
+- `GET /api/v1/manual-jobs/{job_id}/documents/{version}/qa/pages/{page_number}.png`：读取内置 A4 分页预览。
+- `GET /api/v1/manual-jobs/{job_id}/documents/{version}/qa/preview.pdf`：读取同源分页预览 PDF。
+- `GET /api/v1/manual-jobs/{job_id}/documents/{version}/download`：仅在完整性验证且状态为 `qa_passed` 时下载指定 DOCX。
 
 创建请求：
 
@@ -175,3 +179,5 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 图表阶段以正文 `figure_request` 和章节证据为输入，模型只生成节点、关系、布局和证据引用等语义；Draw.io XML、SVG 与 2 倍分辨率 PNG 由本地确定性渲染器生成。服务端校验节点唯一性、关系端点、显式正交路由、无节点重叠和文件完整性，并为每次重新生成保留独立版本。PNG 供 Word 插入，`.drawio` 始终是可编辑源文件。
 
 截图安全评估永远不会执行项目的 `npm start`、Shell 脚本或其他任意启动命令，也不会允许外部网络、付费调用或真实凭据。当前桌面包未内置受控浏览器时，存在 UI 的项目会进入 `manual_import`，用户可通过系统文件选择器导入真实截图或选择跳过；没有 UI 章节的项目自动标记 `not_applicable`。导入图片会解码、限制尺寸、移除元数据并统一转为 PNG，同时要求填写页面用途、进入条件、可见区域、典型流程、后台交互以及结果/校验/恢复六类说明。
+
+运行时质量检查不依赖 Word、LibreOffice、Draw.io 或其他外部程序。内置确定性分页器从与 DOCX 相同的结构化章节、图表和截图生成 A4 PNG/PDF，并与 DOCX 的 SHA-256、A4 纸张、标题、表格、图片、分页符和内嵌字体结构交叉校验；程序内逐页预览使用这些页面。它不是 Word 原生排版引擎，接口会明确返回 `renderer_kind=deterministic_companion` 和声明文本。发行基线另对确定性 fixture 使用真实 LibreOffice 全页回归，只有运行时检查无阻断问题的版本才进入 `qa_passed` 并允许导出。

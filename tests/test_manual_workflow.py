@@ -16,7 +16,11 @@ class FakePipeline:
 
 class FakeStage:
     def __init__(self, calls, name, result): self.calls, self.name, self.result = calls, name, result
-    def execute(self, job_id): self.calls.append((self.name, job_id)); return self.result
+    def execute(self, job_id, version=None):
+        self.calls.append(
+            (self.name, job_id) if version is None else (self.name, job_id, version)
+        )
+        return self.result
     def generate_all(self, job_id): self.calls.append((self.name, job_id)); return self.result
     def assess(self, job_id): self.calls.append((self.name, job_id)); return self.result
     def finalize(self, job_id): self.calls.append((self.name, job_id)); return self.result
@@ -38,13 +42,18 @@ class ManualWorkflowServiceTests(unittest.TestCase):
                                                       "errors": []}),
                 screenshots=ScreenshotStages(calls),
                 documents=FakeStage(calls, "document", {"version": 1, "filename": "manual.docx"}),
+                qa=FakeStage(calls, "qa", {
+                    "document": {"version": 1, "filename": "manual.docx", "status": "qa_passed"},
+                    "qa_run": {"passed": True, "page_count": 6},
+                }),
             )
             result = service.generate("task", "model")
             self.assertEqual([item[0] for item in calls], [
-                "create", "research", "draft", "figures", "assess", "finalize", "document", "get"
+                "create", "research", "draft", "figures", "assess", "finalize", "document", "qa", "get"
             ])
             self.assertEqual(result["document"]["version"], 1)
             self.assertEqual(result["draft"]["section_count"], 2)
+            self.assertTrue(result["quality"]["passed"])
 
 
 class ScreenshotStages:

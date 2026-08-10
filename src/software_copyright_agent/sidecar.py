@@ -37,6 +37,7 @@ from .manual_drafting import ManualDraftingError, ManualDraftingService
 from .manual_figures import ManualFigureError, ManualFigureService
 from .manual_screenshots import ManualScreenshotError, ManualScreenshotService
 from .manual_document import ManualDocumentError, ManualDocumentService
+from .manual_qa import ManualQaError, ManualQaService
 from .manual_workflow import ManualWorkflowError, ManualWorkflowService
 from .diagram_plan_service import DiagramPlanError
 from .drawio_service import DrawioGenerationError
@@ -197,7 +198,12 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     manual_figure_service = ManualFigureService(database, data_dir)
     manual_screenshot_service = ManualScreenshotService(database, data_dir)
     manual_document_service = ManualDocumentService(database, data_dir)
-    manual_workflow_service = ManualWorkflowService(database, data_dir)
+    manual_qa_service = ManualQaService(
+        database, data_dir, documents=manual_document_service
+    )
+    manual_workflow_service = ManualWorkflowService(
+        database, data_dir, documents=manual_document_service, qa=manual_qa_service
+    )
     model_config_service = ModelConfigService(database)
     credential_vault = CredentialVault(database, data_dir)
     app_settings_service = AppSettingsService(database)
@@ -1037,6 +1043,11 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
             })
         try:
             item = manual_document_service.get(job_id, version)
+            if item["status"] != "qa_passed":
+                return JSONResponse(status_code=409, content={
+                    "error": {"code": "manual_document_not_deliverable",
+                              "message": "说明书尚未通过逐页质量检查，暂不能导出"}
+                })
             return Response(
                 content=manual_document_service.read(job_id, version),
                 media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -1047,6 +1058,81 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
         except ManualDocumentError as error:
             return JSONResponse(status_code=404, content={
                 "error": {"code": "manual_document_not_found", "message": str(error)}
+            })
+
+    @app.post("/api/v1/manual-jobs/{job_id}/documents/{version}/qa")
+    def run_manual_document_qa(
+        job_id: str,
+        version: int,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_qa_service.execute(job_id, version)
+        except (ManualQaError, ManualDocumentError) as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_qa_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/documents/{version}/qa")
+    def get_manual_document_qa(
+        job_id: str,
+        version: int,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_qa_service.get(job_id, version)
+        except (ManualQaError, ManualDocumentError) as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_qa_not_found", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/documents/{version}/qa/pages/{page_number}.png")
+    def get_manual_document_qa_page(
+        job_id: str,
+        version: int,
+        page_number: int,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return Response(
+                content=manual_qa_service.read_page(job_id, version, page_number),
+                media_type="image/png",
+            )
+        except (ManualQaError, ManualDocumentError) as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_qa_page_not_found", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/documents/{version}/qa/preview.pdf")
+    def get_manual_document_qa_pdf(
+        job_id: str,
+        version: int,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return Response(
+                content=manual_qa_service.read_pdf(job_id, version),
+                media_type="application/pdf",
+            )
+        except (ManualQaError, ManualDocumentError) as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_qa_pdf_not_found", "message": str(error)}
             })
 
     @app.get("/api/v1/tasks/{task_id}/diagram-assets")

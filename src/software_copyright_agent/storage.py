@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -558,6 +558,27 @@ CREATE INDEX idx_manual_screenshot_revisions_latest
 ON manual_screenshot_revisions(job_id, screenshot_key, version DESC);
 """
 
+MIGRATION_020 = """
+CREATE TABLE manual_document_qa_runs (
+    id TEXT PRIMARY KEY,
+    document_artifact_id TEXT NOT NULL REFERENCES manual_document_artifacts(id) ON DELETE CASCADE,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    qa_version INTEGER NOT NULL,
+    policy_version TEXT NOT NULL,
+    renderer_kind TEXT NOT NULL CHECK (renderer_kind IN ('deterministic_companion')),
+    passed INTEGER NOT NULL CHECK (passed IN (0, 1)),
+    checks_json TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    report_relative_path TEXT NOT NULL,
+    render_relative_path TEXT NOT NULL,
+    preview_pdf_relative_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(document_artifact_id, qa_version)
+);
+CREATE INDEX idx_manual_document_qa_latest
+ON manual_document_qa_runs(document_artifact_id, qa_version DESC);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -761,6 +782,16 @@ class Database:
                     """INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (19, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
                     ("migration-019",),
+                )
+            applied_v20 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 20"
+            ).fetchone()
+            if applied_v20 is None:
+                connection.executescript(MIGRATION_020)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (20, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-020",),
                 )
 
     @contextmanager
