@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="软著材料助手">
+  <defs>
+    <linearGradient id="background" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6754E8"/>
+      <stop offset="1" stop-color="#3E2FA9"/>
+    </linearGradient>
+    <linearGradient id="sheet" x1="172" y1="106" x2="354" y2="408" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#ECE9FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#background)"/>
+  <path d="M154 116c0-16.6 13.4-30 30-30h110l72 72v238c0 16.6-13.4 30-30 30H184c-16.6 0-30-13.4-30-30V116Z" fill="url(#sheet)"/>
+  <path d="M294 86v54c0 16.6 13.4 30 30 30h42" fill="#D9D4FF"/>
+  <rect x="194" y="218" width="132" height="18" rx="9" fill="#6754E8"/>
+  <rect x="194" y="262" width="94" height="14" rx="7" fill="#AEA5EC"/>
+  <rect x="194" y="298" width="118" height="14" rx="7" fill="#AEA5EC"/>
+  <path d="m227 371 25 25 58-68" fill="none" stroke="#4FBE8C" stroke-linecap="round" stroke-linejoin="round" stroke-width="22"/>
+</svg>

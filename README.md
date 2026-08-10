@@ -169,6 +169,16 @@ python3 scripts/build_sidecar.py
 
 脚本优先读取 `rustc -vV` 的 host triple；未安装 Rust 时会根据受支持的平台和 CPU 推断。产物严格使用 Tauri external binary 命名，并生成独立 SHA-256 manifest。跨平台发行应分别在对应操作系统构建，不能在单一机器上伪造其他平台可执行文件。
 
+检查并运行 Tauri 桌面端：
+
+```bash
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo test --manifest-path src-tauri/Cargo.toml
+pnpm tauri dev
+```
+
+Rust、Node 和 Python 只属于源码构建环境；发行给最终用户的是包含 WebView 桌面壳和冻结 sidecar 的预编译安装包，不要求用户另装这些开发工具。
+
 ## 当前限制
 
 - 尚未接入模型协议、说明书正文生成和桌面画布编辑；资产工作台首屏已经接入 sidecar 的工作台快照与 SVG 预览接口。

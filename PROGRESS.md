@@ -1002,3 +1002,20 @@
 1. 配置 Rust/Tauri 编译环境并执行 `cargo check`，修复可能的 Rust API 或配置问题。
 2. 使用本机 external binary 完成 Tauri 应用真实启动、sidecar 生命周期和首屏连接验收。
 3. 接入画布拖拽与 `node.move` 保存，增加撤销、重做和 revision 历史切换。
+
+### 2026-08-10：Rust 编译与 Tauri 桌面启动验收
+
+- 从 Rust 官方服务器下载并校验 Apple Silicon rustup 安装器，使用 minimal profile 安装 stable `rustc 1.97.1`；Rust 仅为开发构建依赖，不转嫁给最终用户。
+- 首次 `cargo check` 发现 Tauri 编译期要求 `src-tauri/icons/icon.png`，补齐可复现的 SVG 图标源以及桌面 PNG、ICNS、ICO 产物。
+- 图标采用确定性 code-native SVG，不调用生成模型；只保留 macOS、Windows 和通用桌面所需资产，移除本阶段不使用的移动端/Store 冗余图标。
+- 生成并提交 `Cargo.lock`，锁定 481 个 Rust 包；Tauri 桌面 Rust 代码已通过 `cargo fmt --check` 和 `cargo check`。
+- 新增 Rust 安全回归测试，覆盖 256 位小写十六进制会话令牌、合法 loopback 握手，以及非 loopback/错误协议拒绝；3 项全部通过。
+- Tauri 开发应用成功完成 406 个编译单元并启动桌面主程序；此前独立冻结 sidecar 的握手与健康检查已通过。
+- 为桌面运行增加不含会话令牌的 sidecar ready/stop 诊断日志。系统拒绝了第二次 GUI 启动审批，因此本轮没有虚报完整 UI→sidecar 日志验收。
+- Python 64 项测试与前端生产构建继续全部通过。
+
+下一步：
+
+1. 实现 SVG 画布节点命中、拖拽预览和坐标换算。
+2. 将拖拽结果保存为 `node.move` revision，并在失败时恢复本地预览。
+3. 增加撤销、重做和 revision 历史切换，完成首个桌面编辑闭环。
