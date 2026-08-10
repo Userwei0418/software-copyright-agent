@@ -594,6 +594,23 @@ ADD COLUMN revision_status TEXT NOT NULL DEFAULT 'clean'
 CHECK (revision_status IN ('clean', 'conflicted'));
 """
 
+MIGRATION_022 = """
+ALTER TABLE manual_screenshot_artifacts
+ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE manual_screenshot_artifacts
+ADD COLUMN archived_at TEXT;
+UPDATE manual_screenshot_artifacts SET updated_at=created_at WHERE updated_at='';
+ALTER TABLE manual_screenshot_revisions
+ADD COLUMN edit_source TEXT NOT NULL DEFAULT 'import'
+CHECK (edit_source IN ('import', 'manual', 'replacement', 'rollback', 'archive', 'restore'));
+ALTER TABLE manual_screenshot_revisions
+ADD COLUMN parent_revision_id TEXT;
+ALTER TABLE manual_screenshot_revisions
+ADD COLUMN change_summary_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE manual_screenshot_revisions
+ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1));
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -817,6 +834,16 @@ class Database:
                     """INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (21, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
                     ("migration-021",),
+                )
+            applied_v22 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 22"
+            ).fetchone()
+            if applied_v22 is None:
+                connection.executescript(MIGRATION_022)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (22, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-022",),
                 )
 
     @contextmanager

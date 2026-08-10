@@ -153,7 +153,12 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 - `GET /api/v1/manual-jobs/{job_id}/screenshots/assessment`：读取最近一次截图评估。
 - `POST /api/v1/manual-jobs/{job_id}/screenshots/import`：导入系统文件选择器授权的真实截图。
 - `POST /api/v1/manual-jobs/{job_id}/screenshots/finalize`：完成或安全跳过截图阶段。
-- `GET /api/v1/manual-jobs/{job_id}/screenshots`：读取截图清单与章节说明。
+- `GET /api/v1/manual-jobs/{job_id}/screenshots?include_archived=true|false`：读取当前截图清单、版本、归档状态与章节说明。
+- `PUT /api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}`：修改标题、绑定章节与六维说明并创建新版本。
+- `POST /api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}/replace`：净化新的真实图片并创建替换版本，保留旧图片。
+- `GET /api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}/revisions`：读取图片、说明、章节位置和归档状态的完整版本历史。
+- `POST /api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}/rollback`：从指定历史版本创建新的恢复版本，不覆盖历史。
+- `POST /api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}/archive`：归档或恢复截图；归档不删除图片和历史记录。
 - `GET /api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}.png`：校验完整性后读取截图。
 - `POST /api/v1/tasks/{task_id}/manual-jobs/generate`：一次用户操作串联研究、正文、图表、截图决策、DOCX 装配和逐页质量检查。
 - `POST /api/v1/manual-jobs/{job_id}/documents`：仅重试当前任务的 Word 装配阶段。
@@ -184,6 +189,6 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 
 正式图表修改沿用同一语义与本地渲染器。人工拖动或改名直接生成新版本，不调用模型；自然语言修改只允许模型提出白名单 overlay，接口先返回未持久化 SVG 和操作清单，只有第二次显式确认才创建版本。文档响应包含 `freshness.status=current|outdated`；图表、正文或截图修改后，已有 DOCX 会标记为过期并要求重新装配，旧文件和旧质检记录仍保留。
 
-截图安全评估永远不会执行项目的 `npm start`、Shell 脚本或其他任意启动命令，也不会允许外部网络、付费调用或真实凭据。当前桌面包未内置受控浏览器时，存在 UI 的项目会进入 `manual_import`，用户可通过系统文件选择器导入真实截图或选择跳过；没有 UI 章节的项目自动标记 `not_applicable`。导入图片会解码、限制尺寸、移除元数据并统一转为 PNG，同时要求填写页面用途、进入条件、可见区域、典型流程、后台交互以及结果/校验/恢复六类说明。
+截图安全评估永远不会执行项目的 `npm start`、Shell 脚本或其他任意启动命令，也不会允许外部网络、付费调用或真实凭据。当前桌面包未内置受控浏览器时，存在 UI 的项目会进入 `manual_import`，用户可通过系统文件选择器导入真实截图或选择跳过；没有 UI 章节的项目自动标记 `not_applicable`。导入图片会解码、限制尺寸、移除元数据并统一转为 PNG，同时要求填写页面用途、进入条件、可见区域、典型流程、后台交互以及结果/校验/恢复六类说明。截图标题、章节、说明、图片替换、归档和历史恢复全部创建不可覆盖的 revision；归档资产不进入后续 DOCX，但仍可预览和恢复。任一截图修订都会使既有 DOCX 变为 `outdated`，必须重新装配和逐页质检后才能再次导出。
 
 运行时质量检查不依赖 Word、LibreOffice、Draw.io 或其他外部程序。内置确定性分页器从与 DOCX 相同的结构化章节、图表和截图生成 A4 PNG/PDF，并与 DOCX 的 SHA-256、A4 纸张、标题、表格、图片、分页符和内嵌字体结构交叉校验；程序内逐页预览使用这些页面。它不是 Word 原生排版引擎，接口会明确返回 `renderer_kind=deterministic_companion` 和声明文本。发行基线另对确定性 fixture 使用真实 LibreOffice 全页回归，只有运行时检查无阻断问题的版本才进入 `qa_passed` 并允许导出。

@@ -166,6 +166,24 @@ export type FormalManualFigure = {
   qa: Record<string, unknown>;
 };
 
+export type ScreenshotDescription = {
+  page_purpose: string; entry_conditions: string; visible_regions: string;
+  typical_workflow: string; backend_interactions: string;
+  result_validation_recovery: string;
+};
+
+export type FormalManualScreenshot = {
+  screenshot_key: string; section_key: string; title: string; source: "user" | "automated";
+  image_relative_path: string; description: ScreenshotDescription; width: number; height: number;
+  sha256: string; version: number; archived: boolean; created_at: string; updated_at: string;
+};
+
+export type FormalScreenshotRevision = FormalManualScreenshot & {
+  revision_id: string; edit_source: "import" | "manual" | "replacement" | "rollback" |
+    "archive" | "restore"; parent_revision_id: string | null;
+  change_summary: Record<string, unknown>;
+};
+
 export type FormalFigureRevision = {
   revision_id: string; version: number; edit_source: "ai_generation" | "manual" | "ai";
   parent_revision_id: string | null; operations: OverlayOperation[]; operation_count: number;
@@ -575,6 +593,14 @@ export async function regenerateFormalManualSection(connection: SidecarConnectio
     status: string; blocks: ManualSectionBlock[] }>(response, "AI 章节重新生成失败");
 }
 
+export async function listFormalManualSections(connection: SidecarConnection, jobId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/sections`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return (await requireJson<{ items: Array<{ section_key: string; title: string; ordinal: number;
+    status: string; blocks: ManualSectionBlock[] }> }>(response, "说明书章节读取失败")).items;
+}
+
 export async function assembleFormalManualDocument(connection: SidecarConnection, jobId: string) {
   const response = await localFetch(connection,
     `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents`, {
@@ -649,6 +675,85 @@ export async function rollbackFormalFigure(connection: SidecarConnection, jobId:
         "Content-Type": "application/json" }, body: JSON.stringify({ version }),
     });
   return requireJson<{ revision_id: string; version: number }>(response, "图表版本恢复失败");
+}
+
+export async function listFormalScreenshots(connection: SidecarConnection, jobId: string,
+  includeArchived = false) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots?include_archived=${includeArchived ? "true" : "false"}`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return (await requireJson<{ items: FormalManualScreenshot[] }>(response,
+    "截图资产读取失败")).items;
+}
+
+export async function loadFormalScreenshotImage(connection: SidecarConnection, jobId: string,
+  screenshotKey: string): Promise<string> {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/${encodeURIComponent(screenshotKey)}.png`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  if (!response.ok) throw new Error(`截图预览读取失败 (${response.status})`);
+  return URL.createObjectURL(await response.blob());
+}
+
+export async function importFormalScreenshot(connection: SidecarConnection, jobId: string,
+  path: string, sectionKey: string, title: string, description: ScreenshotDescription) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/import`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" },
+      body: JSON.stringify({ path, section_key: sectionKey, title, description }),
+    });
+  return requireJson<FormalManualScreenshot>(response, "截图导入失败");
+}
+
+export async function editFormalScreenshot(connection: SidecarConnection, jobId: string,
+  screenshotKey: string, sectionKey: string, title: string, description: ScreenshotDescription) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/${encodeURIComponent(screenshotKey)}`, {
+      method: "PUT", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" },
+      body: JSON.stringify({ section_key: sectionKey, title, description }),
+    });
+  return requireJson<FormalManualScreenshot>(response, "截图说明保存失败");
+}
+
+export async function replaceFormalScreenshot(connection: SidecarConnection, jobId: string,
+  screenshotKey: string, path: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/${encodeURIComponent(screenshotKey)}/replace`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ path }),
+    });
+  return requireJson<FormalManualScreenshot>(response, "截图替换失败");
+}
+
+export async function listFormalScreenshotRevisions(connection: SidecarConnection, jobId: string,
+  screenshotKey: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/${encodeURIComponent(screenshotKey)}/revisions`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return (await requireJson<{ items: FormalScreenshotRevision[] }>(response,
+    "截图历史读取失败")).items;
+}
+
+export async function rollbackFormalScreenshot(connection: SidecarConnection, jobId: string,
+  screenshotKey: string, version: number) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/${encodeURIComponent(screenshotKey)}/rollback`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ version }),
+    });
+  return requireJson<FormalManualScreenshot>(response, "截图版本恢复失败");
+}
+
+export async function archiveFormalScreenshot(connection: SidecarConnection, jobId: string,
+  screenshotKey: string, archived: boolean) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/${encodeURIComponent(screenshotKey)}/archive`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ archived }),
+    });
+  return requireJson<FormalManualScreenshot>(response, archived ? "截图归档失败" : "截图恢复失败");
 }
 
 export async function loadFormalManualQa(connection: SidecarConnection, jobId: string,

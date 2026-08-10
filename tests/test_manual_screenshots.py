@@ -47,13 +47,17 @@ class ManualScreenshotServiceTests(unittest.TestCase):
         job = ManualPipelineService(database).create("task", "model-config")
         if with_ui:
             with database.connect() as connection:
-                connection.execute(
-                    """INSERT INTO manual_section_artifacts(id, job_id, section_key, title,
+                for item_id, key, title, ordinal in (
+                    ("ui", "ui_operations", "用户界面与操作说明", 7),
+                    ("intro", "introduction", "引言", 1),
+                ):
+                    connection.execute(
+                        """INSERT INTO manual_section_artifacts(id, job_id, section_key, title,
                     ordinal, status, content_json, evidence_refs_json, inference_notes_json,
                     figure_requests_json, updated_at) VALUES
-                    ('ui', ?, 'ui_operations', '用户界面与操作说明', 7, 'generated',
-                    '[]', '[]', '[]', '[]', ?)""", (job["id"], now),
-                )
+                    (?, ?, ?, ?, ?, 'generated', '[]', '[]', '[]', '[]', ?)""",
+                        (item_id, job["id"], key, title, ordinal, now),
+                    )
         return data_root, database, job
 
     def test_assessment_import_sanitizes_and_finalizes_screenshot(self) -> None:
@@ -80,6 +84,34 @@ class ManualScreenshotServiceTests(unittest.TestCase):
             self.assertEqual(target.suffix, ".png")
             self.assertTrue(service.read_image(job["id"], imported["screenshot_key"])
                             .startswith(b"\x89PNG"))
+            revised_description = dict(description)
+            revised_description["page_purpose"] = "该页面用于集中查看项目状态、材料完整度并进入正式生成流程。"
+            revised = service.update_metadata(
+                job["id"], imported["screenshot_key"], "introduction",
+                "项目工作台页面", revised_description,
+            )
+            self.assertEqual(revised["version"], 2)
+            self.assertEqual(revised["section_key"], "introduction")
+            replacement = root / "overview-new.png"
+            Image.new("RGB", (1440, 900), "#cbd5e1").save(replacement, format="PNG")
+            replaced = service.replace_image(job["id"], imported["screenshot_key"], replacement)
+            self.assertEqual(replaced["version"], 3)
+            self.assertEqual((replaced["width"], replaced["height"]), (1440, 900))
+            archived = service.set_archived(job["id"], imported["screenshot_key"], True)
+            self.assertTrue(archived["archived"])
+            self.assertEqual(service.list(job["id"]), [])
+            self.assertEqual(len(service.list(job["id"], include_archived=True)), 1)
+            archived_rollback = service.rollback(job["id"], imported["screenshot_key"], 2)
+            self.assertTrue(archived_rollback["archived"])
+            self.assertEqual(service.list(job["id"]), [])
+            restored = service.set_archived(job["id"], imported["screenshot_key"], False)
+            self.assertFalse(restored["archived"])
+            rolled_back = service.rollback(job["id"], imported["screenshot_key"], 2)
+            self.assertEqual(rolled_back["version"], 7)
+            self.assertEqual(rolled_back["title"], "项目工作台页面")
+            history = service.revisions(job["id"], imported["screenshot_key"])
+            self.assertEqual([item["version"] for item in history], [7, 6, 5, 4, 3, 2, 1])
+            self.assertEqual(history[0]["edit_source"], "rollback")
             result = service.finalize(job["id"])
             self.assertEqual(result["status"], "completed")
             refreshed = ManualPipelineService(database).get(job["id"])

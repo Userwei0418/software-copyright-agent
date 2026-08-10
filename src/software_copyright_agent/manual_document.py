@@ -202,6 +202,7 @@ class ManualDocumentService:
         with self._database.connect() as connection:
             rows = connection.execute(
                 """SELECT * FROM manual_screenshot_artifacts WHERE job_id=?
+                AND archived_at IS NULL
                 ORDER BY section_key, created_at""", (job_id,),
             ).fetchall()
         return [{
@@ -276,7 +277,8 @@ class ManualDocumentService:
                     UNION ALL
                     SELECT MAX(updated_at) changed_at FROM manual_figure_artifacts WHERE job_id=?
                     UNION ALL
-                    SELECT MAX(created_at) changed_at FROM manual_screenshot_artifacts WHERE job_id=?
+                    SELECT MAX(COALESCE(NULLIF(updated_at,''),created_at)) changed_at
+                    FROM manual_screenshot_artifacts WHERE job_id=?
                 )""", (row["job_id"], row["job_id"], row["job_id"]),
             ).fetchone()["changed_at"]
         freshness = "outdated" if latest and latest > row["created_at"] else "current"

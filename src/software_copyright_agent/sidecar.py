@@ -153,6 +153,20 @@ class ScreenshotImportRequest(StrictModel):
     description: ScreenshotDescriptionRequest
 
 
+class ScreenshotEditRequest(StrictModel):
+    section_key: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=200)
+    description: ScreenshotDescriptionRequest
+
+
+class ScreenshotReplaceRequest(StrictModel):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class ScreenshotArchiveRequest(StrictModel):
+    archived: bool
+
+
 class AppSettingsRequest(StrictModel):
     manual_model_id: Optional[str] = Field(default=None, max_length=64)
     diagram_model_id: Optional[str] = Field(default=None, max_length=64)
@@ -1012,13 +1026,107 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     @app.get("/api/v1/manual-jobs/{job_id}/screenshots")
     def list_manual_screenshots(
         job_id: str,
+        include_archived: bool = False,
         token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
     ):
         if not authorized(token):
             return JSONResponse(status_code=401, content={
                 "error": {"code": "unauthorized", "message": "Invalid session token"}
             })
-        return {"items": manual_screenshot_service.list(job_id)}
+        return {"items": manual_screenshot_service.list(job_id, include_archived)}
+
+    @app.put("/api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}")
+    def edit_manual_screenshot(
+        job_id: str,
+        screenshot_key: str,
+        payload: ScreenshotEditRequest,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_screenshot_service.update_metadata(
+                job_id, screenshot_key, payload.section_key, payload.title,
+                payload.description.model_dump(mode="json"),
+            )
+        except ManualScreenshotError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_screenshot_error", "message": str(error)}
+            })
+
+    @app.post("/api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}/replace")
+    def replace_manual_screenshot(
+        job_id: str,
+        screenshot_key: str,
+        payload: ScreenshotReplaceRequest,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_screenshot_service.replace_image(
+                job_id, screenshot_key, Path(payload.path)
+            )
+        except ManualScreenshotError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_screenshot_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}/revisions")
+    def list_manual_screenshot_revisions(
+        job_id: str,
+        screenshot_key: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        return {"items": manual_screenshot_service.revisions(job_id, screenshot_key)}
+
+    @app.post("/api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}/rollback")
+    def rollback_manual_screenshot(
+        job_id: str,
+        screenshot_key: str,
+        payload: RollbackRequest,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_screenshot_service.rollback(
+                job_id, screenshot_key, payload.version
+            )
+        except ManualScreenshotError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_screenshot_error", "message": str(error)}
+            })
+
+    @app.post("/api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}/archive")
+    def archive_manual_screenshot(
+        job_id: str,
+        screenshot_key: str,
+        payload: ScreenshotArchiveRequest,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_screenshot_service.set_archived(
+                job_id, screenshot_key, payload.archived
+            )
+        except ManualScreenshotError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_screenshot_error", "message": str(error)}
+            })
 
     @app.get("/api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}.png")
     def get_manual_screenshot(

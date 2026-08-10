@@ -12,6 +12,7 @@ import { AssetLibrary } from "./AssetLibrary";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 import { Settings } from "./Settings";
 import { FormalDiagramWorkspace } from "./FormalDiagramWorkspace";
+import { ScreenshotAssetWorkspace } from "./ScreenshotAssetWorkspace";
 
 const fallbackAssets: DiagramAsset[] = [
   { diagram_key: "system_architecture", title: "系统总体架构图", revision_count: 0,
@@ -34,7 +35,7 @@ export function App() {
   const [previewRevision, setPreviewRevision] = useState<AssetRevision | null>(null);
   const [undoVersion, setUndoVersion] = useState<number | null>(null);
   const [redoVersion, setRedoVersion] = useState<number | null>(null);
-  const [page, setPage] = useState<"overview" | "source" | "diagrams" | "manual" | "assets" | "settings">("overview");
+  const [page, setPage] = useState<"overview" | "source" | "manual" | "screenshots" | "diagrams" | "assets" | "settings">("overview");
   const [previewRequested, setPreviewRequested] = useState(0);
   const connectionAttempt = useRef<Promise<SidecarConnection> | null>(null);
 
@@ -178,6 +179,8 @@ export function App() {
           onClick={() => setPage("source")}>源码材料</button>
         <button className={`nav-item ${page === "manual" ? "active" : ""}`}
           onClick={() => setPage("manual")}>说明书</button>
+        <button className={`nav-item ${page === "screenshots" ? "active" : ""}`}
+          onClick={() => setPage("screenshots")}>界面截图</button>
         <button className={`nav-item ${page === "diagrams" ? "active" : ""}`}
           onClick={() => setPage("diagrams")}>图表资产</button>
         <button className={`nav-item ${page === "assets" ? "active" : ""}`}
@@ -202,6 +205,8 @@ export function App() {
         onPreviewManual={(value) => { setTaskId(value); setPage("manual"); }} /> :
       page === "settings" ? <Settings connection={connection} /> : page === "diagrams" ?
       <FormalDiagramWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId}
+        onOpenManual={() => setPage("manual")} /> : page === "screenshots" ?
+      <ScreenshotAssetWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId}
         onOpenManual={() => setPage("manual")} /> : <main>
       <header className="topbar">
         <div><p className="eyebrow">DOCUMENT ASSETS</p><h1>图表资产</h1>

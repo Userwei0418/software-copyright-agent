@@ -154,6 +154,17 @@ class ManualDocumentServiceTests(unittest.TestCase):
                     (job["id"],),
                 )
             self.assertEqual(service.list(job["id"])[0]["freshness"]["status"], "outdated")
+            with database.connect() as connection:
+                connection.execute(
+                    "UPDATE manual_figure_artifacts SET updated_at=? WHERE job_id=?",
+                    (now, job["id"]),
+                )
+                connection.execute(
+                    "UPDATE manual_screenshot_artifacts SET updated_at='2099-01-02T00:00:00Z' WHERE job_id=?",
+                    (job["id"],),
+                )
+            screenshot_freshness = service.list(job["id"])[0]["freshness"]
+            self.assertEqual(screenshot_freshness["status"], "outdated")
             pipeline = ManualPipelineService(database).get(job["id"])
             self.assertEqual(pipeline["current_step"], "render_qa")
             self.assertEqual(pipeline["progress"]["completed"], 5)
