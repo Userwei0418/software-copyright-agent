@@ -1,0 +1,212 @@
+import argparse
+import hmac
+import json
+import os
+import socket
+import sys
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
+
+import uvicorn
+from fastapi import FastAPI, Header, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field
+
+from .diagram_asset_service import DiagramAssetService
+from .local_api import ApiResponse, DiagramAssetApi
+from .storage import Database
+
+
+SIDECAR_PROTOCOL_VERSION = 1
+SIDECAR_VERSION = "0.1.0"
+MAX_REQUEST_BYTES = 1024 * 1024
+SESSION_HEADER = "X-Session-Token"
+
+
+class OverlayAction(str, Enum):
+    NODE_MOVE = "node.move"
+    NODE_RESIZE = "node.resize"
+    NODE_STYLE = "node.style"
+    NODE_LABEL = "node.label"
+    NODE_HIDE = "node.hide"
+    EDGE_ROUTE = "edge.route"
+    EDGE_STYLE = "edge.style"
+    EDGE_LABEL = "edge.label"
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class OverlayOperationRequest(StrictModel):
+    action: OverlayAction
+    target: str = Field(min_length=1, max_length=200)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    expected_target_fingerprint: Optional[str] = Field(default=None, max_length=64)
+
+
+class SaveRevisionRequest(StrictModel):
+    edit_source: Literal["manual", "ai"]
+    operations: List[OverlayOperationRequest] = Field(max_length=500)
+
+
+class RollbackRequest(StrictModel):
+    version: int = Field(ge=1)
+
+
+class ConflictResolutionRequest(StrictModel):
+    operation_index: int = Field(ge=0)
+    resolution: Literal["drop", "accept_current", "retarget"]
+    target: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+
+class ResolveRevisionRequest(StrictModel):
+    resolutions: List[ConflictResolutionRequest] = Field(max_length=500)
+
+
+class RequestSizeLimitMiddleware:
+    def __init__(self, app, maximum_bytes: int = MAX_REQUEST_BYTES) -> None:
+        self.app = app
+        self.maximum_bytes = maximum_bytes
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            headers = {key.lower(): value for key, value in scope.get("headers", [])}
+            content_length = headers.get(b"content-length")
+            if content_length is not None:
+                try:
+                    too_large = int(content_length) > self.maximum_bytes
+                except ValueError:
+                    too_large = True
+                if too_large:
+                    response = JSONResponse(
+                        status_code=413,
+                        content={"error": {"code": "request_too_large",
+                                           "message": "Request body exceeds 1 MiB"}},
+                    )
+                    await response(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
+
+
+def create_app(data_dir: Path, session_token: str) -> FastAPI:
+    service = DiagramAssetService(Database(data_dir / "app.db"), data_dir)
+    api = DiagramAssetApi(service, session_token)
+    app = FastAPI(title="Software Copyright Agent Sidecar", version=SIDECAR_VERSION,
+                  docs_url=None, redoc_url=None)
+    app.add_middleware(RequestSizeLimitMiddleware)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, error: RequestValidationError):
+        del request, error
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"code": "invalid_request",
+                               "message": "Request schema is invalid"}},
+        )
+
+    def bridge(method: str, path: str, body: object, token: Optional[str]):
+        return _to_fastapi(api.handle(method, path, body, token))
+
+    @app.get("/api/v1/health")
+    def health(x_session_token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not isinstance(x_session_token, str) or not hmac.compare_digest(
+                x_session_token, session_token):
+            return JSONResponse(
+                status_code=401,
+                content={"error": {"code": "unauthorized",
+                                   "message": "Invalid session token"}},
+            )
+        return {"status": "ok", "version": SIDECAR_VERSION,
+                "protocol_version": SIDECAR_PROTOCOL_VERSION}
+
+    @app.get("/api/v1/tasks/{task_id}/diagram-assets")
+    def workspace(task_id: str, request: Request,
+                  token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return bridge("GET", request.url.path, None, token)
+
+    @app.get("/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions")
+    def revisions(task_id: str, diagram_key: str, request: Request,
+                  token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return bridge("GET", request.url.path, None, token)
+
+    @app.post("/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions")
+    def save_revision(task_id: str, diagram_key: str, payload: SaveRevisionRequest,
+                      request: Request,
+                      token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return bridge("POST", request.url.path, payload.model_dump(mode="json"), token)
+
+    @app.post("/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/rebase")
+    def rebase(task_id: str, diagram_key: str, request: Request,
+               token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return bridge("POST", request.url.path, {}, token)
+
+    @app.post("/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/rollback")
+    def rollback(task_id: str, diagram_key: str, payload: RollbackRequest,
+                 request: Request,
+                 token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return bridge("POST", request.url.path, payload.model_dump(mode="json"), token)
+
+    @app.get("/api/v1/diagram-revisions/{revision_id}")
+    def revision(revision_id: str, request: Request,
+                 token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return bridge("GET", request.url.path, None, token)
+
+    @app.post("/api/v1/diagram-revisions/{revision_id}/resolve")
+    def resolve(revision_id: str, payload: ResolveRevisionRequest, request: Request,
+                token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return bridge("POST", request.url.path, payload.model_dump(mode="json"), token)
+
+    @app.get("/api/v1/diagram-revisions/{revision_id}/preview.svg")
+    def preview(revision_id: str, request: Request,
+                token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return bridge("GET", request.url.path, None, token)
+
+    return app
+
+
+def _to_fastapi(response: ApiResponse):
+    if response.content_type == "image/svg+xml":
+        return Response(content=response.body, status_code=response.status,
+                        media_type="image/svg+xml")
+    return JSONResponse(status_code=response.status, content=response.body)
+
+
+def serve(data_dir: Path, session_token: str) -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(128)
+    port = listener.getsockname()[1]
+    handshake = {"event": "sidecar.ready", "protocol_version": SIDECAR_PROTOCOL_VERSION,
+                 "version": SIDECAR_VERSION, "host": "127.0.0.1", "port": port,
+                 "pid": os.getpid()}
+    print(json.dumps(handshake, ensure_ascii=False, sort_keys=True), flush=True)
+    config = uvicorn.Config(create_app(data_dir, session_token), host="127.0.0.1",
+                            port=port, log_level="warning", access_log=False)
+    try:
+        uvicorn.Server(config).run(sockets=[listener])
+    finally:
+        listener.close()
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(prog="copyright-agent-sidecar")
+    parser.add_argument("--data-dir", type=Path, required=True)
+    args = parser.parse_args(argv)
+    token = os.environ.get("COPYRIGHT_AGENT_SESSION_TOKEN")
+    if not token or len(token) < 32:
+        print("COPYRIGHT_AGENT_SESSION_TOKEN must contain at least 32 characters",
+              file=sys.stderr)
+        return 2
+    try:
+        serve(args.data_dir.expanduser().resolve(), token)
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

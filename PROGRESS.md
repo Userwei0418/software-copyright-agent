@@ -952,3 +952,20 @@
 1. 实现只监听 `127.0.0.1` 随机端口的 sidecar 传输适配器、请求体上限和启动握手。
 2. 建立 Tauri 桌面壳并消费工作台快照与 SVG 预览端点。
 3. 实现首个拖拽保存闭环，再接入撤销/重做与 AI 操作审批。
+
+### 2026-08-10：FastAPI sidecar 真实纵切
+
+- 根据产品依赖边界修正实现策略：FastAPI、Pydantic、Uvicorn 属于应用所需运行依赖，正式加入 `pyproject.toml`；避免捆绑的是 LibreOffice、Draw.io 等完整独立应用，而不是正常代码库。
+- 新增真实 FastAPI sidecar 和 `copyright-agent-sidecar` 入口，领域路由继续由 `DiagramAssetApi` 承担，FastAPI 只负责传输与 Schema。
+- Pydantic v2 Schema 严格拒绝额外字段，约束编辑来源、操作枚举、目标长度、版本范围、冲突动作和最多 500 项列表。
+- sidecar 仅绑定 `127.0.0.1:0`，启动后输出单行 JSON 握手，包含 host、随机端口、PID、协议版本和程序版本。
+- 所有业务端点及健康检查都验证 `X-Session-Token`；禁用 Swagger/ReDoc，不添加通配 CORS，并在路由前执行 1 MiB 请求体门禁。
+- FastAPI 验证错误统一转换为既有 400 错误契约；SVG 使用正确媒体类型返回。
+- 真实进程验证获得随机本地端口 52246，握手字段正确，带令牌 `/api/v1/health` 返回协议版本 1；随后正常终止进程。
+- 新增 FastAPI TestClient 测试，覆盖认证健康检查、工作台路由、无 CORS、Pydantic 错误和 413 请求体限制。
+
+下一步：
+
+1. 建立 Tauri v2 桌面项目骨架、sidecar 启动管理和握手校验。
+2. 完成资产工作台首屏：资产列表、SVG 预览、revision 历史与状态。
+3. 接入拖拽移动并保存 `node.move` revision，形成第一个桌面编辑闭环。

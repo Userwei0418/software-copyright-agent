@@ -1,6 +1,6 @@
 # 本地资产工作台 API v1
 
-本契约由 `DiagramAssetApi` 实现，与 FastAPI 等传输框架解耦。未来 sidecar 只负责解析 HTTP、限制请求体、注入会话令牌并序列化 `ApiResponse`。
+本契约由 `DiagramAssetApi` 实现，领域路由与传输框架解耦；正式 sidecar 使用 FastAPI、Pydantic 和 Uvicorn 解析 HTTP、限制请求体、验证 Schema、注入会话令牌并序列化 `ApiResponse`。
 
 ## 安全边界
 
@@ -10,6 +10,23 @@
 - 不启用通配 CORS，不接受客户端提供的文件路径。
 - SVG 预览路径来自已持久化 revision，并再次校验必须位于对应任务目录内。
 - 单次保存最多 500 个白名单 overlay 操作。
+- FastAPI 传输层限制请求体为 1 MiB，禁用 Swagger/ReDoc 公开页面且不配置通配 CORS。
+
+## 启动握手
+
+Tauri 通过 `COPYRIGHT_AGENT_SESSION_TOKEN` 向 sidecar 传入短生命周期令牌并启动：
+
+```bash
+copyright-agent-sidecar --data-dir /path/to/application-data
+```
+
+sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
+
+```json
+{"event":"sidecar.ready","host":"127.0.0.1","port":52246,"protocol_version":1,"version":"0.1.0","pid":62478}
+```
+
+父进程校验 host、协议版本、sidecar 版本、PID 和带令牌的 `/api/v1/health` 后才允许 UI 发起业务请求。
 
 ## 路由
 

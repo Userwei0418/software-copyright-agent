@@ -142,6 +142,15 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
   python3 -m unittest discover -s tests -v
 ```
 
+启动桌面应用使用的本地 FastAPI sidecar：
+
+```bash
+COPYRIGHT_AGENT_SESSION_TOKEN="至少32字符的每次启动随机令牌" \
+  copyright-agent-sidecar --data-dir .software-copyright-agent
+```
+
+sidecar 只绑定 `127.0.0.1` 随机端口，并在标准输出写入单行 JSON 握手。FastAPI、Pydantic 和 Uvicorn 是正式运行依赖，会随应用 sidecar 一起打包；它们不属于需要用户额外安装的外部程序。
+
 ## 当前限制
 
 - 尚未接入模型协议、说明书正文生成和桌面 UI；Draw.io 兼容文件和 SVG 已能由应用独立生成。
