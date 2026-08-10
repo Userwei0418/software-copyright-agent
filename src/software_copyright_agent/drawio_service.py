@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from .domain import TaskStatus
+from .diagram_asset import DiagramOverlayEngine
 from .drawio_document import (
     DRAWIO_GENERATOR_VERSION, DrawioDocumentBuilder, DrawioDocumentInspector,
-    DrawioSvgRenderer,
+    InternalSvgRenderer,
 )
 from .service import new_id, utc_now
 from .state_machine import TaskStateMachine
@@ -31,12 +32,13 @@ class PersistedDrawioArtifacts:
 class DrawioGenerationService:
     def __init__(self, database: Database, data_root: Path,
                  builder: Optional[DrawioDocumentBuilder] = None,
-                 renderer: Optional[DrawioSvgRenderer] = None) -> None:
+                 renderer: Optional[object] = None) -> None:
         self._database = database
         self._data_root = data_root.expanduser().resolve()
         self._builder = builder or DrawioDocumentBuilder()
-        self._renderer = renderer or DrawioSvgRenderer()
+        self._renderer = renderer or InternalSvgRenderer()
         self._inspector = DrawioDocumentInspector()
+        self._overlay_engine = DiagramOverlayEngine()
         self._state_machine = TaskStateMachine()
 
     def execute(self, task_id: str) -> PersistedDrawioArtifacts:
@@ -47,6 +49,14 @@ class DrawioGenerationService:
                 """SELECT id, artifact_relative_path FROM diagram_plan_runs
                 WHERE task_id = ? ORDER BY version DESC LIMIT 1""", (task_id,)
             ).fetchone()
+            revision_rows = connection.execute(
+                """SELECT r.diagram_key, r.operations_json, r.version
+                FROM diagram_asset_revisions r
+                JOIN (SELECT diagram_key, MAX(version) AS version
+                      FROM diagram_asset_revisions WHERE task_id = ? GROUP BY diagram_key) latest
+                  ON latest.diagram_key = r.diagram_key AND latest.version = r.version
+                WHERE r.task_id = ?""", (task_id, task_id)
+            ).fetchall()
             if task is None or plan_run is None:
                 raise DrawioGenerationError("Diagram plan not found for task")
             if task["status"] not in {TaskStatus.COMPLETED.value,
@@ -55,6 +65,20 @@ class DrawioGenerationService:
         plan_path = self._data_root / "tasks" / task_id / plan_run["artifact_relative_path"]
         payload = json.loads(plan_path.read_text(encoding="utf-8"))
         diagrams = {item["key"]: item for item in payload["diagrams"]}
+        overlay_summary = {}
+        for row in revision_rows:
+            if row["diagram_key"] not in diagrams:
+                continue
+            applied = self._overlay_engine.prepare(
+                diagrams[row["diagram_key"]], json.loads(row["operations_json"])
+            )
+            diagrams[row["diagram_key"]] = applied.diagram
+            overlay_summary[row["diagram_key"]] = {
+                "revision_version": row["version"],
+                "operation_count": len(applied.operations),
+                "conflict_count": len(applied.conflicts),
+                "conflicts": list(applied.conflicts),
+            }
         required = ("system_architecture", "core_business_flow")
         if any(key not in diagrams or diagrams[key].get("status") != "ready" for key in required):
             raise DrawioGenerationError("Both required diagrams must be ready")
@@ -90,7 +114,8 @@ class DrawioGenerationService:
             raise
 
         finished = utc_now()
-        summary = {"architecture": architecture, "workflow": workflow}
+        summary = {"architecture": architecture, "workflow": workflow,
+                   "overlays": overlay_summary, "svg_renderer": "internal-v1"}
         fingerprint = hashlib.sha256("".join(
             hashlib.sha256(paths[key].read_bytes()).hexdigest() for key in sorted(paths)
         ).encode("ascii")).hexdigest()

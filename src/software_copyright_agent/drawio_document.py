@@ -1,5 +1,7 @@
 import hashlib
+import html
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -8,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 
-DRAWIO_GENERATOR_VERSION = "drawio-generator-v2"
+DRAWIO_GENERATOR_VERSION = "drawio-generator-v3"
 
 
 class DrawioDocumentError(RuntimeError):
@@ -59,6 +61,12 @@ class DrawioDocumentBuilder:
         else:
             raise DrawioDocumentError("Unsupported diagram type: {0}".format(diagram.get("key")))
 
+        hidden = {node["key"] for node in diagram["nodes"]
+                  if node.get("visual_override", {}).get("hidden")}
+        visible_nodes = [node for node in diagram["nodes"] if node["key"] not in hidden]
+        visible_edges = [edge for edge in diagram["edges"]
+                         if edge["source"] not in hidden and edge["target"] not in hidden]
+        positions = self._apply_position_overrides(positions, visible_nodes)
         mxfile = ET.Element("mxfile", {
             "host": "app.diagrams.net", "modified": "2026-08-10T00:00:00.000Z",
             "agent": "software-copyright-agent", "version": "24.7.17",
@@ -89,23 +97,31 @@ class DrawioDocumentBuilder:
             "x": "48", "y": "28", "width": str(canvas[0] - 96), "height": "36",
             "as": "geometry",
         })
-        for node in diagram["nodes"]:
+        for node in visible_nodes:
             x, y, width, height = positions[node["key"]]
-            style = self._node_style(node)
+            style = self._merge_style(
+                self._node_style(node), node.get("visual_override", {}).get("style", {})
+            )
             cell = ET.SubElement(root, "mxCell", {
-                "id": node["key"], "value": self._display_label(node["label"], node["kind"]),
+                "id": node["key"], "value": node.get("display_label") or
+                self._display_label(node["label"], node["kind"]),
                 "vertex": "1", "parent": "1", "style": style,
             })
             ET.SubElement(cell, "mxGeometry", {
                 "x": str(x), "y": str(y), "width": str(width),
                 "height": str(height), "as": "geometry",
             })
-        for edge_index, edge in enumerate(diagram["edges"]):
-            points = self._route(edge, positions, edge_index, diagram["key"])
+        for edge_index, edge in enumerate(visible_edges):
+            route_override = edge.get("visual_override", {}).get("route", {}).get("points")
+            points = route_override or self._route(edge, positions, edge_index, diagram["key"])
             cell = ET.SubElement(root, "mxCell", {
-                "id": edge["key"], "value": "", "edge": "1", "parent": "1",
+                "id": edge["key"], "value": edge.get("display_label", ""),
+                "edge": "1", "parent": "1",
                 "source": edge["source"], "target": edge["target"],
-                "style": self._edge_style(edge, diagram["key"]),
+                "style": self._merge_style(
+                    self._edge_style(edge, diagram["key"]),
+                    edge.get("visual_override", {}).get("style", {}),
+                ),
             })
             geometry = ET.SubElement(cell, "mxGeometry", {
                 "relative": "1", "as": "geometry", "x": "0", "y": "0",
@@ -129,10 +145,46 @@ class DrawioDocumentBuilder:
             temporary.unlink(missing_ok=True)
             raise
         return {
-            "node_count": len(diagram["nodes"]), "edge_count": len(diagram["edges"]),
+            "node_count": len(visible_nodes), "edge_count": len(visible_edges),
             "canvas": list(canvas),
             "sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
         }
+
+    @staticmethod
+    def _apply_position_overrides(positions: Dict[str, tuple], nodes: List[dict]) -> Dict[str, tuple]:
+        result = dict(positions)
+        for node in nodes:
+            x, y, width, height = result[node["key"]]
+            override = node.get("visual_override", {})
+            move, resize = override.get("move", {}), override.get("resize", {})
+            result[node["key"]] = (
+                float(move.get("x", x)), float(move.get("y", y)),
+                max(40.0, float(resize.get("width", width))),
+                max(30.0, float(resize.get("height", height))),
+            )
+        return result
+
+    @staticmethod
+    def _merge_style(base: str, override: dict) -> str:
+        allowed = {"fillColor", "strokeColor", "fontColor", "strokeWidth", "dashed"}
+        values = {}
+        order = []
+        for part in base.split(";"):
+            if not part:
+                continue
+            if "=" in part:
+                key, value = part.split("=", 1)
+                values[key] = value
+                order.append(key)
+            else:
+                order.append(part)
+        for key, value in override.items():
+            if key in allowed and re.fullmatch(r"#[0-9a-fA-F]{6}|[0-9.]+", str(value)):
+                values[key] = str(value)
+                if key not in order:
+                    order.append(key)
+        return ";".join("{0}={1}".format(key, values[key]) if key in values else key
+                        for key in order) + ";"
 
 
     def _architecture_layout(self, diagram: dict) -> Tuple[Dict[str, tuple], tuple]:
@@ -348,3 +400,177 @@ class DrawioSvgRenderer:
                     (result.stderr or result.stdout or "unknown error").strip()[-500:]
                 )
             )
+
+
+class InternalSvgRenderer:
+    """Deterministic standard-library SVG exporter for the application's core path."""
+
+    SVG_NS = "http://www.w3.org/2000/svg"
+
+    def render(self, drawio_path: Path, svg_path: Path) -> None:
+        source = ET.parse(drawio_path).getroot()
+        model = source.find(".//mxGraphModel")
+        if model is None:
+            raise DrawioDocumentError("Draw.io model not found")
+        width = float(model.get("pageWidth", "1200"))
+        height = float(model.get("pageHeight", "800"))
+        cells = source.findall(".//mxCell")
+        vertices = {cell.get("id"): cell for cell in cells if cell.get("vertex") == "1"}
+        svg = ET.Element("svg", {
+            "xmlns": self.SVG_NS, "width": self._number(width),
+            "height": self._number(height), "viewBox": "0 0 {0} {1}".format(
+                self._number(width), self._number(height)),
+            "role": "img", "aria-label": source.find(".//diagram").get("name", "diagram"),
+        })
+        defs = ET.SubElement(svg, "defs")
+        for marker_id, color in (("arrow-slate", "#64748b"),
+                                 ("arrow-amber", "#f59e0b"),
+                                 ("arrow-red", "#ef4444")):
+            marker = ET.SubElement(defs, "marker", {
+                "id": marker_id, "markerWidth": "8", "markerHeight": "8",
+                "refX": "7", "refY": "4", "orient": "auto",
+                "markerUnits": "strokeWidth",
+            })
+            ET.SubElement(marker, "path", {
+                "d": "M 0 0 L 8 4 L 0 8 z", "fill": color,
+            })
+        ET.SubElement(svg, "rect", {"width": "100%", "height": "100%", "fill": "#ffffff"})
+        for cell in (item for item in cells if item.get("edge") == "1"):
+            self._draw_edge(svg, cell, vertices)
+        for cell in vertices.values():
+            self._draw_vertex(svg, cell)
+        svg_path.parent.mkdir(parents=True, exist_ok=True)
+        ET.ElementTree(svg).write(svg_path, encoding="utf-8", xml_declaration=True)
+        if not svg_path.is_file() or svg_path.stat().st_size == 0:
+            raise DrawioDocumentError("Internal SVG export produced no output")
+
+    def _draw_edge(self, svg: ET.Element, cell: ET.Element, vertices: dict) -> None:
+        source_rect = self._rect(vertices[cell.get("source")])
+        target_rect = self._rect(vertices[cell.get("target")])
+        geometry = cell.find("mxGeometry")
+        points = [(float(point.get("x")), float(point.get("y")))
+                  for point in geometry.findall("./Array[@as='points']/mxPoint")]
+        source_center = self._center(source_rect)
+        target_center = self._center(target_rect)
+        first = points[0] if points else target_center
+        last = points[-1] if points else source_center
+        route = self._orthogonal_route(source_rect, target_rect, points)
+        style = self._style(cell.get("style", ""))
+        stroke = style.get("strokeColor", "#64748b")
+        marker_id = "arrow-red" if stroke == "#ef4444" else (
+            "arrow-amber" if stroke == "#f59e0b" else "arrow-slate"
+        )
+        attributes = {
+            "points": " ".join("{0},{1}".format(self._number(x), self._number(y))
+                               for x, y in route),
+            "fill": "none", "stroke": stroke,
+            "stroke-width": style.get("strokeWidth", "1.5"),
+            "stroke-linejoin": "round", "marker-end": "url(#{0})".format(marker_id),
+        }
+        if style.get("dashed") == "1":
+            attributes["stroke-dasharray"] = "7 5"
+        ET.SubElement(svg, "polyline", attributes)
+
+    def _draw_vertex(self, svg: ET.Element, cell: ET.Element) -> None:
+        x, y, width, height = self._rect(cell)
+        style = self._style(cell.get("style", ""))
+        if cell.get("id") != "diagram-title":
+            attributes = {
+                "x": self._number(x), "y": self._number(y),
+                "width": self._number(width), "height": self._number(height),
+                "rx": "10", "fill": style.get("fillColor", "#ffffff"),
+                "stroke": style.get("strokeColor", "#64748b"),
+                "stroke-width": style.get("strokeWidth", "1.5"),
+            }
+            if style.get("dashed") == "1":
+                attributes["stroke-dasharray"] = "7 5"
+            ET.SubElement(svg, "rect", attributes)
+        lines = self._text_lines(cell.get("value", ""))
+        if not lines:
+            return
+        font_size = float(style.get("fontSize", "12"))
+        text = ET.SubElement(svg, "text", {
+            "x": self._number(x + (0 if cell.get("id") == "diagram-title" else width / 2)),
+            "y": self._number(y + (font_size if cell.get("id") == "diagram-title" else
+                                     height / 2 - (len(lines) - 1) * 8 + 4)),
+            "text-anchor": "start" if cell.get("id") == "diagram-title" else "middle",
+            "font-family": "Noto Sans CJK SC, PingFang SC, Microsoft YaHei, sans-serif",
+            "font-size": self._number(font_size),
+            "font-weight": "700" if cell.get("id") == "diagram-title" else "600",
+            "fill": style.get("fontColor", "#0f172a"),
+        })
+        for index, line in enumerate(lines):
+            span = ET.SubElement(text, "tspan", {
+                "x": text.get("x"), "dy": "0" if index == 0 else "16",
+            })
+            if index > 0:
+                span.set("font-size", "10")
+                span.set("font-weight", "400")
+                span.set("fill", "#64748b")
+            span.text = line
+
+    @staticmethod
+    def _style(value: str) -> dict:
+        return dict(part.split("=", 1) for part in value.split(";") if "=" in part)
+
+    @staticmethod
+    def _rect(cell: ET.Element) -> tuple:
+        geometry = cell.find("mxGeometry")
+        return tuple(float(geometry.get(key, "0")) for key in ("x", "y", "width", "height"))
+
+    @staticmethod
+    def _center(rect: tuple) -> tuple:
+        x, y, width, height = rect
+        return x + width / 2, y + height / 2
+
+    @classmethod
+    def _boundary(cls, rect: tuple, toward: tuple) -> tuple:
+        cx, cy = cls._center(rect)
+        dx, dy = toward[0] - cx, toward[1] - cy
+        if dx == 0 and dy == 0:
+            return cx, cy
+        _, _, width, height = rect
+        scale = min(width / (2 * abs(dx)) if dx else float("inf"),
+                    height / (2 * abs(dy)) if dy else float("inf"))
+        return cx + dx * scale, cy + dy * scale
+
+    @classmethod
+    def _orthogonal_route(cls, source_rect: tuple, target_rect: tuple,
+                          points: List[tuple]) -> List[tuple]:
+        source_center, target_center = cls._center(source_rect), cls._center(target_rect)
+        if not points:
+            if abs(source_center[0] - target_center[0]) < 1:
+                start = cls._boundary(source_rect, (source_center[0], target_center[1]))
+                end = cls._boundary(target_rect, (target_center[0], source_center[1]))
+                return [start, end]
+            middle_y = (source_center[1] + target_center[1]) / 2
+            points = [(source_center[0], middle_y), (target_center[0], middle_y)]
+        start = cls._axis_boundary(source_rect, points[0])
+        end = cls._axis_boundary(target_rect, points[-1])
+        route = [start]
+        if start[0] != points[0][0] and start[1] != points[0][1]:
+            route.append((points[0][0], start[1]))
+        route.extend(points)
+        if end[0] != points[-1][0] and end[1] != points[-1][1]:
+            route.append((end[0], points[-1][1]))
+        route.append(end)
+        return [point for index, point in enumerate(route)
+                if index == 0 or point != route[index - 1]]
+
+    @classmethod
+    def _axis_boundary(cls, rect: tuple, toward: tuple) -> tuple:
+        x, y, width, height = rect
+        cx, cy = cls._center(rect)
+        dx, dy = toward[0] - cx, toward[1] - cy
+        if abs(dx) > abs(dy):
+            return (x + width if dx > 0 else x, cy)
+        return (cx, y + height if dy > 0 else y)
+
+    @staticmethod
+    def _text_lines(value: str) -> List[str]:
+        return [html.unescape(re.sub(r"<[^>]+>", "", part)).strip()
+                for part in re.split(r"(?i)<br\s*/?>", value) if part.strip()]
+
+    @staticmethod
+    def _number(value: float) -> str:
+        return ("{0:.2f}".format(value)).rstrip("0").rstrip(".")

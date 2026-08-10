@@ -8,7 +8,9 @@ from io import StringIO
 from pathlib import Path
 
 from software_copyright_agent.cli import main
-from software_copyright_agent.drawio_document import DrawioDocumentBuilder, DrawioDocumentInspector
+from software_copyright_agent.drawio_document import (
+    DrawioDocumentBuilder, DrawioDocumentInspector, InternalSvgRenderer,
+)
 from software_copyright_agent.drawio_service import DrawioGenerationService
 from software_copyright_agent.diagram_asset_service import DiagramAssetService
 from software_copyright_agent.storage import Database
@@ -132,7 +134,7 @@ class DemoService:
                 ).fetchone()
             finally:
                 connection.close()
-            self.assertEqual(row, (1, "drawio-generator-v2"))
+            self.assertEqual(row, (1, "drawio-generator-v3"))
 
             revision = DiagramAssetService(Database(data / "app.db"), data).create_revision(
                 task_id, "system_architecture", [{
@@ -151,6 +153,39 @@ class DemoService:
             finally:
                 connection.close()
             self.assertEqual(stored, (1, "manual", "clean"))
+
+    def test_internal_svg_renderer_and_visual_overrides(self) -> None:
+        diagram = {
+            "key": "system_architecture", "title": "系统总体架构图", "status": "ready",
+            "nodes": [
+                {"key": "module-a", "label": "demo.a", "kind": "module",
+                 "display_label": "业务入口",
+                 "visual_override": {"move": {"x": 150, "y": 90},
+                                     "resize": {"width": 260, "height": 70},
+                                     "style": {"fillColor": "#f0fdf4"}}},
+                {"key": "module-b", "label": "demo.b", "kind": "module"},
+            ],
+            "edges": [{"key": "edge-a-b", "source": "module-a", "target": "module-b",
+                       "visual_override": {"route": {"points": [[280, 200], [500, 200]]}}}],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            drawio, svg = root / "diagram.drawio", root / "diagram.svg"
+            DrawioDocumentBuilder().build(diagram, drawio)
+            InternalSvgRenderer().render(drawio, svg)
+            xml = ET.parse(drawio).getroot()
+            geometry = xml.find(".//mxCell[@id='module-a']/mxGeometry")
+            self.assertEqual((geometry.get("x"), geometry.get("width")), ("150.0", "260.0"))
+            rendered = svg.read_text(encoding="utf-8")
+            self.assertIn("业务入口", rendered)
+            self.assertIn("#f0fdf4", rendered)
+            self.assertIn("<polyline", rendered)
+            svg_root = ET.parse(svg).getroot()
+            polyline = next(item for item in svg_root.iter() if item.tag.endswith("polyline"))
+            points = [tuple(float(value) for value in item.split(","))
+                      for item in polyline.get("points").split()]
+            self.assertTrue(all(left[0] == right[0] or left[1] == right[1]
+                                for left, right in zip(points, points[1:])))
 
 
 if __name__ == "__main__":

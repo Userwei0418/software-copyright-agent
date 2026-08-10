@@ -129,7 +129,7 @@ PYTHONPATH=src python3 -m software_copyright_agent \
   drawio TASK_ID --json
 ```
 
-生成器使用未压缩 Draw.io XML、确定性布局和显式正交路由，导出前检查节点重叠、边端点及路径点。可用 `COPYRIGHT_AGENT_DRAWIO=/path/to/drawio` 指定 Draw.io Desktop；每次结果都在 SQLite 中版本化留痕。
+生成器使用未压缩 Draw.io XML、确定性布局和显式正交路由，导出前检查节点重叠、边端点及路径点。SVG 默认由应用内置的标准库渲染器导出，不要求安装 Draw.io Desktop；外部 Draw.io 渲染器仅保留为开发期兼容性对照。每次结果都在 SQLite 中版本化留痕。
 
 图表资产修改采用非破坏覆盖层：移动、缩放、样式、显示名称、隐藏和边路由操作单独版本化，原始语义节点、关系和 Evidence 不被覆盖。项目重新生成后，目标消失或语义改变的操作进入冲突状态，等待用户选择，不会静默套用。
 
@@ -142,7 +142,7 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
 
 ## 当前限制
 
-- 尚未接入模型协议、说明书正文生成和桌面 UI；Draw.io 图件已能独立生成，但仍需本机 Draw.io Desktop 导出 SVG。
+- 尚未接入模型协议、说明书正文生成和桌面 UI；Draw.io 兼容文件和 SVG 已能由应用独立生成。
 - 当前 CLI 是验证领域内核的纵向切片，不是最终用户界面。
 - `.gitignore` 当前实现常用 glob、目录、锚定和否定规则，不承诺覆盖 Git 的全部边缘语义。
 - A/B/C 当前是确定性初筛；后续模型只对未排除候选做语义重排，不能恢复安全规则排除项。
