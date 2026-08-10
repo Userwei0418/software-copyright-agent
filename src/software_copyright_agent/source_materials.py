@@ -16,6 +16,7 @@ class SourceMaterialsService:
 
     def __init__(self, database: Database, data_root: Path) -> None:
         self._database = database
+        self._data_root = data_root.expanduser().resolve()
         self._source_plan = SourcePlanService(database, data_root)
         self._code_preview = CodePreviewService(database, data_root)
         self._source_document = SourceDocumentService(database, data_root)
@@ -95,6 +96,55 @@ class SourceMaterialsService:
     def build_source_document(self, task_id: str) -> dict:
         self._source_document.execute(task_id)
         return self.snapshot(task_id)
+
+    def preview_pages(self, task_id: str) -> dict:
+        """Return representative pages from the latest persisted pagination run."""
+        self._database.initialize()
+        with self._database.connect() as connection:
+            task = connection.execute(
+                "SELECT id FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            if task is None:
+                raise SourceMaterialsError("Task not found: {0}".format(task_id))
+            preview = connection.execute(
+                """SELECT version, artifact_relative_path FROM code_preview_runs
+                WHERE task_id = ? ORDER BY version DESC LIMIT 1""",
+                (task_id,),
+            ).fetchone()
+        if preview is None:
+            raise SourceMaterialsError("Code pagination preview not found for task")
+
+        task_root = (self._data_root / "tasks" / task_id).resolve()
+        artifact = (task_root / preview["artifact_relative_path"]).resolve()
+        if task_root not in artifact.parents or not artifact.is_file():
+            raise SourceMaterialsError("Code pagination artifact is unavailable")
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        pages = payload.get("pages", [])
+        if not pages:
+            return {"version": preview["version"], "total_pages": 0, "pages": []}
+        indexes = sorted({0, len(pages) // 2, len(pages) - 1})
+        sampled = []
+        for index in indexes:
+            page = pages[index]
+            sampled.append({
+                "page_number": page["page_number"],
+                "line_count": page["line_count"],
+                "entries": [
+                    {
+                        "kind": entry.get("kind", "code"),
+                        "path": entry.get("path"),
+                        "source_line": entry.get("source_line"),
+                        "continuation": bool(entry.get("continuation")),
+                        "text": entry.get("text", ""),
+                    }
+                    for entry in page.get("entries", [])
+                ],
+            })
+        return {
+            "version": preview["version"],
+            "total_pages": len(pages),
+            "pages": sampled,
+        }
 
     @staticmethod
     def _run_payload(row, include_id: bool = True):

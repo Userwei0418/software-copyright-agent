@@ -262,6 +262,13 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
             source_materials_service.build_source_plan, task_id, token
         )
 
+    @app.get("/api/v1/tasks/{task_id}/source-materials/code-preview/pages")
+    def source_preview_pages(task_id: str,
+                             token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return source_material_response(
+            source_materials_service.preview_pages, task_id, token
+        )
+
     @app.post("/api/v1/tasks/{task_id}/source-materials/code-preview")
     def build_code_preview(task_id: str,
                            token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):

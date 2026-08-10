@@ -67,6 +67,10 @@ export type SourceMaterialsSnapshot = {
   actions: { source_plan: boolean; code_preview: boolean; source_docx: boolean };
   blockers: string[];
 };
+export type CodePagePreview = { version: number; total_pages: number; pages: Array<{
+  page_number: number; line_count: number; entries: Array<{ kind: string; path: string | null;
+    source_line: number | null; continuation: boolean; text: string }>;
+}> };
 
 export type OverlayOperation = {
   action: "node.move" | "node.resize" | "node.style" | "node.label" | "node.hide" |
@@ -254,4 +258,14 @@ export async function runSourceMaterialAction(
     { method: "POST", headers: { "X-Session-Token": connection.sessionToken } },
   );
   return requireJson(response, "源码材料生成失败");
+}
+
+export async function loadCodePagePreview(
+  connection: SidecarConnection, taskId: string,
+): Promise<CodePagePreview> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/code-preview/pages`,
+    { headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson(response, "分页内容读取失败");
 }

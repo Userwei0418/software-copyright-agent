@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { loadSourceMaterials, runSourceMaterialAction, SidecarConnection,
-  SourceMaterialsSnapshot } from "./api";
+import { CodePagePreview, loadCodePagePreview, loadSourceMaterials,
+  runSourceMaterialAction, SidecarConnection, SourceMaterialsSnapshot } from "./api";
 
 type Props = { connection: SidecarConnection | null; taskId: string };
 type Action = "source-plan" | "code-preview" | "source-docx";
@@ -9,8 +9,11 @@ export function SourceMaterials({ connection, taskId }: Props) {
   const [snapshot, setSnapshot] = useState<SourceMaterialsSnapshot | null>(null);
   const [working, setWorking] = useState<Action | null>(null);
   const [message, setMessage] = useState("");
+  const [pagePreview, setPagePreview] = useState<CodePagePreview | null>(null);
+  const [activePage, setActivePage] = useState(0);
   useEffect(() => {
     setSnapshot(null);
+    setPagePreview(null);
     if (!connection || !taskId) return;
     setMessage("正在读取源码材料状态…");
     loadSourceMaterials(connection, taskId).then((value) => {
@@ -25,9 +28,19 @@ export function SourceMaterials({ connection, taskId }: Props) {
       "code-preview": "正在进行 59 页代码分页预检…", "source-docx": "正在生成源代码 DOCX…" }[action]);
     try {
       setSnapshot(await runSourceMaterialAction(connection, taskId, action));
+      if (action === "code-preview") setPagePreview(null);
       setMessage("本步已完成，结果已持久化。");
     } catch (error) { setMessage(error instanceof Error ? error.message : "操作失败"); }
     finally { setWorking(null); }
+  }
+
+  async function openPagePreview() {
+    if (!connection || !taskId) return;
+    setMessage("正在读取代表性分页…");
+    try {
+      const value = await loadCodePagePreview(connection, taskId);
+      setPagePreview(value); setActivePage(0); setMessage("");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "分页读取失败"); }
   }
 
   return <main className="source-page">
@@ -59,6 +72,17 @@ export function SourceMaterials({ connection, taskId }: Props) {
           <Metric label="目标正文页" value={snapshot.code_preview?.summary.target_pages ?? 59} /></div>
           {snapshot.blockers.length > 0 && <div className="blocker-panel"><strong>当前提示</strong>
             {snapshot.blockers.map((item) => <p key={item}>{item}</p>)}</div>}
+          {snapshot.code_preview && <div className="page-preview-entry"><div><strong>代码分页 v{snapshot.code_preview.version}</strong>
+            <small>已生成 {snapshot.code_preview.summary.generated_pages} 页，可检查首页、中间页和末页的真实内容。</small></div>
+            <button onClick={openPagePreview}>{pagePreview ? "刷新分页预览" : "查看分页内容"}</button></div>}
+          {pagePreview && <div className="code-preview-panel"><div className="code-preview-head"><div>
+            <strong>分页内容预览</strong><small>v{pagePreview.version} · 共 {pagePreview.total_pages} 页</small></div>
+            <button onClick={() => setPagePreview(null)}>关闭</button></div>
+            {pagePreview.pages.length ? <><div className="page-tabs">{pagePreview.pages.map((page, index) =>
+              <button className={activePage === index ? "active" : ""} key={page.page_number}
+                onClick={() => setActivePage(index)}>第 {page.page_number} 页</button>)}</div>
+              <CodePage page={pagePreview.pages[activePage]} total={pagePreview.total_pages} /></> :
+              <div className="no-code-pages">当前预检没有可显示的代码页。</div>}</div>}
           {snapshot.source_plan && <div className="candidate-panel"><div className="section-title">
             <span>入选源码预览</span><em>A {snapshot.source_plan.summary.grades.A} · B {snapshot.source_plan.summary.grades.B} · C {snapshot.source_plan.summary.grades.C}</em></div>
             <div className="candidate-table">{snapshot.source_plan.candidates.map((item) => <div key={item.relative_path}>
@@ -80,4 +104,11 @@ function Stage(props: { index: string; title: string; description: string; ready
 }
 function Metric({ label, value }: { label: string; value: string | number }) {
   return <article><small>{label}</small><strong>{value}</strong></article>;
+}
+function CodePage({ page, total }: { page: CodePagePreview["pages"][number]; total: number }) {
+  return <div className="code-paper"><header><span>源程序代码</span><b>第 {page.page_number} / {total} 页</b></header>
+    <div className="code-lines">{page.entries.map((entry, index) => <div
+      className={entry.kind === "file_header" ? "file-line" : ""} key={`${index}-${entry.source_line}`}>
+      <em>{entry.source_line ?? ""}</em><code>{entry.continuation ? "↳ " : ""}{entry.text || " "}</code></div>)}</div>
+    <footer>{page.line_count} 个可视行</footer></div>;
 }

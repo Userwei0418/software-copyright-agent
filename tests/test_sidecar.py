@@ -114,6 +114,17 @@ class SidecarFastApiTests(unittest.TestCase):
         )
         self.assertEqual(previewed.status_code, 200)
         self.assertFalse(previewed.json()["code_preview"]["summary"]["sufficient"])
+        page_preview = self.client.get(
+            f"/api/v1/tasks/{payload['task_id']}/source-materials/code-preview/pages",
+            headers=self.headers,
+        )
+        self.assertEqual(page_preview.status_code, 200)
+        self.assertGreater(page_preview.json()["total_pages"], 0)
+        self.assertIn("export const ready", "\n".join(
+            entry["text"] for page in page_preview.json()["pages"]
+            for entry in page["entries"]
+        ))
+        self.assertLessEqual(len(page_preview.json()["pages"]), 3)
         blocked = self.client.post(
             f"/api/v1/tasks/{payload['task_id']}/source-materials/source-docx",
             headers=self.headers,

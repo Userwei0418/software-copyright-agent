@@ -39,6 +39,7 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | GET | `/api/v1/tasks/{task_id}/source-materials` | 读取源码筛选、分页预检、DOCX 状态和阻塞原因 |
 | POST | `/api/v1/tasks/{task_id}/source-materials/source-plan` | 人工触发 A/B/C 源码筛选计划 |
 | POST | `/api/v1/tasks/{task_id}/source-materials/code-preview` | 人工触发 59 页代码分页预检 |
+| GET | `/api/v1/tasks/{task_id}/source-materials/code-preview/pages` | 读取最新分页产物的首页、中间页和末页样本 |
 | POST | `/api/v1/tasks/{task_id}/source-materials/source-docx` | 预检通过后人工触发源代码 DOCX 生成 |
 | GET | `/api/v1/tasks/{task_id}/diagram-assets` | 读取资产工作台快照 |
 | GET | `/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions` | 列出版本 |
@@ -54,6 +55,7 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 扫描请求为 `{"path":"/user-approved/project-or.zip"}`。目录采用原地只读扫描，ZIP 隔离解压到应用数据目录；桌面页面不提供自由路径文本框，只接受系统文件选择器返回值。
 
 源码材料三个 POST 端点均是显式用户操作，不会因读取状态自动执行。代码不足 59 页时预检会持久化为警告，并禁止生成灌水 DOCX。
+分页样本端点不接受文件路径或页码输入，只从 SQLite 定位当前任务最新产物，并校验产物仍位于该任务数据目录内。
 
 ## 保存请求
 
