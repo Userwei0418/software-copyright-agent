@@ -36,5 +36,10 @@ class DatabaseMigrationTests(unittest.TestCase):
             finally:
                 connection.close()
 
-            self.assertEqual(versions, [(1,), (2,)])
-            self.assertTrue({"facts", "evidence", "confirmation_requests"}.issubset(tables))
+            self.assertEqual(versions, [(1,), (2,), (3,)])
+            self.assertTrue(
+                {
+                    "facts", "evidence", "confirmation_requests",
+                    "source_plan_runs", "source_candidates",
+                }.issubset(tables)
+            )

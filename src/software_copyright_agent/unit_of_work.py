@@ -10,6 +10,7 @@ from .repositories import (
     SourceRepository,
     StageRepository,
     TaskRepository,
+    SourcePlanRepository,
 )
 from .storage import Database
 
@@ -34,6 +35,7 @@ class UnitOfWork:
         self.evidence = EvidenceRepository(connection)
         self.facts = FactRepository(connection)
         self.confirmations = ConfirmationRepository(connection)
+        self.source_plans = SourcePlanRepository(connection)
         return self
 
     def __exit__(

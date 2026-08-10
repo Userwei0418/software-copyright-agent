@@ -53,6 +53,16 @@ PYTHONPATH=src python3 -m software_copyright_agent \
 
 用户答案会生成新的确认 Evidence 和 confirmed Fact；旧候选保留为 `superseded`，不会覆盖历史。
 
+生成核心源码 A/B/C 计划：
+
+```bash
+PYTHONPATH=src python3 -m software_copyright_agent \
+  --data-dir .software-copyright-agent \
+  source-plan TASK_ID --json
+```
+
+计划会确定性排除测试、mock、fixture、vendor、migration、demo、sample、generated、二进制和检测到秘密的源码，并为其余文件保存评分与理由。
+
 运行测试：
 
 ```bash
@@ -65,5 +75,6 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
 - 尚未接入模型协议、代码筛选、DOCX、Draw.io 和桌面 UI。
 - 当前 CLI 是验证领域内核的纵向切片，不是最终用户界面。
 - `.gitignore` 当前实现常用 glob、目录、锚定和否定规则，不承诺覆盖 Git 的全部边缘语义。
+- A/B/C 当前是确定性初筛；后续模型只对未排除候选做语义重排，不能恢复安全规则排除项。
 
 开发计划和每轮进度分别见 `DEVELOPMENT_PLAN.md` 与 `PROGRESS.md`。

@@ -80,3 +80,32 @@ class CliTests(unittest.TestCase):
             self.assertEqual(first, 0)
             self.assertEqual(second, 0)
             self.assertEqual(json.loads(output.getvalue())["task_status"], "completed")
+
+    def test_source_plan_command_outputs_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            feature = project / "src" / "features"
+            feature.mkdir(parents=True)
+            (project / "package.json").write_text(
+                '{"name":"demo","version":"1.0.0"}', encoding="utf-8"
+            )
+            (feature / "orders.py").write_text(
+                "def create_order():\n    return True\n", encoding="utf-8"
+            )
+            data_dir = root / "data"
+            scan_output = StringIO()
+            with redirect_stdout(scan_output):
+                main(["--data-dir", str(data_dir), "scan", str(project), "--json"])
+            task_id = json.loads(scan_output.getvalue())["task_id"]
+            output = StringIO()
+
+            with redirect_stdout(output):
+                exit_code = main(
+                    ["--data-dir", str(data_dir), "source-plan", task_id, "--json"]
+                )
+
+            payload = json.loads(output.getvalue())
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["selected_files"], 1)
+            self.assertEqual(payload["grades"]["A"], 1)

@@ -9,6 +9,7 @@ from .ingestion import IngestionError
 from .inspection import InspectionError, InspectionService
 from .scanner import ScanError
 from .service import ScanProjectService
+from .source_plan_service import SourcePlanError, SourcePlanService
 from .storage import Database
 
 
@@ -41,6 +42,12 @@ def build_parser() -> argparse.ArgumentParser:
     confirm_parser.add_argument("field_key", help="Field key, for example project.version")
     confirm_parser.add_argument("value", help="Confirmed text value")
     confirm_parser.add_argument("--json", action="store_true", help="Print JSON output")
+
+    source_plan_parser = subparsers.add_parser(
+        "source-plan", help="Build an explainable A/B/C source selection plan"
+    )
+    source_plan_parser.add_argument("task_id", help="Completed task ID")
+    source_plan_parser.add_argument("--json", action="store_true", help="Print JSON output")
     return parser
 
 
@@ -89,6 +96,37 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print("Confirmed: {0}".format(result.field_key))
             print("Remaining required: {0}".format(result.remaining_required))
             print("Task status: {0}".format(result.task_status.value))
+        return 0
+
+    if args.command == "source-plan":
+        try:
+            persisted_plan = SourcePlanService(database, data_dir).execute(args.task_id)
+        except SourcePlanError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        payload = {
+            "task_id": persisted_plan.task_id,
+            "run_id": persisted_plan.run_id,
+            "version": persisted_plan.version,
+            "artifact_path": str(persisted_plan.artifact_path),
+            "total_source_files": persisted_plan.plan.total_source_files,
+            "selected_files": persisted_plan.plan.selected_files,
+            "selected_code_lines": persisted_plan.plan.selected_code_lines,
+            "excluded_files": persisted_plan.plan.excluded_files,
+            "grades": {
+                grade: sum(
+                    1 for item in persisted_plan.plan.candidates if item.grade == grade
+                )
+                for grade in ("A", "B", "C")
+            },
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            print("Source plan: v{0}".format(persisted_plan.version))
+            print("Selected files: {0}".format(persisted_plan.plan.selected_files))
+            print("Selected code lines: {0}".format(persisted_plan.plan.selected_code_lines))
+            print("Artifact: {0}".format(persisted_plan.artifact_path))
         return 0
 
     if args.command != "scan":

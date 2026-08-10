@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -131,6 +131,42 @@ CREATE INDEX IF NOT EXISTS idx_confirmations_task_status
 ON confirmation_requests(task_id, status);
 """
 
+MIGRATION_003 = """
+ALTER TABLE project_snapshots ADD COLUMN scan_root_mode TEXT;
+ALTER TABLE project_snapshots ADD COLUMN scan_root_path TEXT;
+
+CREATE TABLE source_plan_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    stage_run_id TEXT NOT NULL REFERENCES task_stages(id),
+    version INTEGER NOT NULL,
+    rules_version TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    artifact_relative_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(task_id, version)
+);
+
+CREATE TABLE source_candidates (
+    id TEXT PRIMARY KEY,
+    plan_run_id TEXT NOT NULL REFERENCES source_plan_runs(id),
+    relative_path TEXT NOT NULL,
+    grade TEXT NOT NULL CHECK (grade IN ('A', 'B', 'C')),
+    selected INTEGER NOT NULL CHECK (selected IN (0, 1)),
+    score INTEGER NOT NULL,
+    code_lines INTEGER NOT NULL,
+    byte_size INTEGER NOT NULL,
+    language TEXT,
+    reasons_json TEXT NOT NULL,
+    exclusion_code TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(plan_run_id, relative_path)
+);
+
+CREATE INDEX idx_source_candidates_plan_grade
+ON source_candidates(plan_run_id, grade, score DESC);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -158,6 +194,18 @@ class Database:
                     VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)
                     """,
                     ("migration-002",),
+                )
+            applied_v3 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 3"
+            ).fetchone()
+            if applied_v3 is None:
+                connection.executescript(MIGRATION_003)
+                connection.execute(
+                    """
+                    INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)
+                    """,
+                    ("migration-003",),
                 )
 
     @contextmanager

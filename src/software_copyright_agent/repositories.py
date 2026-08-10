@@ -72,13 +72,15 @@ class SnapshotRepository:
         rules_version: str,
         summary: object,
         manifest_relative_path: str,
+        scan_root_mode: str,
+        scan_root_path: str,
         now: str,
     ) -> None:
         self._connection.execute(
             """INSERT INTO project_snapshots
             (id, source_id, root_fingerprint, scanner_version, rules_version,
-             summary_json, manifest_relative_path, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+             summary_json, manifest_relative_path, scan_root_mode, scan_root_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 snapshot_id,
                 source_id,
@@ -87,6 +89,8 @@ class SnapshotRepository:
                 rules_version,
                 encode_json(summary),
                 manifest_relative_path,
+                scan_root_mode,
+                scan_root_path,
                 now,
             ),
         )
@@ -219,6 +223,14 @@ class StageRepository:
                 now,
             ),
         )
+
+    def next_attempt(self, task_id: str, stage_key: str) -> int:
+        row = self._connection.execute(
+            """SELECT COALESCE(MAX(attempt), 0) + 1 FROM task_stages
+            WHERE task_id = ? AND stage_key = ?""",
+            (task_id, stage_key),
+        ).fetchone()
+        return int(row[0])
 
     def succeed(
         self,
@@ -536,3 +548,59 @@ class ConfirmationRepository:
             WHERE task_id = ? AND required = 1 AND status = 'pending'""",
             (task_id,),
         ).fetchone()[0]
+
+
+class SourcePlanRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def next_version(self, task_id: str) -> int:
+        row = self._connection.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM source_plan_runs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        return int(row[0])
+
+    def add_run(
+        self,
+        run_id: str,
+        task_id: str,
+        stage_run_id: str,
+        version: int,
+        rules_version: str,
+        summary: object,
+        artifact_relative_path: str,
+        now: str,
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO source_plan_runs
+            (id, task_id, stage_run_id, version, rules_version, summary_json,
+             artifact_relative_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                run_id, task_id, stage_run_id, version, rules_version,
+                encode_json(summary), artifact_relative_path, now,
+            ),
+        )
+
+    def add_candidate(self, candidate_id: str, run_id: str, candidate: object, now: str) -> None:
+        self._connection.execute(
+            """INSERT INTO source_candidates
+            (id, plan_run_id, relative_path, grade, selected, score, code_lines,
+             byte_size, language, reasons_json, exclusion_code, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                candidate_id,
+                run_id,
+                candidate.relative_path,
+                candidate.grade,
+                1 if candidate.selected else 0,
+                candidate.score,
+                candidate.code_lines,
+                candidate.byte_size,
+                candidate.language,
+                encode_json(candidate.reasons),
+                candidate.exclusion_code,
+                now,
+            ),
+        )

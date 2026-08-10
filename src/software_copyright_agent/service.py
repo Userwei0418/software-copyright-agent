@@ -128,6 +128,10 @@ class ScanProjectService:
                 RULES_VERSION,
                 summary,
                 manifest_relative.as_posix(),
+                "task" if ingested.kind == SourceKind.ZIP else "external",
+                result.root.relative_to(task_root).as_posix()
+                if ingested.kind == SourceKind.ZIP
+                else str(result.root),
                 finished_at,
             )
             unit_of_work.tasks.attach_snapshot(task_id, snapshot_id)
