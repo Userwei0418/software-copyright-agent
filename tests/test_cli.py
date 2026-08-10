@@ -109,3 +109,13 @@ class CliTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(payload["selected_files"], 1)
             self.assertEqual(payload["grades"]["A"], 1)
+
+            preview_output = StringIO()
+            with redirect_stdout(preview_output):
+                preview_exit = main(
+                    ["--data-dir", str(data_dir), "code-preview", task_id, "--json"]
+                )
+            preview_payload = json.loads(preview_output.getvalue())
+            self.assertEqual(preview_exit, 0)
+            self.assertFalse(preview_payload["sufficient"])
+            self.assertEqual(preview_payload["target_pages"], 59)

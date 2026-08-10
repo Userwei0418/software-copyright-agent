@@ -63,6 +63,16 @@ PYTHONPATH=src python3 -m software_copyright_agent \
 
 计划会确定性排除测试、mock、fixture、vendor、migration、demo、sample、generated、二进制和检测到秘密的源码，并为其余文件保存评分与理由。
 
+生成 59 页代码正文的确定性分页预览：
+
+```bash
+PYTHONPATH=src python3 -m software_copyright_agent \
+  --data-dir .software-copyright-agent \
+  code-preview TASK_ID --json
+```
+
+预览会重新校验源码哈希，按视觉宽度硬换行，并报告代码是否足够。代码不足时只生成实际页数，不补空行、不重复代码。
+
 运行测试：
 
 ```bash
@@ -76,5 +86,6 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
 - 当前 CLI 是验证领域内核的纵向切片，不是最终用户界面。
 - `.gitignore` 当前实现常用 glob、目录、锚定和否定规则，不承诺覆盖 Git 的全部边缘语义。
 - A/B/C 当前是确定性初筛；后续模型只对未排除候选做语义重排，不能恢复安全规则排除项。
+- 当前已生成分页 JSON 数据，但尚未生成最终 DOCX；字体、字号和页边距需要在 DOCX 渲染阶段与预览参数共同校准。
 
 开发计划和每轮进度分别见 `DEVELOPMENT_PLAN.md` 与 `PROGRESS.md`。

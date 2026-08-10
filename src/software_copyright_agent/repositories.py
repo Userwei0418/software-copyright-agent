@@ -604,3 +604,48 @@ class SourcePlanRepository:
                 now,
             ),
         )
+
+
+class CodePreviewRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def next_version(self, task_id: str) -> int:
+        row = self._connection.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM code_preview_runs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        return int(row[0])
+
+    def add_run(
+        self,
+        run_id: str,
+        task_id: str,
+        source_plan_run_id: str,
+        stage_run_id: str,
+        version: int,
+        formatter_version: str,
+        config: object,
+        summary: object,
+        artifact_relative_path: str,
+        now: str,
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO code_preview_runs
+            (id, task_id, source_plan_run_id, stage_run_id, version,
+             formatter_version, config_json, summary_json, artifact_relative_path,
+             created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                run_id,
+                task_id,
+                source_plan_run_id,
+                stage_run_id,
+                version,
+                formatter_version,
+                encode_json(config),
+                encode_json(summary),
+                artifact_relative_path,
+                now,
+            ),
+        )

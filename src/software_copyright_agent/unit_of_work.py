@@ -11,6 +11,7 @@ from .repositories import (
     StageRepository,
     TaskRepository,
     SourcePlanRepository,
+    CodePreviewRepository,
 )
 from .storage import Database
 
@@ -36,6 +37,7 @@ class UnitOfWork:
         self.facts = FactRepository(connection)
         self.confirmations = ConfirmationRepository(connection)
         self.source_plans = SourcePlanRepository(connection)
+        self.code_previews = CodePreviewRepository(connection)
         return self
 
     def __exit__(

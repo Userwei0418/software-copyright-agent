@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .confirmation import ConfirmationError, ConfirmationService
+from .code_preview import CodePreviewError
+from .code_preview_service import CodePreviewService
 from .ingestion import IngestionError
 from .inspection import InspectionError, InspectionService
 from .scanner import ScanError
@@ -48,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_plan_parser.add_argument("task_id", help="Completed task ID")
     source_plan_parser.add_argument("--json", action="store_true", help="Print JSON output")
+
+    code_preview_parser = subparsers.add_parser(
+        "code-preview", help="Build deterministic wrapped and paginated source preview"
+    )
+    code_preview_parser.add_argument("task_id", help="Task ID with a source plan")
+    code_preview_parser.add_argument("--json", action="store_true", help="Print JSON output")
     return parser
 
 
@@ -127,6 +135,37 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print("Selected files: {0}".format(persisted_plan.plan.selected_files))
             print("Selected code lines: {0}".format(persisted_plan.plan.selected_code_lines))
             print("Artifact: {0}".format(persisted_plan.artifact_path))
+        return 0
+
+    if args.command == "code-preview":
+        try:
+            persisted_preview = CodePreviewService(database, data_dir).execute(args.task_id)
+        except CodePreviewError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        preview = persisted_preview.preview
+        payload = {
+            "task_id": persisted_preview.task_id,
+            "run_id": persisted_preview.run_id,
+            "version": persisted_preview.version,
+            "artifact_path": str(persisted_preview.artifact_path),
+            "available_visual_lines": preview.available_visual_lines,
+            "used_visual_lines": preview.used_visual_lines,
+            "required_visual_lines": preview.required_visual_lines,
+            "generated_pages": preview.generated_pages,
+            "target_pages": preview.target_pages,
+            "sufficient": preview.sufficient,
+            "selected_files": preview.selected_files,
+            "included_files": preview.included_files,
+            "truncated": preview.truncated,
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            print("Code preview: v{0}".format(persisted_preview.version))
+            print("Pages: {0}/{1}".format(preview.generated_pages, preview.target_pages))
+            print("Sufficient: {0}".format(preview.sufficient))
+            print("Artifact: {0}".format(persisted_preview.artifact_path))
         return 0
 
     if args.command != "scan":
