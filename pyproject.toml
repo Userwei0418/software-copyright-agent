@@ -7,7 +7,7 @@ name = "software-copyright-agent"
 version = "0.1.0"
 description = "Local-first software copyright material generator"
 requires-python = ">=3.9"
-dependencies = ["python-docx>=1.1,<2"]
+dependencies = ["python-docx>=1.1,<2", "Pillow>=10,<13"]
 
 [project.scripts]
 copyright-agent = "software_copyright_agent.cli:main"

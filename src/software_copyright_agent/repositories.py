@@ -688,3 +688,30 @@ class SourceDocumentRepository:
                 artifact_relative_path, sha256, now,
             ),
         )
+
+
+class SourceDocumentQaRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def next_version(self, task_id: str) -> int:
+        row = self._connection.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM source_document_qa_runs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        return int(row[0])
+
+    def add_run(self, run_id: str, task_id: str, document_run_id: str,
+                stage_run_id: str, version: int, policy_version: str,
+                passed: bool, checks: object, summary: object,
+                report_relative_path: str, render_relative_path: str, now: str) -> None:
+        self._connection.execute(
+            """INSERT INTO source_document_qa_runs
+            (id, task_id, source_document_run_id, stage_run_id, version,
+             policy_version, passed, checks_json, summary_json,
+             report_relative_path, render_relative_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, task_id, document_run_id, stage_run_id, version,
+             policy_version, 1 if passed else 0, encode_json(checks),
+             encode_json(summary), report_relative_path, render_relative_path, now),
+        )

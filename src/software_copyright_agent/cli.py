@@ -14,6 +14,8 @@ from .service import ScanProjectService
 from .source_plan_service import SourcePlanError, SourcePlanService
 from .source_document import SourceDocumentError
 from .source_document_service import SourceDocumentService
+from .source_document_qa import SourceDocumentQaError
+from .source_document_qa_service import SourceDocumentQaService
 from .storage import Database
 
 
@@ -64,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_docx_parser.add_argument("task_id", help="Task ID with a sufficient code preview")
     source_docx_parser.add_argument("--json", action="store_true", help="Print JSON output")
+
+    qa_parser = subparsers.add_parser(
+        "qa-source-docx", help="Render and enforce the source DOCX quality gate"
+    )
+    qa_parser.add_argument("task_id", help="Task ID with a generated source DOCX")
+    qa_parser.add_argument("--json", action="store_true", help="Print JSON output")
     return parser
 
 
@@ -197,6 +205,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print("Expected pages: {0}".format(document.summary["total_pages_expected"]))
             print("Artifact: {0}".format(document.artifact_path))
         return 0
+
+    if args.command == "qa-source-docx":
+        try:
+            qa = SourceDocumentQaService(database, data_dir).execute(args.task_id)
+        except SourceDocumentQaError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        payload = {
+            "task_id": qa.task_id, "run_id": qa.run_id, "version": qa.version,
+            "passed": qa.passed, "report_path": str(qa.report_path),
+            "render_path": str(qa.render_path), **qa.summary,
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            print("Source DOCX QA: {0}".format("PASSED" if qa.passed else "BLOCKED"))
+            print("Report: {0}".format(qa.report_path))
+        return 0 if qa.passed else 3
 
     if args.command != "scan":
         return 2
