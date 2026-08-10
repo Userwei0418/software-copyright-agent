@@ -1,4 +1,4 @@
-import { PointerEvent, useMemo, useRef, useState } from "react";
+import { KeyboardEvent, PointerEvent, useMemo, useRef, useState } from "react";
 
 type Point = { x: number; y: number };
 type DragState = {
@@ -44,6 +44,18 @@ function canvasPoint(container: HTMLDivElement, clientX: number, clientY: number
   return { x: transformed.x, y: transformed.y };
 }
 
+function constrainedPosition(group: SVGGElement, x: number, y: number): Point {
+  const svg = group.ownerSVGElement;
+  const viewBox = svg?.viewBox.baseVal;
+  const width = Number(group.dataset.width ?? 0);
+  const height = Number(group.dataset.height ?? 0);
+  if (!viewBox || viewBox.width <= 0 || viewBox.height <= 0) return { x, y };
+  return {
+    x: Math.round(Math.min(Math.max(x, viewBox.x + 8), viewBox.x + viewBox.width - width - 8)),
+    y: Math.round(Math.min(Math.max(y, viewBox.y + 76), viewBox.y + viewBox.height - height - 8)),
+  };
+}
+
 export function InteractiveDiagram({ svg, disabled, onMove, onSelect }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const drag = useRef<DragState | null>(null);
@@ -68,6 +80,7 @@ export function InteractiveDiagram({ svg, disabled, onMove, onSelect }: Props) {
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     group.classList.add("dragging", "selected-node");
+    group.focus();
     onSelect(key);
     setMoving(true);
     event.preventDefault();
@@ -91,21 +104,54 @@ export function InteractiveDiagram({ svg, disabled, onMove, onSelect }: Props) {
     drag.current = null;
     setMoving(false);
     current.group.classList.remove("dragging");
-    const x = Math.round(current.origin.x + current.delta.x);
-    const y = Math.round(current.origin.y + current.delta.y);
+    const position = constrainedPosition(
+      current.group,
+      current.origin.x + current.delta.x,
+      current.origin.y + current.delta.y,
+    );
+    current.group.setAttribute(
+      "transform",
+      `translate(${position.x - current.origin.x} ${position.y - current.origin.y})`,
+    );
     if (Math.abs(current.delta.x) < 1 && Math.abs(current.delta.y) < 1) {
       current.group.removeAttribute("transform");
       return;
     }
     try {
-      await onMove(current.key, x, y);
+      await onMove(current.key, position.x, position.y);
     } catch {
       current.group.removeAttribute("transform");
+    }
+  }
+
+  async function keyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (disabled || event.repeat) return;
+    const offsets: Record<string, Point> = {
+      ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 },
+      ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 },
+    };
+    const offset = offsets[event.key];
+    if (!offset) return;
+    const group = (event.target as Element).closest<SVGGElement>("[data-node-key]");
+    const key = group?.dataset.nodeKey;
+    if (!group || !key) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 10 : 1;
+    const position = constrainedPosition(
+      group,
+      Number(group.dataset.x ?? 0) + offset.x * step,
+      Number(group.dataset.y ?? 0) + offset.y * step,
+    );
+    try {
+      await onMove(key, position.x, position.y);
+    } catch {
+      // The parent reports the stable API error and the persisted SVG remains unchanged.
     }
   }
 
   return <div ref={container} className={`interactive-diagram ${moving ? "is-moving" : ""}`}
     onPointerDown={pointerDown} onPointerMove={pointerMove}
     onPointerUp={finishDrag} onPointerCancel={finishDrag}
+    onKeyDown={keyDown}
     dangerouslySetInnerHTML={{ __html: safeSvg }} />;
 }

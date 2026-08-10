@@ -25,6 +25,8 @@ export function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [revisions, setRevisions] = useState<AssetRevision[]>([]);
   const [previewRevision, setPreviewRevision] = useState<AssetRevision | null>(null);
+  const [undoVersion, setUndoVersion] = useState<number | null>(null);
+  const [redoVersion, setRedoVersion] = useState<number | null>(null);
 
   useEffect(() => {
     connectSidecar().then((value) => {
@@ -82,6 +84,8 @@ export function App() {
       );
       const refreshed = await loadWorkspace(connection, workspace.task_id);
       setWorkspace(refreshed);
+      setUndoVersion(active.latest_revision?.version ?? null);
+      setRedoVersion(null);
       setMessage(`节点已保存 · revision v${saved.version}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "节点保存失败，已恢复原位置");
@@ -104,8 +108,9 @@ export function App() {
     }
   }
 
-  async function restoreVersion(version: number) {
+  async function restoreVersion(version: number, mode: "history" | "undo" | "redo" = "history") {
     if (!connection || !workspace) return;
+    const previousVersion = active.latest_revision?.version ?? null;
     setSaving(true);
     setMessage(`正在恢复 revision v${version}…`);
     try {
@@ -119,7 +124,19 @@ export function App() {
       setWorkspace(refreshed);
       setRevisions(items);
       setPreviewRevision(null);
-      setMessage(`已从 v${version} 创建最新 revision v${restored.version}`);
+      if (mode === "undo") {
+        setUndoVersion(null);
+        setRedoVersion(previousVersion);
+        setMessage(`已撤销到 v${version} · 新 revision v${restored.version}`);
+      } else if (mode === "redo") {
+        setUndoVersion(previousVersion);
+        setRedoVersion(null);
+        setMessage(`已重做到 v${version} · 新 revision v${restored.version}`);
+      } else {
+        setUndoVersion(previousVersion);
+        setRedoVersion(null);
+        setMessage(`已从 v${version} 创建最新 revision v${restored.version}`);
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "版本恢复失败");
     } finally {
@@ -173,7 +190,11 @@ export function App() {
         <div className="canvas-panel">
           <div className="canvas-toolbar"><div><strong>{active.title}</strong>
             <span>{active.revision_count} 个修订版本</span></div>
-            <div className="toolbar-actions"><button disabled={!currentRevisionId || saving}
+            <div className="toolbar-actions"><button disabled={undoVersion === null || saving || !!previewRevision}
+              onClick={() => undoVersion !== null && restoreVersion(undoVersion, "undo")}>撤销</button>
+              <button disabled={redoVersion === null || saving || !!previewRevision}
+                onClick={() => redoVersion !== null && restoreVersion(redoVersion, "redo")}>重做</button>
+              <button disabled={!currentRevisionId || saving}
               onClick={openHistory}>历史版本</button>
               <button className="primary" disabled={!previewSvg || saving || !!previewRevision}>
                 {saving ? "正在保存…" : previewRevision ? `预览 v${previewRevision.version}` : "拖拽编辑已开启"}
