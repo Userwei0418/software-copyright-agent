@@ -26,7 +26,7 @@ class ModelConfigService:
         with self._database.connect() as connection:
             rows = connection.execute(
                 """SELECT id, name, protocol_id, base_url, model_name, credential_ref,
-                enabled, verified_at, created_at, updated_at FROM model_configs
+                settings_json, enabled, verified_at, created_at, updated_at FROM model_configs
                 ORDER BY enabled DESC, updated_at DESC"""
             ).fetchall()
         return [self._public(row) for row in rows]
@@ -56,7 +56,7 @@ class ModelConfigService:
             )
             row = connection.execute(
                 """SELECT id, name, protocol_id, base_url, model_name, credential_ref,
-                enabled, verified_at, created_at, updated_at FROM model_configs WHERE id = ?""",
+                settings_json, enabled, verified_at, created_at, updated_at FROM model_configs WHERE id = ?""",
                 (value.id,),
             ).fetchone()
         return self._public(row)
@@ -73,7 +73,7 @@ class ModelConfigService:
                 raise ValueError("Model config not found")
             row = connection.execute(
                 """SELECT id, name, protocol_id, base_url, model_name, credential_ref,
-                enabled, verified_at, created_at, updated_at FROM model_configs WHERE id = ?""",
+                settings_json, enabled, verified_at, created_at, updated_at FROM model_configs WHERE id = ?""",
                 (config_id,),
             ).fetchone()
         return self._public(row)
@@ -91,12 +91,37 @@ class ModelConfigService:
                 (utc_now(), json.dumps(config_id, ensure_ascii=False, separators=(",", ":"))),
             )
 
+    def set_endpoint_mode(self, config_id: str, endpoint_mode: str) -> dict:
+        if endpoint_mode not in {"messages", "chat_completions", "responses", "ollama_chat"}:
+            raise ValueError("Unsupported endpoint mode")
+        self._database.initialize()
+        with self._database.connect() as connection:
+            row = connection.execute(
+                "SELECT settings_json FROM model_configs WHERE id = ?", (config_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("Model config not found")
+            settings = json.loads(row["settings_json"])
+            settings["endpoint_mode"] = endpoint_mode
+            connection.execute(
+                "UPDATE model_configs SET settings_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(settings, separators=(",", ":")), utc_now(), config_id),
+            )
+            updated = connection.execute(
+                """SELECT id, name, protocol_id, base_url, model_name, credential_ref,
+                settings_json, enabled, verified_at, created_at, updated_at
+                FROM model_configs WHERE id = ?""", (config_id,)
+            ).fetchone()
+        return self._public(updated)
+
     @staticmethod
     def _public(row) -> dict:
+        settings = json.loads(row["settings_json"])
         return {
             "id": row["id"], "name": row["name"],
             "protocol_id": row["protocol_id"], "base_url": row["base_url"],
             "model_name": row["model_name"],
+            "endpoint_mode": settings.get("endpoint_mode"),
             "provider_id": row["credential_ref"] or row["id"],
             "has_credential": bool(row["credential_ref"]),
             "enabled": bool(row["enabled"]), "verified_at": row["verified_at"],

@@ -52,6 +52,7 @@ export type RecentTask = {
 export type ModelConfig = { id: string; name: string;
   protocol_id: "openai_compatible" | "anthropic" | "ollama"; base_url: string;
   model_name: string; provider_id: string; has_credential: boolean; enabled: boolean;
+  endpoint_mode: "messages" | "chat_completions" | "responses" | "ollama_chat" | null;
   verified_at: string | null; created_at: string; updated_at: string };
 export type AppSettings = { manual_model_id: string | null; diagram_model_id: string | null;
   temperature: number; max_output_tokens: number;
@@ -391,7 +392,18 @@ export async function probeModelConfig(config: { configId: string; protocolId: s
 
 export async function testModelConnection(config: { configId: string; protocolId: string;
   baseUrl: string; modelName: string }) {
-  return invoke<{ ok: boolean; elapsedMs: number }>("test_model_connection", { request: config });
+  return invoke<{ ok: boolean; elapsedMs: number; endpointMode: NonNullable<ModelConfig["endpoint_mode"]> }>(
+    "test_model_connection", { request: config });
+}
+
+export async function saveModelEndpointMode(connection: SidecarConnection, id: string,
+  endpointMode: NonNullable<ModelConfig["endpoint_mode"]>) {
+  const response = await localFetch(connection,
+    `/api/v1/model-configs/${encodeURIComponent(id)}/endpoint-mode`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ endpoint_mode: endpointMode }),
+    });
+  return requireJson<ModelConfig>(response, "模型接口模式保存失败");
 }
 
 export async function loadAppSettings(connection: SidecarConnection): Promise<AppSettings> {

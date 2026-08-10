@@ -82,6 +82,7 @@ struct ModelProbeResult {
 struct ModelConnectionTestResult {
     ok: bool,
     elapsed_ms: u128,
+    endpoint_mode: String,
 }
 
 const SENSEAUDIO_MODELS: &[&str] = &[
@@ -383,27 +384,50 @@ async fn test_model_connection(state: State<'_, SidecarState>, request: ModelPro
     let client = reqwest::Client::builder().timeout(Duration::from_secs(45)).build()
         .map_err(|_| "无法创建模型连接")?;
     let started = std::time::Instant::now();
-    let response = match request.protocol_id.as_str() {
-        "openai_compatible" if is_senseaudio(&base) => client.post(format!("{base}/messages"))
-            .bearer_auth(credential.as_ref().unwrap()).json(&serde_json::json!({
+    if request.protocol_id == "openai_compatible" && is_senseaudio(&base) {
+        let key = credential.as_ref().unwrap();
+        let candidates = [
+            ("messages", format!("{base}/messages"), serde_json::json!({
+                "model": request.model_name, "messages": [{"role": "user", "content": "仅回复 OK"}], "max_tokens": 2
+            })),
+            ("chat_completions", format!("{base}/chat/completions"), serde_json::json!({
                 "model": request.model_name, "messages": [{"role": "user", "content": "仅回复 OK"}],
-                "max_tokens": 2
-            })).send().await,
+                "max_tokens": 2, "temperature": 0
+            })),
+            ("responses", format!("{base}/responses"), serde_json::json!({
+                "model": request.model_name, "input": "仅回复 OK", "max_output_tokens": 2
+            })),
+        ];
+        let mut failures = Vec::new();
+        for (mode, endpoint, payload) in candidates {
+            let response = client.post(endpoint).bearer_auth(key).json(&payload).send().await
+                .map_err(|error| format!("连接失败：{error}"))?;
+            if response.status().is_success() {
+                return Ok(ModelConnectionTestResult { ok: true,
+                    elapsed_ms: started.elapsed().as_millis(), endpoint_mode: mode.into() });
+            }
+            let status = response.status().as_u16();
+            let detail: String = response.text().await.unwrap_or_default().chars().take(160).collect();
+            failures.push(format!("{mode}: HTTP {status} {detail}"));
+        }
+        return Err(format!("该模型的三种接口均测试失败：{}", failures.join("；")));
+    }
+    let (response, endpoint_mode) = match request.protocol_id.as_str() {
         "openai_compatible" => client.post(format!("{base}/chat/completions"))
             .bearer_auth(credential.as_ref().unwrap()).json(&serde_json::json!({
                 "model": request.model_name, "messages": [{"role": "user", "content": "仅回复 OK"}],
                 "max_tokens": 2, "temperature": 0
-            })).send().await,
+            })).send().await.map(|response| (response, "chat_completions")),
         "anthropic" => client.post(format!("{base}/messages"))
             .header("x-api-key", credential.as_ref().unwrap())
             .header("anthropic-version", "2023-06-01").json(&serde_json::json!({
                 "model": request.model_name, "messages": [{"role": "user", "content": "仅回复 OK"}],
                 "max_tokens": 2, "temperature": 0
-            })).send().await,
+            })).send().await.map(|response| (response, "messages")),
         "ollama" => client.post(format!("{base}/api/chat")).json(&serde_json::json!({
                 "model": request.model_name, "messages": [{"role": "user", "content": "仅回复 OK"}],
                 "stream": false, "options": {"num_predict": 2, "temperature": 0}
-            })).send().await,
+            })).send().await.map(|response| (response, "ollama_chat")),
         _ => return Err("不支持的模型协议".into()),
     }.map_err(|error| format!("连接失败：{error}"))?;
     let elapsed_ms = started.elapsed().as_millis();
@@ -414,7 +438,7 @@ async fn test_model_connection(state: State<'_, SidecarState>, request: ModelPro
         return Err(if concise.is_empty() { format!("测试失败（HTTP {status}）") }
             else { format!("测试失败（HTTP {status}）：{concise}") });
     }
-    Ok(ModelConnectionTestResult { ok: true, elapsed_ms })
+    Ok(ModelConnectionTestResult { ok: true, elapsed_ms, endpoint_mode: endpoint_mode.into() })
 }
 
 fn normalize_model_base_url(protocol: &str, raw: &str) -> Result<String, String> {

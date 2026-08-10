@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AppSettings, deleteModelConfig, deleteModelCredential, listModelConfigs,
   hasModelCredential, loadAppSettings, ModelConfig, probeModelConfig, saveAppSettings, saveModelConfig,
-  SidecarConnection, storeModelCredential, testModelConnection } from "./api";
+  saveModelEndpointMode, SidecarConnection, storeModelCredential, testModelConnection } from "./api";
 
 const defaults = { openai_compatible: "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com/v1", ollama: "http://127.0.0.1:11434" };
@@ -125,7 +125,10 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
     try {
       const result = await testModelConnection({ configId: item.provider_id,
         protocolId: item.protocol_id, baseUrl: item.base_url, modelName: item.model_name });
-      setTestStates((current) => ({ ...current, [item.id]: `连接成功 · ${result.elapsedMs} ms` }));
+      if (connection) await saveModelEndpointMode(connection, item.id, result.endpointMode);
+      setTestStates((current) => ({ ...current, [item.id]:
+        `连接成功 · ${result.elapsedMs} ms · ${result.endpointMode}` }));
+      await refresh();
     } catch (error) {
       setTestStates((current) => ({ ...current, [item.id]: errorText(error, "连接测试失败") }));
     }
@@ -164,7 +167,9 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
           <div className="provider-actions"><button disabled={!!busy} onClick={() => editProvider(group)}>编辑</button>
             <button className="danger" disabled={!!busy} onClick={() => removeProvider(group)}>删除</button></div></div>
         <div className="provider-models">{group.map((item) => <div className="provider-model" key={item.id}>
-          <div><strong>{item.model_name}</strong>{testStates[item.id] && <small className={testStates[item.id].startsWith("连接成功") ? "test-ok" : "test-note"}>{testStates[item.id]}</small>}</div>
+          <div><strong>{item.model_name}</strong>{(testStates[item.id] || item.endpoint_mode) &&
+            <small className={testStates[item.id]?.startsWith("连接成功") ? "test-ok" : "test-note"}>
+              {testStates[item.id] || `已协商接口 · ${item.endpoint_mode}`}</small>}</div>
           <button disabled={testStates[item.id] === "正在测试…"} onClick={() => testSavedModel(item)}>测试连接</button>
         </div>)}</div></article>) : <div className="settings-empty">尚未配置连接</div>}
     </div></div>

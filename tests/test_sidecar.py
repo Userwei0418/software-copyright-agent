@@ -85,6 +85,12 @@ class SidecarFastApiTests(unittest.TestCase):
             "credential_ref": config_id,
         })
         self.assertEqual(second.json()["provider_id"], config_id)
+        endpoint = self.client.post(
+            f"/api/v1/model-configs/{second_id}/endpoint-mode", headers=self.headers,
+            json={"endpoint_mode": "chat_completions"},
+        )
+        self.assertEqual(endpoint.status_code, 200)
+        self.assertEqual(endpoint.json()["endpoint_mode"], "chat_completions")
         listed = self.client.get("/api/v1/model-configs", headers=self.headers)
         self.assertEqual({item["model_name"] for item in listed.json()["items"]},
                          {"writer-v1", "writer-v2"})

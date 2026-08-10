@@ -110,6 +110,10 @@ class CredentialRequest(StrictModel):
     api_key: str = Field(min_length=8, max_length=8192)
 
 
+class EndpointModeRequest(StrictModel):
+    endpoint_mode: Literal["messages", "chat_completions", "responses", "ollama_chat"]
+
+
 class AppSettingsRequest(StrictModel):
     manual_model_id: Optional[str] = Field(default=None, max_length=64)
     diagram_model_id: Optional[str] = Field(default=None, max_length=64)
@@ -306,6 +310,20 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
             })
         try:
             return model_config_service.upsert(ModelConfigInput(**payload.model_dump()))
+        except ValueError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "model_config_error", "message": str(error)}
+            })
+
+    @app.post("/api/v1/model-configs/{config_id}/endpoint-mode")
+    def save_model_endpoint_mode(config_id: str, payload: EndpointModeRequest,
+                                 token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return model_config_service.set_endpoint_mode(config_id, payload.endpoint_mode)
         except ValueError as error:
             return JSONResponse(status_code=400, content={
                 "error": {"code": "model_config_error", "message": str(error)}
