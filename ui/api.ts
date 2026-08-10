@@ -83,7 +83,9 @@ export type ManualWorkspaceSnapshot = {
       missing_information: string[]; subsections: string[]; diagram_keys: string[] }>;
     missing_information: string[]; diagram_requirements: Array<{ key: string; title: string }> };
   diagram_plan: null | { version: number; summary: { diagram_count: number; ready_diagrams: number;
-    needs_evidence_diagrams: number; node_count: number; edge_count: number } };
+    needs_evidence_diagrams: number; node_count: number; edge_count: number };
+    diagrams: Array<{ key: string; title: string; status: string; node_count: number;
+      edge_count: number; missing_information: string[] }> };
   diagram_artifacts: null | { version: number; summary: Record<string, unknown> };
   actions: { manual_plan: boolean; diagram_plan: boolean; diagram_artifacts: boolean };
 };

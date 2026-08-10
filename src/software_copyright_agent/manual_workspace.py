@@ -34,7 +34,7 @@ class ManualWorkspaceService:
                 (task_id,),
             ).fetchone()
             diagram = connection.execute(
-                """SELECT version, summary_json, created_at FROM diagram_plan_runs
+                """SELECT version, summary_json, artifact_relative_path, created_at FROM diagram_plan_runs
                 WHERE task_id = ? ORDER BY version DESC LIMIT 1""", (task_id,)
             ).fetchone()
             artifacts = connection.execute(
@@ -54,11 +54,26 @@ class ManualWorkspaceService:
                 "missing_information": content.get("missing_information", []),
                 "diagram_requirements": content.get("diagram_requirements", []),
             })
+        diagram_payload = self._run(diagram)
+        if diagram_payload is not None:
+            path = (self._data_root / "tasks" / task_id /
+                    diagram["artifact_relative_path"]).resolve()
+            task_root = (self._data_root / "tasks" / task_id).resolve()
+            if task_root not in path.parents or not path.is_file():
+                raise ManualWorkspaceError("Diagram plan artifact is unavailable")
+            content = json.loads(path.read_text(encoding="utf-8"))
+            diagram_payload["diagrams"] = [{
+                "key": item.get("key"), "title": item.get("title"),
+                "status": item.get("status"),
+                "node_count": len(item.get("nodes", [])),
+                "edge_count": len(item.get("edges", [])),
+                "missing_information": item.get("missing_information", []),
+            } for item in content.get("diagrams", [])]
         allowed = task["status"] in {"completed", "completed_with_warnings"}
         return {
             "task": dict(task),
             "manual_plan": manual_payload,
-            "diagram_plan": self._run(diagram),
+            "diagram_plan": diagram_payload,
             "diagram_artifacts": self._run(artifacts),
             "actions": {
                 "manual_plan": allowed,

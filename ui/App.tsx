@@ -171,10 +171,10 @@ export function App() {
           onClick={() => setPage("overview")}>项目概览</button>
         <button className={`nav-item ${page === "source" ? "active" : ""}`}
           onClick={() => setPage("source")}>源码材料</button>
-        <button className={`nav-item ${page === "diagrams" ? "active" : ""}`}
-          onClick={() => setPage("diagrams")}>图表资产</button>
         <button className={`nav-item ${page === "manual" ? "active" : ""}`}
           onClick={() => setPage("manual")}>说明书</button>
+        <button className={`nav-item ${page === "diagrams" ? "active" : ""}`}
+          onClick={() => setPage("diagrams")}>图表资产</button>
         <button className={`nav-item ${page === "assets" ? "active" : ""}`}
           onClick={() => setPage("assets")}>我的资产</button>
         <button className="nav-item" disabled>质量检查 <small>待开发</small></button>
@@ -188,7 +188,8 @@ export function App() {
       <SourceMaterials connection={connection} taskId={taskId}
         onTaskCreated={setTaskId} onBackToOverview={() => setPage("overview")}
         previewRequested={previewRequested} /> : page === "manual" ?
-      <ManualWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId} /> : page === "assets" ?
+      <ManualWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId}
+        onOpenDiagrams={() => setPage("diagrams")} /> : page === "assets" ?
       <AssetLibrary connection={connection} onOpen={(value) => { setTaskId(value); setPage("source"); }}
         onPreview={(value) => { setTaskId(value); setPreviewRequested((count) => count + 1); setPage("source"); }} /> : <main>
       <header className="topbar">

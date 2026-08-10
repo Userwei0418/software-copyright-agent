@@ -4,8 +4,9 @@ import { loadManualWorkspace, ManualWorkspaceSnapshot, runManualAction,
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
 type Action = "manual-plan" | "diagram-plan" | "diagram-artifacts";
-export function ManualWorkspace({ connection, taskId, onTaskChange }: {
-  connection: SidecarConnection | null; taskId: string; onTaskChange: (taskId: string) => void }) {
+export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagrams }: {
+  connection: SidecarConnection | null; taskId: string; onTaskChange: (taskId: string) => void;
+  onOpenDiagrams: () => void }) {
   const [data, setData] = useState<ManualWorkspaceSnapshot | null>(null);
   const [working, setWorking] = useState<Action | null>(null);
   const [message, setMessage] = useState("");
@@ -25,22 +26,27 @@ export function ManualWorkspace({ connection, taskId, onTaskChange }: {
   }
   return <main className="manual-page"><header className="topbar"><div>
     <p className="eyebrow">TECHNICAL MANUAL</p><h1>说明书</h1>
-    <p>先审阅章节计划和证据缺口，再准备可编辑图表与最终文档。</p></div>
+    <p>先完成项目证据预检，再由已配置的 AI 生成说明书与图表草稿。</p></div>
     <ProjectSwitcher connection={connection} taskId={taskId} onChange={onTaskChange} /></header>
     {!taskId ? <section className="overview-placeholder source-empty"><span>DOC</span>
       <h2>请先选择项目</h2><p>说明书将复用项目扫描得到的事实与证据。</p></section> :
       <section className="manual-content">{message && <div className="source-notice">{message}</div>}
+        <div className="generation-boundary"><strong>当前阶段：项目证据预检</strong>
+          <p>下面三步由本地规则执行，不调用 AI，也不代表说明书正文已经生成。AI 正文生成将在模型配置接入后单独显示模型、耗时和调用记录。</p></div>
         <div className="manual-actions">
-          <ActionCard number="01" title="章节与证据计划" ready={!!data?.manual_plan}
-            detail="规划 9 个技术说明书章节，显式列出每章缺失信息。"
+          <ActionCard number="01" title="章节证据预检（规则）" ready={!!data?.manual_plan}
+            detail="本地规则规划章节并列出缺失证据，不生成正文。"
             disabled={!data?.actions.manual_plan || !!working} onClick={() => run("manual-plan")} />
-          <ActionCard number="02" title="图表语义计划" ready={!!data?.diagram_plan}
-            detail="从项目证据构建架构图和业务流程图的节点与连线。"
+          <ActionCard number="02" title="图表证据预检（规则）" ready={!!data?.diagram_plan}
+            detail="检查源码中可支撑架构图和流程图的节点、连线与缺口。"
             disabled={!data?.actions.diagram_plan || !!working} onClick={() => run("diagram-plan")} />
-          <ActionCard number="03" title="可编辑图表产物" ready={!!data?.diagram_artifacts}
-            detail="仅在两张图表证据充足时生成 Draw.io 与 SVG。"
+          <ActionCard number="03" title="渲染可编辑图表（规则）" ready={!!data?.diagram_artifacts}
+            detail="证据完整时把语义计划渲染为 Draw.io 与 SVG；不调用图片生成模型。"
             disabled={!data?.actions.diagram_artifacts || !!working} onClick={() => run("diagram-artifacts")} />
         </div>
+        <div className="ai-generation-card"><div><span>AI</span><div><strong>生成说明书正文与图表语义</strong>
+          <p>将调用用户选择的模型，并采用内置软著文档与专业 Draw.io 技能约束输出。</p></div></div>
+          <button disabled>需先接入模型设置</button></div>
         {data?.manual_plan && <><div className="manual-summary"><Metric label="章节" value={data.manual_plan.summary.section_count} />
           <Metric label="已就绪" value={data.manual_plan.summary.ready_sections} />
           <Metric label="待补证据" value={data.manual_plan.summary.needs_evidence_sections} />
@@ -53,6 +59,15 @@ export function ManualWorkspace({ connection, taskId, onTaskChange }: {
             </article>)}</div>
           {data.manual_plan.missing_information.length > 0 && <div className="missing-panel"><strong>待补信息</strong>
             <div>{data.manual_plan.missing_information.map((item) => <span key={item}>{item}</span>)}</div></div>}</>}
+        {data?.diagram_plan && <div className="diagram-readiness"><div className="section-title">
+          <span>图表预检结果</span><em>plan v{data.diagram_plan.version}</em></div>
+          {data.diagram_plan.diagrams.map((diagram) => <article key={diagram.key}><div>
+            <strong>{diagram.title}</strong><small>{diagram.node_count} 个节点 · {diagram.edge_count} 条连线</small></div>
+            <span className={diagram.status}>{diagram.status === "ready" ? "证据已就绪" :
+              `缺：${diagram.missing_information.join("、")}`}</span></article>)}
+          {data.diagram_artifacts ? <button onClick={onOpenDiagrams}>进入图表资产查看与修改</button> :
+            <p>图表尚未生成：先补充上方缺失信息，或等待 AI 根据项目证据生成可审阅的图表语义草稿。</p>}
+        </div>}
       </section>}
   </main>;
 }

@@ -155,6 +155,14 @@ class SidecarFastApiTests(unittest.TestCase):
         self.assertGreater(
             manual_planned.json()["manual_plan"]["summary"]["missing_information_count"], 0
         )
+        diagram_planned = self.client.post(
+            f"/api/v1/tasks/{payload['task_id']}/manual-workspace/diagram-plan",
+            headers=self.headers,
+        )
+        self.assertEqual(diagram_planned.status_code, 200)
+        self.assertEqual(len(diagram_planned.json()["diagram_plan"]["diagrams"]), 2)
+        self.assertIn("missing_information",
+                      diagram_planned.json()["diagram_plan"]["diagrams"][0])
         (project / "src" / "extra.ts").write_text(
             "export const addedLater = true;\n", encoding="utf-8"
         )
