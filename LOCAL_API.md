@@ -116,3 +116,13 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 
 认证失败返回 401，资源不存在返回 404，方法不允许返回 405，Schema 或业务约束失败返回 400。
 源代码 DOCX 生成阶段失败时，任务会以 `source_document_error` 保留为可重试状态；修复运行环境后可对同一任务再次调用生成接口，无需重新扫描或分页。
+
+## AI 说明书草稿
+
+`POST /api/v1/tasks/{task_id}/manual-workspace/generate`
+
+```json
+{"model_config_id":"已启用的模型配置 ID"}
+```
+
+该接口读取本地加密凭据，并按模型已识别的 `messages`、`chat_completions`、`responses` 或 `ollama_chat` 协议调用。规则缺失项作为“待确认/禁止编造”约束进入提示词，不作为生成门禁。成功结果版本化写入 `artifacts/manual/manual-draft.vN.md`，工作台快照在 `manual_draft` 返回内容、模型、接口模式、耗时和字符数。

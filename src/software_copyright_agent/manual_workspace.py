@@ -4,6 +4,7 @@ from pathlib import Path
 from .diagram_plan_service import DiagramPlanService
 from .drawio_service import DrawioGenerationService
 from .manual_plan_service import ManualPlanService
+from .manual_generation import ManualGenerationService
 from .storage import Database
 
 
@@ -18,6 +19,7 @@ class ManualWorkspaceService:
         self._manual_plan = ManualPlanService(database, data_root)
         self._diagram_plan = DiagramPlanService(database, data_root)
         self._drawio = DrawioGenerationService(database, data_root)
+        self._generation = ManualGenerationService(database, data_root)
 
     def snapshot(self, task_id: str) -> dict:
         self._database.initialize()
@@ -40,6 +42,11 @@ class ManualWorkspaceService:
             artifacts = connection.execute(
                 """SELECT version, summary_json, created_at FROM diagram_artifact_runs
                 WHERE task_id = ? ORDER BY version DESC LIMIT 1""", (task_id,)
+            ).fetchone()
+            draft = connection.execute(
+                """SELECT version, summary_json, artifact_relative_path, elapsed_ms, created_at
+                FROM manual_draft_runs WHERE task_id = ? ORDER BY version DESC LIMIT 1""",
+                (task_id,),
             ).fetchone()
         manual_payload = self._run(manual)
         if manual_payload is not None:
@@ -70,16 +77,26 @@ class ManualWorkspaceService:
                 "missing_information": item.get("missing_information", []),
             } for item in content.get("diagrams", [])]
         allowed = task["status"] in {"completed", "completed_with_warnings"}
+        draft_payload = self._run(draft)
+        if draft_payload is not None:
+            path = (self._data_root / "tasks" / task_id / draft["artifact_relative_path"]).resolve()
+            task_root = (self._data_root / "tasks" / task_id).resolve()
+            if task_root not in path.parents or not path.is_file():
+                raise ManualWorkspaceError("Manual draft artifact is unavailable")
+            draft_payload.update({"content": path.read_text(encoding="utf-8"),
+                                  "elapsed_ms": draft["elapsed_ms"]})
         return {
             "task": dict(task),
             "manual_plan": manual_payload,
             "diagram_plan": diagram_payload,
             "diagram_artifacts": self._run(artifacts),
+            "manual_draft": draft_payload,
             "actions": {
                 "manual_plan": allowed,
                 "diagram_plan": allowed and manual_payload is not None,
                 "diagram_artifacts": allowed and diagram is not None
                 and json.loads(diagram["summary_json"]).get("ready_diagrams") == 2,
+                "manual_generate": allowed,
             },
         }
 
@@ -93,6 +110,10 @@ class ManualWorkspaceService:
 
     def build_diagrams(self, task_id: str) -> dict:
         self._drawio.execute(task_id)
+        return self.snapshot(task_id)
+
+    def generate_manual(self, task_id: str, model_config_id: str) -> dict:
+        self._generation.execute(task_id, model_config_id)
         return self.snapshot(task_id)
 
     @staticmethod

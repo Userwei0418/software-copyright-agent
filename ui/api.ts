@@ -95,7 +95,10 @@ export type ManualWorkspaceSnapshot = {
     diagrams: Array<{ key: string; title: string; status: string; node_count: number;
       edge_count: number; missing_information: string[] }> };
   diagram_artifacts: null | { version: number; summary: Record<string, unknown> };
-  actions: { manual_plan: boolean; diagram_plan: boolean; diagram_artifacts: boolean };
+  manual_draft: null | { version: number; summary: { model_name: string; endpoint_mode: string;
+    plan_version: number; character_count: number }; content: string; elapsed_ms: number; created_at: string };
+  actions: { manual_plan: boolean; diagram_plan: boolean; diagram_artifacts: boolean;
+    manual_generate: boolean };
 };
 
 export type OverlayOperation = {
@@ -435,4 +438,14 @@ export async function runManualAction(connection: SidecarConnection, taskId: str
     { method: "POST", headers: { "X-Session-Token": connection.sessionToken } },
   );
   return requireJson<ManualWorkspaceSnapshot>(response, "说明书阶段执行失败");
+}
+
+export async function generateManualDraft(connection: SidecarConnection, taskId: string,
+  modelConfigId: string) {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/manual-workspace/generate`,
+    { method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+      "Content-Type": "application/json" }, body: JSON.stringify({ model_config_id: modelConfigId }) },
+  );
+  return requireJson<ManualWorkspaceSnapshot>(response, "说明书 AI 草稿生成失败");
 }

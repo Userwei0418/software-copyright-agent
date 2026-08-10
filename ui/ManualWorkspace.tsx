@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { loadManualWorkspace, ManualWorkspaceSnapshot, runManualAction,
-  listModelConfigs, loadAppSettings, ModelConfig, SidecarConnection } from "./api";
+  generateManualDraft, listModelConfigs, loadAppSettings, ModelConfig, SidecarConnection } from "./api";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
 type Action = "manual-plan" | "diagram-plan" | "diagram-artifacts";
@@ -12,6 +12,7 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   const [message, setMessage] = useState("");
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [modelId, setModelId] = useState("");
+  const [generating, setGenerating] = useState(false);
   useEffect(() => { if (!connection) return; Promise.all([
     listModelConfigs(connection), loadAppSettings(connection),
   ]).then(([items, settings]) => {
@@ -33,6 +34,13 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
     try { setData(await runManualAction(connection, taskId, action)); setMessage("本阶段已完成。"); }
     catch (error) { setMessage(error instanceof Error ? error.message : "执行失败"); }
     finally { setWorking(null); }
+  }
+  async function generateDraft() {
+    if (!connection || !modelId) return;
+    setGenerating(true); setMessage("AI 正在阅读项目证据并生成说明书草稿，可能需要几分钟…");
+    try { setData(await generateManualDraft(connection, taskId, modelId)); setMessage("AI 说明书草稿已生成并保存。"); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "AI 草稿生成失败"); }
+    finally { setGenerating(false); }
   }
   return <main className="manual-page"><header className="topbar"><div>
     <p className="eyebrow">TECHNICAL MANUAL</p><h1>说明书</h1>
@@ -60,7 +68,11 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
         </div>
         <div className="ai-generation-card"><div><span>AI</span><div><strong>生成说明书正文与图表语义</strong>
           <p>将调用用户选择的模型，并采用内置软著文档与专业 Draw.io 技能约束输出。</p></div></div>
-          <button disabled>{modelId ? "正文生成下一步接入" : "请先在设置中添加模型"}</button></div>
+          <button disabled={!modelId || !data?.actions.manual_generate || generating} onClick={generateDraft}>
+            {generating ? "AI 正在生成…" : !modelId ? "请先在设置中添加模型" : data?.manual_draft ? "重新生成草稿" : "生成说明书草稿"}</button></div>
+        {data?.manual_draft && <section className="manual-draft"><header><div><strong>AI 说明书草稿 v{data.manual_draft.version}</strong>
+          <small>{data.manual_draft.summary.model_name} · {(data.manual_draft.elapsed_ms / 1000).toFixed(1)} 秒 · {data.manual_draft.summary.character_count} 字符</small></div>
+          <span>已持久化</span></header><pre>{data.manual_draft.content}</pre></section>}
         {data?.manual_plan && <><div className="manual-summary"><Metric label="章节" value={data.manual_plan.summary.section_count} />
           <Metric label="已就绪" value={data.manual_plan.summary.ready_sections} />
           <Metric label="待补证据" value={data.manual_plan.summary.needs_evidence_sections} />

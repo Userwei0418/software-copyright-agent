@@ -29,6 +29,7 @@ from .code_preview import CodePreviewError
 from .source_document import SourceDocumentError
 from .manual_workspace import ManualWorkspaceError, ManualWorkspaceService
 from .manual_plan_service import ManualPlanError
+from .manual_generation import ManualGenerationError
 from .diagram_plan_service import DiagramPlanError
 from .drawio_service import DrawioGenerationError
 from .storage import Database
@@ -112,6 +113,10 @@ class CredentialRequest(StrictModel):
 
 class EndpointModeRequest(StrictModel):
     endpoint_mode: Literal["messages", "chat_completions", "responses", "ollama_chat"]
+
+
+class ManualGenerationRequest(StrictModel):
+    model_config_id: str = Field(min_length=8, max_length=64)
 
 
 class AppSettingsRequest(StrictModel):
@@ -553,7 +558,8 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
             return JSONResponse(status_code=404, content={
                 "error": {"code": "manual_workspace_unavailable", "message": str(error)}
             })
-        except (ManualPlanError, DiagramPlanError, DrawioGenerationError) as error:
+        except (ManualPlanError, DiagramPlanError, DrawioGenerationError,
+                ManualGenerationError) as error:
             return JSONResponse(status_code=400, content={
                 "error": {"code": "manual_workflow_error", "message": str(error)}
             })
@@ -577,6 +583,14 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     def build_diagram_artifacts(task_id: str,
                                 token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
         return manual_response(manual_workspace_service.build_diagrams, task_id, token)
+
+    @app.post("/api/v1/tasks/{task_id}/manual-workspace/generate")
+    def generate_manual(task_id: str, payload: ManualGenerationRequest,
+                        token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return manual_response(
+            lambda value: manual_workspace_service.generate_manual(value, payload.model_config_id),
+            task_id, token,
+        )
 
     @app.get("/api/v1/tasks/{task_id}/diagram-assets")
     def workspace(task_id: str, request: Request,
