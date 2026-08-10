@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -525,6 +525,39 @@ CREATE INDEX idx_manual_figure_revisions_latest
 ON manual_figure_revisions(job_id, figure_key, version DESC);
 """
 
+MIGRATION_019 = """
+CREATE TABLE manual_capture_assessments (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('auto_available', 'manual_import', 'not_applicable')),
+    assessment_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(job_id, version)
+);
+CREATE INDEX idx_manual_capture_assessments_latest
+ON manual_capture_assessments(job_id, version DESC);
+
+CREATE TABLE manual_screenshot_revisions (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    screenshot_key TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    section_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('automated', 'user')),
+    image_relative_path TEXT NOT NULL,
+    description_json TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(job_id, screenshot_key, version)
+);
+CREATE INDEX idx_manual_screenshot_revisions_latest
+ON manual_screenshot_revisions(job_id, screenshot_key, version DESC);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -718,6 +751,16 @@ class Database:
                     """INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (18, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
                     ("migration-018",),
+                )
+            applied_v19 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 19"
+            ).fetchone()
+            if applied_v19 is None:
+                connection.executescript(MIGRATION_019)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (19, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-019",),
                 )
 
     @contextmanager

@@ -34,6 +34,7 @@ from .manual_pipeline import ManualPipelineError, ManualPipelineService
 from .manual_research import ManualResearchError, ManualResearchService
 from .manual_drafting import ManualDraftingError, ManualDraftingService
 from .manual_figures import ManualFigureError, ManualFigureService
+from .manual_screenshots import ManualScreenshotError, ManualScreenshotService
 from .diagram_plan_service import DiagramPlanError
 from .drawio_service import DrawioGenerationError
 from .storage import Database
@@ -128,6 +129,22 @@ class ManualSectionEditRequest(StrictModel):
     blocks: List[Dict[str, Any]] = Field(min_length=3, max_length=100)
 
 
+class ScreenshotDescriptionRequest(StrictModel):
+    page_purpose: str = Field(min_length=12, max_length=2000)
+    entry_conditions: str = Field(min_length=12, max_length=2000)
+    visible_regions: str = Field(min_length=12, max_length=2000)
+    typical_workflow: str = Field(min_length=12, max_length=2000)
+    backend_interactions: str = Field(min_length=12, max_length=2000)
+    result_validation_recovery: str = Field(min_length=12, max_length=2000)
+
+
+class ScreenshotImportRequest(StrictModel):
+    path: str = Field(min_length=1, max_length=4096)
+    section_key: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=200)
+    description: ScreenshotDescriptionRequest
+
+
 class AppSettingsRequest(StrictModel):
     manual_model_id: Optional[str] = Field(default=None, max_length=64)
     diagram_model_id: Optional[str] = Field(default=None, max_length=64)
@@ -175,6 +192,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     manual_research_service = ManualResearchService(database, data_dir)
     manual_drafting_service = ManualDraftingService(database, data_dir)
     manual_figure_service = ManualFigureService(database, data_dir)
+    manual_screenshot_service = ManualScreenshotService(database, data_dir)
     model_config_service = ModelConfigService(database)
     credential_vault = CredentialVault(database, data_dir)
     app_settings_service = AppSettingsService(database)
@@ -819,6 +837,104 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
         except ManualFigureError as error:
             return JSONResponse(status_code=404, content={
                 "error": {"code": "manual_figure_not_found", "message": str(error)}
+            })
+
+    @app.post("/api/v1/manual-jobs/{job_id}/screenshots/assessment")
+    def assess_manual_screenshots(
+        job_id: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_screenshot_service.assess(job_id)
+        except ManualScreenshotError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_screenshot_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/screenshots/assessment")
+    def get_manual_screenshot_assessment(
+        job_id: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        result = manual_screenshot_service.latest_assessment(job_id)
+        if result is None:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_screenshot_assessment_not_found",
+                          "message": "尚未执行截图安全评估"}
+            })
+        return result
+
+    @app.post("/api/v1/manual-jobs/{job_id}/screenshots/import")
+    def import_manual_screenshot(
+        job_id: str,
+        payload: ScreenshotImportRequest,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_screenshot_service.import_image(
+                job_id, Path(payload.path), payload.section_key, payload.title,
+                payload.description.model_dump(mode="json"),
+            )
+        except ManualScreenshotError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_screenshot_error", "message": str(error)}
+            })
+
+    @app.post("/api/v1/manual-jobs/{job_id}/screenshots/finalize")
+    def finalize_manual_screenshots(
+        job_id: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_screenshot_service.finalize(job_id)
+        except ManualScreenshotError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_screenshot_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/screenshots")
+    def list_manual_screenshots(
+        job_id: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        return {"items": manual_screenshot_service.list(job_id)}
+
+    @app.get("/api/v1/manual-jobs/{job_id}/screenshots/{screenshot_key}.png")
+    def get_manual_screenshot(
+        job_id: str,
+        screenshot_key: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return Response(content=manual_screenshot_service.read_image(
+                job_id, screenshot_key), media_type="image/png")
+        except ManualScreenshotError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_screenshot_not_found", "message": str(error)}
             })
 
     @app.get("/api/v1/tasks/{task_id}/diagram-assets")
