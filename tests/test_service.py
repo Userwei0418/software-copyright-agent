@@ -21,6 +21,10 @@ class ScanProjectServiceTests(unittest.TestCase):
             project = base / "project"
             project.mkdir()
             (project / "main.py").write_text("print('hello')\n", encoding="utf-8")
+            (project / "package.json").write_text(
+                '{"name":"demo-app","version":"1.2.3","dependencies":{"react":"1"}}',
+                encoding="utf-8",
+            )
             data_root = base / "data"
             database = Database(data_root / "app.db")
 
@@ -46,14 +50,23 @@ class ScanProjectServiceTests(unittest.TestCase):
                 migration_count = connection.execute(
                     "SELECT COUNT(*) FROM schema_migrations"
                 ).fetchone()[0]
+                fact_count = connection.execute(
+                    "SELECT COUNT(*) FROM facts WHERE task_id = ?", (persisted.task_id,)
+                ).fetchone()[0]
+                confirmation_count = connection.execute(
+                    "SELECT COUNT(*) FROM confirmation_requests WHERE task_id = ?",
+                    (persisted.task_id,),
+                ).fetchone()[0]
             finally:
                 connection.close()
 
             self.assertEqual(task[0], "completed")
             self.assertEqual(task[1], persisted.snapshot_id)
             self.assertEqual(task[2], 3)
-            self.assertEqual(event_count, 3)
-            self.assertEqual(migration_count, 1)
+            self.assertEqual(event_count, 5)
+            self.assertEqual(migration_count, 2)
+            self.assertGreaterEqual(fact_count, 4)
+            self.assertEqual(confirmation_count, 0)
 
     def test_scan_failure_is_persisted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

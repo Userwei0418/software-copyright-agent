@@ -18,6 +18,10 @@
 - 通过 Repository／UnitOfWork 管理事务边界。
 - 使用合法状态转换和 `row_version` 乐观并发控制任务生命周期。
 - 扫描失败时持久化安全错误和失败阶段，便于后续恢复或重试。
+- 从 `package.json`、`pyproject.toml`、`Cargo.toml` 和 README 确定性提取名称与版本候选。
+- 根据语言、依赖清单和源码目录生成技术栈及模块候选。
+- 将 Fact、Evidence 和待确认项持久化到 SQLite。
+- 使用 `inspect` CLI 查看事实值、置信度和证据关联。
 
 ## 运行
 
@@ -28,6 +32,16 @@ PYTHONPATH=src python3 -m software_copyright_agent \
   --data-dir .software-copyright-agent \
   scan /path/to/project --json
 ```
+
+查看最近任务提取的事实、证据和待确认项：
+
+```bash
+PYTHONPATH=src python3 -m software_copyright_agent \
+  --data-dir .software-copyright-agent \
+  inspect --json
+```
+
+也可以在 `inspect` 后传入指定的任务 ID。
 
 运行测试：
 

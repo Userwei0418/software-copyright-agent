@@ -279,3 +279,96 @@ class EventRepository:
                 now,
             ),
         )
+
+
+class EvidenceRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def add(
+        self,
+        evidence_id: str,
+        snapshot_id: str,
+        candidate: object,
+        now: str,
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO evidence
+            (id, snapshot_id, kind, relative_path, locator_json, excerpt,
+             content_hash, extractor, confidence, sensitivity, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                evidence_id,
+                snapshot_id,
+                candidate.kind,
+                candidate.relative_path,
+                encode_json(candidate.locator),
+                candidate.excerpt,
+                candidate.content_hash,
+                "deterministic-v1",
+                candidate.confidence,
+                "normal",
+                now,
+            ),
+        )
+
+
+class FactRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def add(
+        self,
+        fact_id: str,
+        task_id: str,
+        candidate: object,
+        evidence_ids: object,
+        now: str,
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO facts
+            (id, task_id, fact_key, value_json, status, source, confidence,
+             evidence_ids_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                fact_id,
+                task_id,
+                candidate.key,
+                encode_json(candidate.value),
+                candidate.status,
+                "deterministic",
+                candidate.confidence,
+                encode_json(evidence_ids),
+                now,
+            ),
+        )
+
+
+class ConfirmationRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def add(
+        self,
+        confirmation_id: str,
+        task_id: str,
+        candidate: object,
+        evidence_ids: object,
+        now: str,
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO confirmation_requests
+            (id, task_id, field_key, question, candidates_json, evidence_ids_json,
+             required, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+            (
+                confirmation_id,
+                task_id,
+                candidate.field_key,
+                candidate.question,
+                encode_json(candidate.candidates),
+                encode_json(evidence_ids),
+                1 if candidate.required else 0,
+                now,
+            ),
+        )

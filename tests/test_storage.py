@@ -1,0 +1,40 @@
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+
+from software_copyright_agent.storage import Database, MIGRATION_001
+
+
+class DatabaseMigrationTests(unittest.TestCase):
+    def test_existing_v1_database_is_upgraded_to_v2(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Database(Path(temporary) / "app.db")
+            connection = sqlite3.connect(str(database.path))
+            try:
+                connection.executescript(MIGRATION_001)
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at, checksum) VALUES (1, 'now', 'migration-001')"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            database.initialize()
+
+            connection = sqlite3.connect(str(database.path))
+            try:
+                versions = connection.execute(
+                    "SELECT version FROM schema_migrations ORDER BY version"
+                ).fetchall()
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    ).fetchall()
+                }
+            finally:
+                connection.close()
+
+            self.assertEqual(versions, [(1,), (2,)])
+            self.assertTrue({"facts", "evidence", "confirmation_requests"}.issubset(tables))

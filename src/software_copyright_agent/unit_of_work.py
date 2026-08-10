@@ -3,6 +3,9 @@ from typing import Optional, Type
 
 from .repositories import (
     EventRepository,
+    EvidenceRepository,
+    FactRepository,
+    ConfirmationRepository,
     SnapshotRepository,
     SourceRepository,
     StageRepository,
@@ -28,6 +31,9 @@ class UnitOfWork:
         self.tasks = TaskRepository(connection)
         self.stages = StageRepository(connection)
         self.events = EventRepository(connection)
+        self.evidence = EvidenceRepository(connection)
+        self.facts = FactRepository(connection)
+        self.confirmations = ConfirmationRepository(connection)
         return self
 
     def __exit__(

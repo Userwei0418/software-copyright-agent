@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -82,6 +82,55 @@ CREATE INDEX IF NOT EXISTS idx_task_events_task_id_id
 ON task_events(task_id, id);
 """
 
+MIGRATION_002 = """
+CREATE TABLE IF NOT EXISTS evidence (
+    id TEXT PRIMARY KEY,
+    snapshot_id TEXT NOT NULL REFERENCES project_snapshots(id),
+    kind TEXT NOT NULL,
+    relative_path TEXT,
+    locator_json TEXT NOT NULL,
+    excerpt TEXT,
+    content_hash TEXT,
+    extractor TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    sensitivity TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS facts (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    fact_key TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    source TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    evidence_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    confirmed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_facts_task_key
+ON facts(task_id, fact_key);
+
+CREATE TABLE IF NOT EXISTS confirmation_requests (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    field_key TEXT NOT NULL,
+    question TEXT NOT NULL,
+    candidates_json TEXT NOT NULL,
+    evidence_ids_json TEXT NOT NULL,
+    required INTEGER NOT NULL CHECK (required IN (0, 1)),
+    status TEXT NOT NULL,
+    answer_json TEXT,
+    created_at TEXT NOT NULL,
+    answered_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_confirmations_task_status
+ON confirmation_requests(task_id, status);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -96,8 +145,20 @@ class Database:
                 INSERT OR IGNORE INTO schema_migrations(version, applied_at, checksum)
                 VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)
                 """,
-                (SCHEMA_VERSION, "migration-001"),
+                (1, "migration-001"),
             )
+            applied = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 2"
+            ).fetchone()
+            if applied is None:
+                connection.executescript(MIGRATION_002)
+                connection.execute(
+                    """
+                    INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)
+                    """,
+                    ("migration-002",),
+                )
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:

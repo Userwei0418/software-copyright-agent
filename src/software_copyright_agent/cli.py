@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .ingestion import IngestionError
+from .inspection import InspectionError, InspectionService
 from .scanner import ScanError
 from .service import ScanProjectService
 from .storage import Database
@@ -23,16 +24,43 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser = subparsers.add_parser("scan", help="Scan and persist a local project")
     scan_parser.add_argument("project", type=Path, help="Local project directory or ZIP file")
     scan_parser.add_argument("--json", action="store_true", help="Print JSON output")
+
+    inspect_parser = subparsers.add_parser(
+        "inspect", help="Inspect persisted facts, evidence and confirmations"
+    )
+    inspect_parser.add_argument(
+        "task_id", nargs="?", help="Task ID; omit to inspect the latest task"
+    )
+    inspect_parser.add_argument("--json", action="store_true", help="Print JSON output")
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    data_dir = args.data_dir.expanduser().resolve()
+    database = Database(data_dir / "app.db")
+    if args.command == "inspect":
+        try:
+            inspection = InspectionService(database).inspect(args.task_id)
+        except InspectionError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(inspection, ensure_ascii=False, sort_keys=True))
+        else:
+            print("Task: {0}".format(inspection["task"]["id"]))
+            print("Status: {0}".format(inspection["task"]["status"]))
+            print("Facts:")
+            for fact in inspection["facts"]:
+                print("  {0}: {1}".format(fact["key"], fact["value"]))
+            print("Pending confirmations: {0}".format(
+                sum(1 for item in inspection["confirmations"] if item["status"] == "pending")
+            ))
+        return 0
+
     if args.command != "scan":
         return 2
 
-    data_dir = args.data_dir.expanduser().resolve()
-    database = Database(data_dir / "app.db")
     service = ScanProjectService(database=database, data_root=data_dir)
     try:
         persisted = service.execute(args.project)

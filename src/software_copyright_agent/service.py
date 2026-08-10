@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import tempfile
 import uuid
@@ -7,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .domain import PersistedScan, SourceKind, TaskStatus
+from .fact_extraction import DeterministicFactExtractor
 from .ingestion import InputIngestor
 from .scanner import ProjectScanner
 from .state_machine import TaskStateMachine
@@ -35,11 +37,13 @@ class ScanProjectService:
         data_root: Path,
         scanner: ProjectScanner = None,
         ingestor: InputIngestor = None,
+        fact_extractor: DeterministicFactExtractor = None,
     ) -> None:
         self._database = database
         self._data_root = data_root.expanduser().resolve()
         self._scanner = scanner or ProjectScanner()
         self._ingestor = ingestor or InputIngestor()
+        self._fact_extractor = fact_extractor or DeterministicFactExtractor()
         self._state_machine = TaskStateMachine()
 
     def execute(self, project_root: Path) -> PersistedScan:
@@ -55,6 +59,7 @@ class ScanProjectService:
         source_id = new_id()
         task_id = new_id()
         stage_id = new_id()
+        fact_stage_id = new_id()
         now = utc_now()
         task_root = self._data_root / "tasks" / task_id
 
@@ -141,14 +146,99 @@ class ScanProjectService:
                 finished_at,
                 stage_run_id=stage_id,
             )
-            running_task = unit_of_work.tasks.get(task_id)
-            self._state_machine.transition(
-                unit_of_work,
-                running_task,
-                TaskStatus.COMPLETED,
-                finished_at,
-                current_stage_key="02_scan",
+            unit_of_work.stages.start(
+                fact_stage_id, task_id, "03_extract_facts", 3, 1, finished_at
             )
+            unit_of_work.events.add(
+                task_id,
+                "stage.running",
+                "info",
+                "Deterministic fact extraction started",
+                {"stage_key": "03_extract_facts"},
+                finished_at,
+                stage_run_id=fact_stage_id,
+            )
+
+        try:
+            extraction = self._fact_extractor.extract(result)
+        except Exception as error:
+            self._record_failure(
+                task_id,
+                fact_stage_id,
+                error,
+                category="fact_error",
+                stage_key="03_extract_facts",
+            )
+            raise
+
+        extracted_at = utc_now()
+        with UnitOfWork(self._database) as unit_of_work:
+            evidence_ids = {}
+            for candidate in extraction.evidence:
+                evidence_id = new_id()
+                evidence_ids[candidate.ref] = evidence_id
+                unit_of_work.evidence.add(
+                    evidence_id, snapshot_id, candidate, extracted_at
+                )
+            for candidate in extraction.facts:
+                linked = [
+                    evidence_ids[ref]
+                    for ref in candidate.evidence_refs
+                    if ref in evidence_ids
+                ]
+                unit_of_work.facts.add(
+                    new_id(), task_id, candidate, linked, extracted_at
+                )
+            for candidate in extraction.confirmations:
+                linked = [
+                    evidence_ids[ref]
+                    for ref in candidate.evidence_refs
+                    if ref in evidence_ids
+                ]
+                unit_of_work.confirmations.add(
+                    new_id(), task_id, candidate, linked, extracted_at
+                )
+            fact_fingerprint = self._fact_fingerprint(extraction)
+            unit_of_work.stages.succeed(
+                fact_stage_id,
+                fact_fingerprint,
+                {
+                    "fact_count": len(extraction.facts),
+                    "evidence_count": len(extraction.evidence),
+                    "confirmation_count": len(extraction.confirmations),
+                },
+                extracted_at,
+            )
+            unit_of_work.events.add(
+                task_id,
+                "stage.succeeded",
+                "info",
+                "Deterministic fact extraction completed",
+                {
+                    "fact_count": len(extraction.facts),
+                    "evidence_count": len(extraction.evidence),
+                    "confirmation_count": len(extraction.confirmations),
+                },
+                extracted_at,
+                stage_run_id=fact_stage_id,
+            )
+            running_task = unit_of_work.tasks.get(task_id)
+            if extraction.confirmations:
+                self._state_machine.transition(
+                    unit_of_work,
+                    running_task,
+                    TaskStatus.WAITING_FOR_USER,
+                    extracted_at,
+                    current_stage_key="04_confirm_metadata",
+                )
+            else:
+                self._state_machine.transition(
+                    unit_of_work,
+                    running_task,
+                    TaskStatus.COMPLETED,
+                    extracted_at,
+                    current_stage_key="03_extract_facts",
+                )
 
         return PersistedScan(
             task_id=task_id,
@@ -159,25 +249,45 @@ class ScanProjectService:
             result=result,
         )
 
-    def _record_failure(self, task_id: str, stage_id: str, error: Exception) -> None:
+    def _record_failure(
+        self,
+        task_id: str,
+        stage_id: str,
+        error: Exception,
+        category: str = "scan_error",
+        stage_key: str = "02_scan",
+    ) -> None:
         now = utc_now()
-        safe_message = "Project scan failed: {0}".format(type(error).__name__)
+        safe_message = "Task stage failed: {0}".format(type(error).__name__)
         with UnitOfWork(self._database) as unit_of_work:
-            unit_of_work.stages.fail(stage_id, "scan_error", safe_message, now)
+            unit_of_work.stages.fail(stage_id, category, safe_message, now)
             task = unit_of_work.tasks.get(task_id)
             self._state_machine.transition(
                 unit_of_work,
                 task,
                 TaskStatus.FAILED,
                 now,
-                current_stage_key="02_scan",
-                failure_category="scan_error",
+                current_stage_key=stage_key,
+                failure_category=category,
                 safe_error_message=safe_message,
             )
 
     def _scan_without_persistence(self, project_root: Path) -> PersistedScan:
         self._ingestor.ingest(project_root, self._data_root / "validation")
         raise AssertionError("Unreachable after input validation")
+
+    @staticmethod
+    def _fact_fingerprint(extraction: object) -> str:
+        payload = {
+            "facts": [
+                {"key": fact.key, "value": fact.value, "confidence": fact.confidence}
+                for fact in extraction.facts
+            ],
+            "confirmations": [item.field_key for item in extraction.confirmations],
+        }
+        return hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
 
     @staticmethod
     def _write_manifest_atomic(path: Path, result: object) -> None:
