@@ -121,6 +121,16 @@ PYTHONPATH=src python3 -m software_copyright_agent \
 
 该命令只生成节点和边的证据化 JSON 契约，不直接绘制 Draw.io。重复节点、悬空边或无证据边会阻断计划落库。
 
+生成可编辑 Draw.io 与 SVG 预览：
+
+```bash
+PYTHONPATH=src python3 -m software_copyright_agent \
+  --data-dir .software-copyright-agent \
+  drawio TASK_ID --json
+```
+
+生成器使用未压缩 Draw.io XML、确定性布局和显式正交路由，导出前检查节点重叠、边端点及路径点。可用 `COPYRIGHT_AGENT_DRAWIO=/path/to/drawio` 指定 Draw.io Desktop；每次结果都在 SQLite 中版本化留痕。
+
 运行测试：
 
 ```bash
@@ -130,7 +140,7 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
 
 ## 当前限制
 
-- 尚未接入模型协议、Draw.io、说明书生成和桌面 UI。
+- 尚未接入模型协议、说明书正文生成和桌面 UI；Draw.io 图件已能独立生成，但仍需本机 Draw.io Desktop 导出 SVG。
 - 当前 CLI 是验证领域内核的纵向切片，不是最终用户界面。
 - `.gitignore` 当前实现常用 glob、目录、锚定和否定规则，不承诺覆盖 Git 的全部边缘语义。
 - A/B/C 当前是确定性初筛；后续模型只对未排除候选做语义重排，不能恢复安全规则排除项。

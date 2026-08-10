@@ -16,6 +16,7 @@ from .repositories import (
     SourceDocumentQaRepository,
     ManualPlanRepository,
     DiagramPlanRepository,
+    DiagramArtifactRepository,
 )
 from .storage import Database
 
@@ -46,6 +47,7 @@ class UnitOfWork:
         self.source_document_qa = SourceDocumentQaRepository(connection)
         self.manual_plans = ManualPlanRepository(connection)
         self.diagram_plans = DiagramPlanRepository(connection)
+        self.diagram_artifacts = DiagramArtifactRepository(connection)
         return self
 
     def __exit__(

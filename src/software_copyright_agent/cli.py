@@ -6,6 +6,7 @@ from typing import Optional, Sequence
 
 from .confirmation import ConfirmationError, ConfirmationService
 from .diagram_plan_service import DiagramPlanError, DiagramPlanService
+from .drawio_service import DrawioGenerationError, DrawioGenerationService
 from .code_preview import CodePreviewError
 from .code_preview_service import CodePreviewService
 from .ingestion import IngestionError
@@ -84,6 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     diagram_plan_parser.add_argument("task_id", help="Task ID with a manual plan")
     diagram_plan_parser.add_argument("--json", action="store_true", help="Print JSON output")
+    drawio_parser = subparsers.add_parser(
+        "drawio", help="Generate editable Draw.io architecture and workflow diagrams"
+    )
+    drawio_parser.add_argument("task_id", help="Task ID with a ready diagram plan")
+    drawio_parser.add_argument("--json", action="store_true", help="Print JSON output")
     return parser
 
 
@@ -286,6 +292,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 persisted.plan.ready_diagrams, len(persisted.plan.diagrams)
             ))
             print("Artifact: {0}".format(persisted.artifact_path))
+        return 0
+
+    if args.command == "drawio":
+        try:
+            persisted = DrawioGenerationService(database, data_dir).execute(args.task_id)
+        except DrawioGenerationError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        payload = {
+            "task_id": persisted.task_id, "run_id": persisted.run_id,
+            "version": persisted.version,
+            "paths": {key: str(value) for key, value in persisted.paths.items()},
+            "summary": persisted.summary,
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            print("Draw.io artifacts: v{0}".format(persisted.version))
+            for key, value in persisted.paths.items():
+                print("{0}: {1}".format(key, value))
         return 0
 
     if args.command != "scan":

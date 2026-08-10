@@ -763,5 +763,33 @@ class DiagramPlanRepository:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (run_id, task_id, manual_plan_run_id, stage_run_id, version,
              rules_version, encode_json(summary), artifact_relative_path,
-             fingerprint, now),
+            fingerprint, now),
+        )
+
+
+class DiagramArtifactRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def next_version(self, task_id: str) -> int:
+        row = self._connection.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM diagram_artifact_runs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        return int(row[0])
+
+    def add_run(self, run_id: str, task_id: str, diagram_plan_run_id: str,
+                stage_run_id: str, version: int, generator_version: str,
+                summary: object, paths: object, fingerprint: str, now: str) -> None:
+        self._connection.execute(
+            """INSERT INTO diagram_artifact_runs
+            (id, task_id, diagram_plan_run_id, stage_run_id, version, generator_version,
+             summary_json, architecture_drawio_relative_path,
+             architecture_svg_relative_path, workflow_drawio_relative_path,
+             workflow_svg_relative_path, fingerprint, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, task_id, diagram_plan_run_id, stage_run_id, version,
+             generator_version, encode_json(summary), paths["architecture_drawio"],
+             paths["architecture_svg"], paths["workflow_drawio"],
+             paths["workflow_svg"], fingerprint, now),
         )

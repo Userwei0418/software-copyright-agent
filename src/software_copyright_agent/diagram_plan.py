@@ -7,7 +7,6 @@ from .manual_plan import PlanningFact
 
 DIAGRAM_PLAN_RULES_VERSION = "diagram-plan-v1"
 MAX_ARCHITECTURE_MODULES = 12
-MAX_ARCHITECTURE_EDGES = 20
 
 
 @dataclass(frozen=True)
@@ -118,7 +117,24 @@ class DiagramPlanBuilder:
                 str(item.get("source_module")), str(item.get("target_module")),
                 int(item.get("line") or 0),
             ))
-            for index, item in enumerate(selected_dependencies[:MAX_ARCHITECTURE_EDGES]):
+            parent = {label: label for label in selected_modules}
+
+            def find(label: str) -> str:
+                while parent[label] != label:
+                    parent[label] = parent[parent[label]]
+                    label = parent[label]
+                return label
+
+            forest_dependencies = []
+            for item in selected_dependencies:
+                source_label = str(item.get("source_module"))
+                target_label = str(item.get("target_module"))
+                source_root, target_root = find(source_label), find(target_label)
+                if source_root == target_root:
+                    continue
+                parent[source_root] = target_root
+                forest_dependencies.append(item)
+            for index, item in enumerate(forest_dependencies):
                 source = node_by_label[str(item.get("source_module"))]
                 target = node_by_label[str(item.get("target_module"))]
                 edges.append(DiagramEdge(
@@ -136,14 +152,13 @@ class DiagramPlanBuilder:
         status = "ready" if any(node.kind == "module" for node in nodes) and edges \
             else "needs_evidence"
         metadata = {
-            "selection": "highest_internal_degree_v1",
+            "selection": "highest_internal_degree_spanning_forest_v1",
             "source_module_count": len(module_labels),
             "source_edge_count": len(dependency_values),
             "selected_module_count": len(selected_modules),
             "selected_module_edge_count_before_limit": len(selected_dependencies),
             "selected_edge_count": len(edges),
             "module_limit": MAX_ARCHITECTURE_MODULES,
-            "edge_limit": MAX_ARCHITECTURE_EDGES,
         }
         return DiagramDefinition(
             "system_architecture", "系统总体架构图", status,

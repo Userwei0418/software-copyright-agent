@@ -64,7 +64,7 @@ class ScanProjectServiceTests(unittest.TestCase):
             self.assertEqual(task[1], persisted.snapshot_id)
             self.assertEqual(task[2], 3)
             self.assertEqual(event_count, 5)
-            self.assertEqual(migration_count, 8)
+            self.assertEqual(migration_count, 9)
             self.assertGreaterEqual(fact_count, 4)
             self.assertEqual(confirmation_count, 0)
 
