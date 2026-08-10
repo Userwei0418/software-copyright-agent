@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
+from .ingestion import IngestionError
 from .scanner import ScanError
 from .service import ScanProjectService
 from .storage import Database
@@ -20,7 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     scan_parser = subparsers.add_parser("scan", help="Scan and persist a local project")
-    scan_parser.add_argument("project", type=Path, help="Local project directory")
+    scan_parser.add_argument("project", type=Path, help="Local project directory or ZIP file")
     scan_parser.add_argument("--json", action="store_true", help="Print JSON output")
     return parser
 
@@ -35,7 +36,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     service = ScanProjectService(database=database, data_root=data_dir)
     try:
         persisted = service.execute(args.project)
-    except ScanError as error:
+    except (IngestionError, ScanError) as error:
         print(str(error), file=sys.stderr)
         return 2
     except OSError as error:

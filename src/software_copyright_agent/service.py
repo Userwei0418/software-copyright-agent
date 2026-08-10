@@ -5,7 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .domain import PersistedScan, TaskStatus
+from .domain import PersistedScan, SourceKind, TaskStatus
+from .ingestion import InputIngestor
 from .scanner import ProjectScanner
 from .state_machine import TaskStateMachine
 from .storage import Database
@@ -27,26 +28,39 @@ def new_id() -> str:
 
 
 class ScanProjectService:
-    def __init__(self, database: Database, data_root: Path, scanner: ProjectScanner = None) -> None:
+    def __init__(
+        self,
+        database: Database,
+        data_root: Path,
+        scanner: ProjectScanner = None,
+        ingestor: InputIngestor = None,
+    ) -> None:
         self._database = database
         self._data_root = data_root.expanduser().resolve()
         self._scanner = scanner or ProjectScanner()
+        self._ingestor = ingestor or InputIngestor()
         self._state_machine = TaskStateMachine()
 
     def execute(self, project_root: Path) -> PersistedScan:
         self._database.initialize()
-        resolved_root = project_root.expanduser().resolve()
-        if not resolved_root.exists() or not resolved_root.is_dir():
+        original = project_root.expanduser().resolve()
+        if not original.exists():
+            return self._scan_without_persistence(project_root)
+        if not original.is_dir() and not (
+            original.is_file() and original.suffix.lower() == ".zip"
+        ):
             return self._scan_without_persistence(project_root)
 
         source_id = new_id()
         task_id = new_id()
         stage_id = new_id()
         now = utc_now()
+        task_root = self._data_root / "tasks" / task_id
 
         with UnitOfWork(self._database) as unit_of_work:
-            unit_of_work.sources.add_directory(
-                source_id, str(resolved_root), resolved_root.name, now
+            source_kind = SourceKind.ZIP if original.is_file() else SourceKind.DIRECTORY
+            unit_of_work.sources.add(
+                source_id, source_kind, str(original), original.name, now
             )
             unit_of_work.tasks.add(
                 task_id,
@@ -66,14 +80,14 @@ class ScanProjectService:
             unit_of_work.stages.start(stage_id, task_id, "02_scan", 2, 1, now)
 
         try:
-            result = self._scanner.scan(resolved_root)
+            ingested = self._ingestor.ingest(original, task_root)
+            result = self._scanner.scan(ingested.scan_root)
         except Exception as error:
             self._record_failure(task_id, stage_id, error)
             raise
 
         snapshot_id = new_id()
 
-        task_root = self._data_root / "tasks" / task_id
         manifest_relative = Path("input") / "manifest.jsonl"
         manifest_path = task_root / manifest_relative
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,8 +162,8 @@ class ScanProjectService:
             )
 
     def _scan_without_persistence(self, project_root: Path) -> PersistedScan:
-        result = self._scanner.scan(project_root)
-        raise AssertionError("Unreachable after scanner validation: {0}".format(result))
+        self._ingestor.ingest(project_root, self._data_root / "validation")
+        raise AssertionError("Unreachable after input validation")
 
     @staticmethod
     def _write_manifest_atomic(path: Path, result: object) -> None:

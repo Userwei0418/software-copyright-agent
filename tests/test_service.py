@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from software_copyright_agent.service import ScanProjectService
@@ -76,3 +77,26 @@ class ScanProjectServiceTests(unittest.TestCase):
 
             self.assertEqual(task, ("failed", "scan_error", 3))
             self.assertEqual(stage, ("failed", "scan_error"))
+
+    def test_zip_project_is_extracted_scanned_and_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            archive = base / "project.zip"
+            with zipfile.ZipFile(str(archive), "w") as output:
+                output.writestr("project/main.py", "print('zip')\n")
+            data_root = base / "data"
+            database = Database(data_root / "app.db")
+
+            persisted = ScanProjectService(database, data_root).execute(archive)
+
+            connection = sqlite3.connect(str(database.path))
+            try:
+                source = connection.execute(
+                    "SELECT kind, original_path FROM project_sources"
+                ).fetchone()
+            finally:
+                connection.close()
+
+            self.assertEqual(source, ("zip", str(archive.resolve())))
+            self.assertEqual([item.relative_path for item in persisted.result.files], ["main.py"])
+            self.assertIn("input/extracted/project", str(persisted.result.root))

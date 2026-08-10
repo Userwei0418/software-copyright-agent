@@ -32,13 +32,23 @@ class SourceRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def add_directory(self, source_id: str, path: str, display_name: str, now: str) -> None:
+    def add(
+        self,
+        source_id: str,
+        kind: SourceKind,
+        path: str,
+        display_name: str,
+        now: str,
+    ) -> None:
         self._connection.execute(
             """INSERT INTO project_sources
             (id, kind, original_path, display_name, created_at, last_opened_at)
             VALUES (?, ?, ?, ?, ?, ?)""",
-            (source_id, SourceKind.DIRECTORY.value, path, display_name, now, now),
+            (source_id, kind.value, path, display_name, now, now),
         )
+
+    def add_directory(self, source_id: str, path: str, display_name: str, now: str) -> None:
+        self.add(source_id, SourceKind.DIRECTORY, path, display_name, now)
 
 
 class SnapshotRepository:
