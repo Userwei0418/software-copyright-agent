@@ -18,6 +18,14 @@ class ConcurrentUpdateError(RepositoryError):
     pass
 
 
+class ConfirmationNotFoundError(RepositoryError):
+    pass
+
+
+class ConfirmationAlreadyAnsweredError(RepositoryError):
+    pass
+
+
 @dataclass(frozen=True)
 class TaskRecord:
     id: str
@@ -250,6 +258,59 @@ class StageRepository:
             ),
         )
 
+    def wait_for_user(
+        self,
+        stage_id: str,
+        task_id: str,
+        stage_key: str,
+        sequence: int,
+        attempt: int,
+        checkpoint: object,
+        now: str,
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO task_stages
+            (id, task_id, stage_key, sequence, status, attempt, checkpoint_json, started_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                stage_id,
+                task_id,
+                stage_key,
+                sequence,
+                StageStatus.WAITING_FOR_USER.value,
+                attempt,
+                encode_json(checkpoint),
+                now,
+            ),
+        )
+
+    def complete_waiting(self, stage_id: str, checkpoint: object, now: str) -> None:
+        cursor = self._connection.execute(
+            """UPDATE task_stages
+            SET status = ?, checkpoint_json = ?, finished_at = ?
+            WHERE id = ? AND status = ?""",
+            (
+                StageStatus.SUCCEEDED.value,
+                encode_json(checkpoint),
+                now,
+                stage_id,
+                StageStatus.WAITING_FOR_USER.value,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ConcurrentUpdateError(
+                "Confirmation stage is not waiting: {0}".format(stage_id)
+            )
+
+    def find_waiting(self, task_id: str, stage_key: str) -> Optional[str]:
+        row = self._connection.execute(
+            """SELECT id FROM task_stages
+            WHERE task_id = ? AND stage_key = ? AND status = ?
+            ORDER BY attempt DESC LIMIT 1""",
+            (task_id, stage_key, StageStatus.WAITING_FOR_USER.value),
+        ).fetchone()
+        return row["id"] if row is not None else None
+
 
 class EventRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
@@ -312,6 +373,30 @@ class EvidenceRepository:
             ),
         )
 
+    def add_user_confirmation(
+        self,
+        evidence_id: str,
+        snapshot_id: str,
+        field_key: str,
+        confirmation_id: str,
+        now: str,
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO evidence
+            (id, snapshot_id, kind, relative_path, locator_json, excerpt,
+             content_hash, extractor, confidence, sensitivity, created_at)
+            VALUES (?, ?, 'user_confirmation', NULL, ?, NULL, NULL,
+                    'user-input-v1', 1.0, 'normal', ?)""",
+            (
+                evidence_id,
+                snapshot_id,
+                encode_json(
+                    {"field_key": field_key, "confirmation_id": confirmation_id}
+                ),
+                now,
+            ),
+        )
+
 
 class FactRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
@@ -339,6 +424,39 @@ class FactRepository:
                 "deterministic",
                 candidate.confidence,
                 encode_json(evidence_ids),
+                now,
+            ),
+        )
+
+    def supersede_active(self, task_id: str, fact_key: str) -> int:
+        cursor = self._connection.execute(
+            """UPDATE facts SET status = 'superseded'
+            WHERE task_id = ? AND fact_key = ? AND status IN ('candidate', 'confirmed')""",
+            (task_id, fact_key),
+        )
+        return cursor.rowcount
+
+    def add_user_confirmed(
+        self,
+        fact_id: str,
+        task_id: str,
+        fact_key: str,
+        value: object,
+        evidence_id: str,
+        now: str,
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO facts
+            (id, task_id, fact_key, value_json, status, source, confidence,
+             evidence_ids_json, created_at, confirmed_at)
+            VALUES (?, ?, ?, ?, 'confirmed', 'user', 1.0, ?, ?, ?)""",
+            (
+                fact_id,
+                task_id,
+                fact_key,
+                encode_json(value),
+                encode_json([evidence_id]),
+                now,
                 now,
             ),
         )
@@ -372,3 +490,49 @@ class ConfirmationRepository:
                 now,
             ),
         )
+
+    def get_pending(self, task_id: str, field_key: str) -> sqlite3.Row:
+        rows = self._connection.execute(
+            """SELECT id, task_id, field_key, required, status
+            FROM confirmation_requests
+            WHERE task_id = ? AND field_key = ? AND status = 'pending'
+            ORDER BY created_at, id""",
+            (task_id, field_key),
+        ).fetchall()
+        if not rows:
+            existing = self._connection.execute(
+                """SELECT status FROM confirmation_requests
+                WHERE task_id = ? AND field_key = ? ORDER BY created_at DESC LIMIT 1""",
+                (task_id, field_key),
+            ).fetchone()
+            if existing is not None:
+                raise ConfirmationAlreadyAnsweredError(
+                    "Confirmation is not pending: {0}".format(field_key)
+                )
+            raise ConfirmationNotFoundError(
+                "Pending confirmation not found: {0}".format(field_key)
+            )
+        if len(rows) > 1:
+            raise RepositoryError(
+                "Multiple pending confirmations found: {0}".format(field_key)
+            )
+        return rows[0]
+
+    def answer(self, confirmation_id: str, answer: object, now: str) -> None:
+        cursor = self._connection.execute(
+            """UPDATE confirmation_requests
+            SET status = 'answered', answer_json = ?, answered_at = ?
+            WHERE id = ? AND status = 'pending'""",
+            (encode_json(answer), now, confirmation_id),
+        )
+        if cursor.rowcount != 1:
+            raise ConfirmationAlreadyAnsweredError(
+                "Confirmation changed before it could be answered"
+            )
+
+    def pending_required_count(self, task_id: str) -> int:
+        return self._connection.execute(
+            """SELECT COUNT(*) FROM confirmation_requests
+            WHERE task_id = ? AND required = 1 AND status = 'pending'""",
+            (task_id,),
+        ).fetchone()[0]

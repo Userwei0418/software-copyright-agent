@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
+from .confirmation import ConfirmationError, ConfirmationService
 from .ingestion import IngestionError
 from .inspection import InspectionError, InspectionService
 from .scanner import ScanError
@@ -32,6 +33,14 @@ def build_parser() -> argparse.ArgumentParser:
         "task_id", nargs="?", help="Task ID; omit to inspect the latest task"
     )
     inspect_parser.add_argument("--json", action="store_true", help="Print JSON output")
+
+    confirm_parser = subparsers.add_parser(
+        "confirm", help="Answer a pending project metadata confirmation"
+    )
+    confirm_parser.add_argument("task_id", help="Task ID")
+    confirm_parser.add_argument("field_key", help="Field key, for example project.version")
+    confirm_parser.add_argument("value", help="Confirmed text value")
+    confirm_parser.add_argument("--json", action="store_true", help="Print JSON output")
     return parser
 
 
@@ -56,6 +65,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print("Pending confirmations: {0}".format(
                 sum(1 for item in inspection["confirmations"] if item["status"] == "pending")
             ))
+        return 0
+
+    if args.command == "confirm":
+        try:
+            result = ConfirmationService(database).answer(
+                args.task_id, args.field_key, args.value
+            )
+        except ConfirmationError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        payload = {
+            "task_id": result.task_id,
+            "field_key": result.field_key,
+            "confirmation_id": result.confirmation_id,
+            "fact_id": result.fact_id,
+            "remaining_required": result.remaining_required,
+            "task_status": result.task_status.value,
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            print("Confirmed: {0}".format(result.field_key))
+            print("Remaining required: {0}".format(result.remaining_required))
+            print("Task status: {0}".format(result.task_status.value))
         return 0
 
     if args.command != "scan":

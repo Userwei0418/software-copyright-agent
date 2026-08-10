@@ -224,6 +224,20 @@ class ScanProjectService:
             )
             running_task = unit_of_work.tasks.get(task_id)
             if extraction.confirmations:
+                confirmation_stage_id = new_id()
+                unit_of_work.stages.wait_for_user(
+                    confirmation_stage_id,
+                    task_id,
+                    "04_confirm_metadata",
+                    4,
+                    1,
+                    {
+                        "pending_fields": [
+                            item.field_key for item in extraction.confirmations
+                        ]
+                    },
+                    extracted_at,
+                )
                 self._state_machine.transition(
                     unit_of_work,
                     running_task,

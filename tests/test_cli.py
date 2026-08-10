@@ -48,3 +48,35 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 2)
             self.assertIn("does not exist", error.getvalue())
+
+    def test_confirm_command_completes_pending_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            project.mkdir()
+            (project / "README.md").write_text("# Demo\n", encoding="utf-8")
+            data_dir = root / "data"
+            scan_output = StringIO()
+            with redirect_stdout(scan_output):
+                main(["--data-dir", str(data_dir), "scan", str(project), "--json"])
+            task_id = json.loads(scan_output.getvalue())["task_id"]
+
+            with redirect_stdout(StringIO()):
+                first = main(
+                    [
+                        "--data-dir", str(data_dir), "confirm", task_id,
+                        "project.name", "正式名称", "--json",
+                    ]
+                )
+            output = StringIO()
+            with redirect_stdout(output):
+                second = main(
+                    [
+                        "--data-dir", str(data_dir), "confirm", task_id,
+                        "project.version", "V1.0", "--json",
+                    ]
+                )
+
+            self.assertEqual(first, 0)
+            self.assertEqual(second, 0)
+            self.assertEqual(json.loads(output.getvalue())["task_status"], "completed")

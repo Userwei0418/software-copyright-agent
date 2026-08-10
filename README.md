@@ -43,6 +43,16 @@ PYTHONPATH=src python3 -m software_copyright_agent \
 
 也可以在 `inspect` 后传入指定的任务 ID。
 
+回答待确认项：
+
+```bash
+PYTHONPATH=src python3 -m software_copyright_agent \
+  --data-dir .software-copyright-agent \
+  confirm TASK_ID project.version V1.0 --json
+```
+
+用户答案会生成新的确认 Evidence 和 confirmed Fact；旧候选保留为 `superseded`，不会覆盖历史。
+
 运行测试：
 
 ```bash
