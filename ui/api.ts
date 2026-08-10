@@ -101,6 +101,43 @@ export type ManualWorkspaceSnapshot = {
     manual_generate: boolean };
 };
 
+export type FormalManualDocument = {
+  id: string; job_id: string; task_id: string; version: number;
+  status: "assembled" | "qa_passed" | "qa_failed";
+  project_name: string; project_version: string; filename: string;
+  docx_relative_path: string; sha256: string; created_at: string;
+  integrity: { status: "verified" | "missing" | "mismatch"; size_bytes: number | null };
+  qa: { section_count: number; figure_count: number; screenshot_count: number;
+    warning_count: number; warnings: string[]; design_preset: string; named_override: string };
+};
+
+export type FormalManualJob = {
+  id: string; task_id: string; model_config_id: string; version: number;
+  status: string; current_step: string; progress: { completed: number; total: number; percent: number };
+  steps: Array<{ key: string; status: string; attempt: number; summary: Record<string, unknown> }>;
+};
+
+export type ManualSectionBlock = { type: "paragraph"; text: string } |
+  { type: "list"; lead: string; items: string[] } |
+  { type: "table"; title: string; headers: string[]; rows: string[][] } |
+  { type: "figure_request"; figure_key: string; title: string; purpose: string };
+
+export type FormalManualPreview = {
+  document: FormalManualDocument;
+  sections: Array<{ section_key: string; title: string; ordinal: number; status: string;
+    blocks: ManualSectionBlock[] }>;
+  figures: Array<{ figure_key: string; section_key: string; title: string; status: string }>;
+  screenshots: Array<{ screenshot_key: string; section_key: string; title: string;
+    description: Record<string, string> }>;
+};
+
+export type FormalManualGenerationResult = {
+  job: FormalManualJob; document: FormalManualDocument;
+  draft: { status: string; section_count: number; errors: unknown[] };
+  figures: { status: string; count: number; errors: unknown[] };
+  screenshots: { status: string; count: number; assessment: { status: string; reason: string } };
+};
+
 export type OverlayOperation = {
   action: "node.move" | "node.resize" | "node.style" | "node.label" | "node.hide" |
     "edge.route" | "edge.style" | "edge.label";
@@ -448,4 +485,52 @@ export async function generateManualDraft(connection: SidecarConnection, taskId:
       "Content-Type": "application/json" }, body: JSON.stringify({ model_config_id: modelConfigId }) },
   );
   return requireJson<ManualWorkspaceSnapshot>(response, "说明书 AI 草稿生成失败");
+}
+
+export async function generateFormalManual(connection: SidecarConnection, taskId: string,
+  modelConfigId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/manual-jobs/generate`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ model_config_id: modelConfigId }),
+    });
+  return requireJson<FormalManualGenerationResult>(response, "正式说明书生成失败");
+}
+
+export async function listFormalManualJobs(connection: SidecarConnection, taskId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/manual-jobs`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return (await requireJson<{ items: FormalManualJob[] }>(response, "说明书版本读取失败")).items;
+}
+
+export async function listFormalManualDocuments(connection: SidecarConnection, jobId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return (await requireJson<{ items: FormalManualDocument[] }>(response, "说明书文档读取失败")).items;
+}
+
+export async function loadFormalManualPreview(connection: SidecarConnection, jobId: string,
+  version: number) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents/${version}/preview`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return requireJson<FormalManualPreview>(response, "说明书预览读取失败");
+}
+
+export async function loadFormalManualImage(connection: SidecarConnection, jobId: string,
+  kind: "figure" | "screenshot", key: string): Promise<string> {
+  const suffix = kind === "figure" ? `figures/${encodeURIComponent(key)}.png`
+    : `screenshots/${encodeURIComponent(key)}.png`;
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/${suffix}`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  if (!response.ok) throw new Error(`说明书图片读取失败 (${response.status})`);
+  return URL.createObjectURL(await response.blob());
+}
+
+export async function exportManualDocument(jobId: string, version: number,
+  destination: string): Promise<void> {
+  await invoke("export_manual_document", { jobId, version, destination });
 }

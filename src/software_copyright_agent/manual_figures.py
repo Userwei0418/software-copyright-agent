@@ -92,7 +92,8 @@ class ManualFigureService:
                 """SELECT j.task_id, mfa.drawio_relative_path, mfa.svg_relative_path,
                 mfa.png_relative_path FROM manual_figure_artifacts mfa
                 JOIN manual_generation_jobs j ON j.id = mfa.job_id
-                WHERE mfa.job_id = ? AND mfa.figure_key = ? AND mfa.status = 'rendered'""",
+                WHERE mfa.job_id = ? AND mfa.figure_key = ?
+                AND mfa.status IN ('rendered', 'verified')""",
                 (job_id, figure_key),
             ).fetchone()
         if row is None:

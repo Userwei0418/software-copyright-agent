@@ -197,7 +197,8 @@ export function App() {
       <ManualWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId}
         onOpenDiagrams={() => setPage("diagrams")} /> : page === "assets" ?
       <AssetLibrary connection={connection} onOpen={(value) => { setTaskId(value); setPage("source"); }}
-        onPreview={(value) => { setTaskId(value); setPreviewRequested((count) => count + 1); setPage("source"); }} /> :
+        onPreview={(value) => { setTaskId(value); setPreviewRequested((count) => count + 1); setPage("source"); }}
+        onPreviewManual={(value) => { setTaskId(value); setPage("manual"); }} /> :
       page === "settings" ? <Settings connection={connection} /> : <main>
       <header className="topbar">
         <div><p className="eyebrow">DOCUMENT ASSETS</p><h1>图表资产</h1>

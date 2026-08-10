@@ -250,6 +250,37 @@ async fn export_source_document(
 }
 
 #[tauri::command]
+async fn export_manual_document(
+    job_id: String,
+    version: u32,
+    destination: String,
+    state: State<'_, SidecarState>,
+) -> Result<(), String> {
+    validate_task_id(&job_id)?;
+    if version == 0 { return Err("invalid manual document version".into()); }
+    let destination = PathBuf::from(destination);
+    if !destination.is_absolute()
+        || destination.extension().and_then(|value| value.to_str())
+            .map(|value| value.eq_ignore_ascii_case("docx")) != Some(true)
+    {
+        return Err("export destination must be an absolute .docx path".into());
+    }
+    let connection = active_sidecar(&state)?;
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/v1/manual-jobs/{}/documents/{}/download",
+            connection.base_url, job_id, version))
+        .header("X-Session-Token", connection.session_token)
+        .timeout(Duration::from_secs(30))
+        .send().await.map_err(|_| "manual document download failed")?;
+    if !response.status().is_success() {
+        return Err("manual document is unavailable or failed integrity verification".into());
+    }
+    let body = response.bytes().await.map_err(|_| "manual document body is invalid")?;
+    fs::write(&destination, body).map_err(|_| "failed to export manual document")?;
+    Ok(())
+}
+
+#[tauri::command]
 fn reveal_exported_document(path: String) -> Result<(), String> {
     let path = PathBuf::from(path);
     if !path.is_absolute() || !path.is_file()
@@ -618,6 +649,7 @@ pub fn run() {
             start_sidecar,
             reveal_source_document,
             export_source_document,
+            export_manual_document,
             reveal_exported_document,
             store_model_credential,
             delete_model_credential,

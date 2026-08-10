@@ -1,14 +1,15 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
-import { exportSourceDocument, listRecentTasks, loadSourceMaterials, RecentTask,
+import { exportManualDocument, exportSourceDocument, FormalManualDocument,
+  listFormalManualDocuments, listFormalManualJobs, listRecentTasks, loadSourceMaterials, RecentTask,
   revealExportedDocument, SidecarConnection, SourceMaterialsSnapshot } from "./api";
 
 type AssetRow = { task: RecentTask; source: SourceMaterialsSnapshot["source_document"];
-  project: SourceMaterialsSnapshot["project"] };
+  project: SourceMaterialsSnapshot["project"]; manuals: FormalManualDocument[] };
 
-export function AssetLibrary({ connection, onOpen, onPreview }: {
+export function AssetLibrary({ connection, onOpen, onPreview, onPreviewManual }: {
   connection: SidecarConnection | null; onOpen: (taskId: string) => void;
-  onPreview: (taskId: string) => void;
+  onPreview: (taskId: string) => void; onPreviewManual?: (taskId: string) => void;
 }) {
   const [rows, setRows] = useState<AssetRow[]>([]);
   const [message, setMessage] = useState("正在汇总本地产物…");
@@ -17,9 +18,13 @@ export function AssetLibrary({ connection, onOpen, onPreview }: {
     if (!connection) return;
     listRecentTasks(connection).then(async (tasks) => {
       const loaded = await Promise.all(tasks.map(async (task) => {
-        try { const snapshot = await loadSourceMaterials(connection, task.task_id);
-          return { task, source: snapshot.source_document, project: snapshot.project }; }
-        catch { return { task, source: null, project: { name: task.display_name, version: "" } }; }
+        try { const [snapshot, jobs] = await Promise.all([
+          loadSourceMaterials(connection, task.task_id), listFormalManualJobs(connection, task.task_id),
+        ]); const manuals = (await Promise.all(jobs.map((job) =>
+          listFormalManualDocuments(connection, job.id).catch(() => [])))).flat()
+            .sort((a, b) => b.created_at.localeCompare(a.created_at));
+          return { task, source: snapshot.source_document, project: snapshot.project, manuals }; }
+        catch { return { task, source: null, project: { name: task.display_name, version: "" }, manuals: [] }; }
       }));
       setRows(loaded); setMessage("");
     }).catch(() => setMessage("资产读取失败，请检查本地服务。"));
@@ -34,6 +39,16 @@ export function AssetLibrary({ connection, onOpen, onPreview }: {
       setExported((current) => ({ ...current, [row.task.task_id]: destination }));
       setMessage(`已导出到 ${destination}`); }
     catch (error) { setMessage(error instanceof Error ? error.message : "导出失败"); }
+  }
+
+  async function exportManual(manual: FormalManualDocument) {
+    const destination = await save({ title: "导出软件说明书", defaultPath: manual.filename,
+      filters: [{ name: "Word 文档", extensions: ["docx"] }] });
+    if (!destination) return;
+    try { await exportManualDocument(manual.job_id, manual.version, destination);
+      setExported((current) => ({ ...current, [`manual:${manual.id}`]: destination }));
+      setMessage(`已导出到 ${destination}`); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "说明书导出失败"); }
   }
 
   return <main className="assets-page"><header className="topbar"><div>
@@ -51,7 +66,13 @@ export function AssetLibrary({ connection, onOpen, onPreview }: {
             ? revealExportedDocument(exported[row.task.task_id]) : exportDoc(row)}>
             {exported[row.task.task_id] ? "在文件夹中显示" : "导出…"}</button></div>}
       </div>
-      <div className="asset-file pending"><b>DOCX</b><div><strong>软件说明书</strong><small>尚未生成</small></div></div>
+      <div className={`asset-file ${row.manuals[0] ? "ready" : "pending"}`}><b>DOCX</b><div>
+        <strong>软件说明书</strong><small>{row.manuals[0] ? `v${row.manuals[0].version} · ${row.manuals[0].qa.section_count} 章 · ${row.manuals.length} 个版本` : "尚未生成"}</small></div>
+        {row.manuals[0] && <div className="asset-file-actions"><button onClick={() => onPreviewManual?.(row.task.task_id)}>程序内查看</button>
+          <button onClick={() => exported[`manual:${row.manuals[0].id}`]
+            ? revealExportedDocument(exported[`manual:${row.manuals[0].id}`]) : exportManual(row.manuals[0])}>
+            {exported[`manual:${row.manuals[0].id}`] ? "在文件夹中显示" : "导出…"}</button></div>}
+      </div>
     </article>)}</div>
   </section></main>;
 }

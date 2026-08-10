@@ -7,6 +7,7 @@ import sys
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import FastAPI, Header, Request
@@ -35,6 +36,8 @@ from .manual_research import ManualResearchError, ManualResearchService
 from .manual_drafting import ManualDraftingError, ManualDraftingService
 from .manual_figures import ManualFigureError, ManualFigureService
 from .manual_screenshots import ManualScreenshotError, ManualScreenshotService
+from .manual_document import ManualDocumentError, ManualDocumentService
+from .manual_workflow import ManualWorkflowError, ManualWorkflowService
 from .diagram_plan_service import DiagramPlanError
 from .drawio_service import DrawioGenerationError
 from .storage import Database
@@ -193,6 +196,8 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     manual_drafting_service = ManualDraftingService(database, data_dir)
     manual_figure_service = ManualFigureService(database, data_dir)
     manual_screenshot_service = ManualScreenshotService(database, data_dir)
+    manual_document_service = ManualDocumentService(database, data_dir)
+    manual_workflow_service = ManualWorkflowService(database, data_dir)
     model_config_service = ModelConfigService(database)
     credential_vault = CredentialVault(database, data_dir)
     app_settings_service = AppSettingsService(database)
@@ -637,6 +642,23 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 "error": {"code": "manual_pipeline_error", "message": str(error)}
             })
 
+    @app.post("/api/v1/tasks/{task_id}/manual-jobs/generate")
+    def generate_formal_manual(
+        task_id: str,
+        payload: ManualGenerationRequest,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_workflow_service.generate(task_id, payload.model_config_id)
+        except ManualWorkflowError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_workflow_error", "message": str(error)}
+            })
+
     @app.get("/api/v1/tasks/{task_id}/manual-jobs")
     def list_manual_jobs(task_id: str,
                          token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
@@ -935,6 +957,96 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
         except ManualScreenshotError as error:
             return JSONResponse(status_code=404, content={
                 "error": {"code": "manual_screenshot_not_found", "message": str(error)}
+            })
+
+    @app.post("/api/v1/manual-jobs/{job_id}/documents")
+    def assemble_manual_document(
+        job_id: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_document_service.assemble(job_id)
+        except ManualDocumentError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_document_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/documents")
+    def list_manual_documents(
+        job_id: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return {"items": manual_document_service.list(job_id)}
+        except ManualDocumentError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_document_not_found", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/documents/{version}")
+    def get_manual_document(
+        job_id: str,
+        version: int,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_document_service.get(job_id, version)
+        except ManualDocumentError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_document_not_found", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/documents/{version}/preview")
+    def preview_manual_document(
+        job_id: str,
+        version: int,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_document_service.preview(job_id, version)
+        except ManualDocumentError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_document_not_found", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/documents/{version}/download")
+    def download_manual_document(
+        job_id: str,
+        version: int,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            item = manual_document_service.get(job_id, version)
+            return Response(
+                content=manual_document_service.read(job_id, version),
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                headers={"Content-Disposition": "attachment; filename*=UTF-8''{0}".format(
+                    quote(item["filename"])
+                )},
+            )
+        except ManualDocumentError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_document_not_found", "message": str(error)}
             })
 
     @app.get("/api/v1/tasks/{task_id}/diagram-assets")
