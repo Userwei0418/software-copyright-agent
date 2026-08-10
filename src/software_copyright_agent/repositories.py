@@ -793,3 +793,40 @@ class DiagramArtifactRepository:
              paths["architecture_svg"], paths["workflow_drawio"],
              paths["workflow_svg"], fingerprint, now),
         )
+
+
+class DiagramAssetRevisionRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def next_version(self, task_id: str, diagram_key: str) -> int:
+        row = self._connection.execute(
+            """SELECT COALESCE(MAX(version), 0) + 1 FROM diagram_asset_revisions
+            WHERE task_id = ? AND diagram_key = ?""", (task_id, diagram_key)
+        ).fetchone()
+        return int(row[0])
+
+    def latest_id(self, task_id: str, diagram_key: str):
+        row = self._connection.execute(
+            """SELECT id FROM diagram_asset_revisions
+            WHERE task_id = ? AND diagram_key = ? ORDER BY version DESC LIMIT 1""",
+            (task_id, diagram_key),
+        ).fetchone()
+        return row["id"] if row is not None else None
+
+    def add(self, revision_id: str, task_id: str, diagram_key: str,
+            base_artifact_run_id: str, parent_revision_id: str, version: int,
+            edit_source: str, semantic_fingerprint: str, operations: object,
+            conflicts: object, status: str, artifact_relative_path: str,
+            now: str) -> None:
+        self._connection.execute(
+            """INSERT INTO diagram_asset_revisions
+            (id, task_id, diagram_key, base_artifact_run_id, parent_revision_id,
+             version, edit_source, semantic_fingerprint, operations_json,
+             conflicts_json, status, artifact_relative_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (revision_id, task_id, diagram_key, base_artifact_run_id,
+             parent_revision_id, version, edit_source, semantic_fingerprint,
+             encode_json(operations), encode_json(conflicts), status,
+             artifact_relative_path, now),
+        )

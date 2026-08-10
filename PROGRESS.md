@@ -889,3 +889,18 @@
 1. 为资产工作台定义 SQLite 覆盖层 Schema、冲突检测与版本合并规则。
 2. 建立不依赖 Draw.io Desktop 的内部 SVG 导出器，保留 `.drawio` 作为兼容格式。
 3. 完成桌面纵切后，在内置画布实现拖拽、属性修改、撤销与 AI 修改操作。
+
+### 2026-08-10：图表资产非破坏覆盖层
+
+- 新增 SQLite v10 migration 和 `diagram_asset_revisions`，按任务、图表和版本保存基础图件、父修订、编辑来源、操作、冲突、状态及审计文件。
+- 定义首版覆盖操作：节点移动、缩放、样式、显示名称、隐藏，以及边路由、样式和显示名称；未知动作直接拒绝。
+- 原始语义 `label`、节点/边关系、Fact ID 与 Evidence 不被修改，显示调整写入 `visual_override` 或 `display_label`。
+- 每个操作绑定目标语义指纹；新基础图中目标缺失时报告 `target_missing`，目标语义改变时报告 `target_changed`，冲突操作不会自动应用。
+- 人工编辑与 AI 编辑共用同一安全模型，以 `edit_source=manual|ai` 区分来源；每次保存创建不可覆盖的新版本并记录任务事件。
+- 真实任务成功保存 `system_architecture` revision v1，包含节点移动和显示名称覆盖，状态为 `clean`、冲突数为 0。
+
+下一步：
+
+1. 让 Draw.io 与内部 SVG 生成器消费 `visual_override`，使保存的覆盖操作真正反映在预览与导出中。
+2. 增加 revision rebase 服务和冲突解决操作，支持接受新语义、放弃修改或重新指定目标。
+3. 再建立桌面资产工作台 API，避免 UI 直接操作 SQLite 或任务文件。

@@ -131,6 +131,8 @@ PYTHONPATH=src python3 -m software_copyright_agent \
 
 生成器使用未压缩 Draw.io XML、确定性布局和显式正交路由，导出前检查节点重叠、边端点及路径点。可用 `COPYRIGHT_AGENT_DRAWIO=/path/to/drawio` 指定 Draw.io Desktop；每次结果都在 SQLite 中版本化留痕。
 
+图表资产修改采用非破坏覆盖层：移动、缩放、样式、显示名称、隐藏和边路由操作单独版本化，原始语义节点、关系和 Evidence 不被覆盖。项目重新生成后，目标消失或语义改变的操作进入冲突状态，等待用户选择，不会静默套用。
+
 运行测试：
 
 ```bash

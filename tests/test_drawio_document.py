@@ -10,6 +10,7 @@ from pathlib import Path
 from software_copyright_agent.cli import main
 from software_copyright_agent.drawio_document import DrawioDocumentBuilder, DrawioDocumentInspector
 from software_copyright_agent.drawio_service import DrawioGenerationService
+from software_copyright_agent.diagram_asset_service import DiagramAssetService
 from software_copyright_agent.storage import Database
 
 
@@ -132,6 +133,24 @@ class DemoService:
             finally:
                 connection.close()
             self.assertEqual(row, (1, "drawio-generator-v2"))
+
+            revision = DiagramAssetService(Database(data / "app.db"), data).create_revision(
+                task_id, "system_architecture", [{
+                    "action": "node.move", "target": "module-service",
+                    "payload": {"x": 140, "y": 90},
+                }], "manual",
+            )
+            self.assertEqual(revision.status, "clean")
+            self.assertTrue(revision.artifact_path.is_file())
+            connection = sqlite3.connect(str(data / "app.db"))
+            try:
+                stored = connection.execute(
+                    """SELECT version, edit_source, status
+                    FROM diagram_asset_revisions WHERE task_id = ?""", (task_id,)
+                ).fetchone()
+            finally:
+                connection.close()
+            self.assertEqual(stored, (1, "manual", "clean"))
 
 
 if __name__ == "__main__":
