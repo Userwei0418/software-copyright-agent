@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { loadManualWorkspace, ManualWorkspaceSnapshot, runManualAction,
   SidecarConnection } from "./api";
+import { ProjectSwitcher } from "./ProjectSwitcher";
 
 type Action = "manual-plan" | "diagram-plan" | "diagram-artifacts";
-export function ManualWorkspace({ connection, taskId }: {
-  connection: SidecarConnection | null; taskId: string }) {
+export function ManualWorkspace({ connection, taskId, onTaskChange }: {
+  connection: SidecarConnection | null; taskId: string; onTaskChange: (taskId: string) => void }) {
   const [data, setData] = useState<ManualWorkspaceSnapshot | null>(null);
   const [working, setWorking] = useState<Action | null>(null);
   const [message, setMessage] = useState("");
@@ -25,7 +26,7 @@ export function ManualWorkspace({ connection, taskId }: {
   return <main className="manual-page"><header className="topbar"><div>
     <p className="eyebrow">TECHNICAL MANUAL</p><h1>说明书</h1>
     <p>先审阅章节计划和证据缺口，再准备可编辑图表与最终文档。</p></div>
-    <span className="task-chip">{taskId ? `任务 ${taskId.slice(0, 8)}…` : "未选择任务"}</span></header>
+    <ProjectSwitcher connection={connection} taskId={taskId} onChange={onTaskChange} /></header>
     {!taskId ? <section className="overview-placeholder source-empty"><span>DOC</span>
       <h2>请先选择项目</h2><p>说明书将复用项目扫描得到的事实与证据。</p></section> :
       <section className="manual-content">{message && <div className="source-notice">{message}</div>}

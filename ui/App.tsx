@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AssetRevision, connectSidecar, DiagramAsset, listRevisions, loadPreview, loadRevision,
   loadWorkspace, OverlayOperation, rollbackRevision, saveRevision, SidecarConnection,
@@ -8,6 +8,8 @@ import { InteractiveDiagram } from "./InteractiveDiagram";
 import { ProjectOverview } from "./ProjectOverview";
 import { SourceMaterials } from "./SourceMaterials";
 import { ManualWorkspace } from "./ManualWorkspace";
+import { AssetLibrary } from "./AssetLibrary";
+import { ProjectSwitcher } from "./ProjectSwitcher";
 
 const fallbackAssets: DiagramAsset[] = [
   { diagram_key: "system_architecture", title: "系统总体架构图", revision_count: 0,
@@ -30,7 +32,8 @@ export function App() {
   const [previewRevision, setPreviewRevision] = useState<AssetRevision | null>(null);
   const [undoVersion, setUndoVersion] = useState<number | null>(null);
   const [redoVersion, setRedoVersion] = useState<number | null>(null);
-  const [page, setPage] = useState<"overview" | "source" | "diagrams" | "manual">("overview");
+  const [page, setPage] = useState<"overview" | "source" | "diagrams" | "manual" | "assets">("overview");
+  const [previewRequested, setPreviewRequested] = useState(0);
   const connectionAttempt = useRef<Promise<SidecarConnection> | null>(null);
 
   async function ensureConnection(): Promise<SidecarConnection> {
@@ -73,17 +76,12 @@ export function App() {
     setSelectedNode(null);
   }, [selected]);
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!connection || !taskId.trim()) return;
+  async function switchDiagramProject(value: string) {
+    setTaskId(value); setWorkspace(null);
+    if (!connection || !value) return;
     setMessage("正在读取资产…");
-    try {
-      const result = await loadWorkspace(connection, taskId.trim());
-      setWorkspace(result);
-      setMessage(`已载入任务 ${result.task_id.slice(0, 8)}…`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "资产读取失败");
-    }
+    try { setWorkspace(await loadWorkspace(connection, value)); setMessage("项目图表资产已载入"); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "资产读取失败"); }
   }
 
   async function moveNode(key: string, x: number, y: number) {
@@ -177,6 +175,8 @@ export function App() {
           onClick={() => setPage("diagrams")}>图表资产</button>
         <button className={`nav-item ${page === "manual" ? "active" : ""}`}
           onClick={() => setPage("manual")}>说明书</button>
+        <button className={`nav-item ${page === "assets" ? "active" : ""}`}
+          onClick={() => setPage("assets")}>我的资产</button>
         <button className="nav-item" disabled>质量检查 <small>待开发</small></button>
       </nav>
       <div className="side-status"><i className={connection ? "online" : "offline"} />
@@ -186,16 +186,15 @@ export function App() {
     {page === "overview" ? <ProjectOverview connection={connection}
       ensureConnection={ensureConnection} onTaskCreated={(value) => setTaskId(value)} /> : page === "source" ?
       <SourceMaterials connection={connection} taskId={taskId}
-        onTaskCreated={setTaskId} onBackToOverview={() => setPage("overview")} /> : page === "manual" ?
-      <ManualWorkspace connection={connection} taskId={taskId} /> : <main>
+        onTaskCreated={setTaskId} onBackToOverview={() => setPage("overview")}
+        previewRequested={previewRequested} /> : page === "manual" ?
+      <ManualWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId} /> : page === "assets" ?
+      <AssetLibrary connection={connection} onOpen={(value) => { setTaskId(value); setPage("source"); }}
+        onPreview={(value) => { setTaskId(value); setPreviewRequested((count) => count + 1); setPage("source"); }} /> : <main>
       <header className="topbar">
         <div><p className="eyebrow">DOCUMENT ASSETS</p><h1>图表资产</h1>
           <p>自动生成后仍可修改，所有调整均保留版本与证据关联。</p></div>
-        <form onSubmit={submit} className="task-form">
-          <input value={taskId} onChange={(event) => setTaskId(event.target.value)}
-                 placeholder="输入任务 ID" aria-label="任务 ID" />
-          <button disabled={!connection || !taskId.trim()}>载入</button>
-        </form>
+        <ProjectSwitcher connection={connection} taskId={taskId} onChange={switchDiagramProject} />
       </header>
 
       <section className="workspace">

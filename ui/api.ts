@@ -104,6 +104,17 @@ export async function connectSidecar(): Promise<SidecarConnection> {
   return invoke<SidecarConnection>("start_sidecar");
 }
 
+async function localFetch(connection: SidecarConnection, path: string, init?: RequestInit) {
+  const execute = () => fetch(`${connection.baseUrl}${path}`, init);
+  try { return await execute(); }
+  catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    const refreshed = await connectSidecar();
+    Object.assign(connection, refreshed);
+    return execute();
+  }
+}
+
 export async function loadWorkspace(
   connection: SidecarConnection,
   taskId: string,
@@ -227,7 +238,7 @@ export async function rescanProject(
 export async function listRecentTasks(
   connection: SidecarConnection,
 ): Promise<RecentTask[]> {
-  const response = await fetch(`${connection.baseUrl}/api/v1/tasks?limit=20`, {
+  const response = await localFetch(connection, "/api/v1/tasks?limit=20", {
     headers: { "X-Session-Token": connection.sessionToken },
   });
   return (await requireJson<{ items: RecentTask[] }>(response, "最近任务读取失败")).items;
@@ -275,8 +286,8 @@ export async function answerConfirmation(
 export async function loadSourceMaterials(
   connection: SidecarConnection, taskId: string,
 ): Promise<SourceMaterialsSnapshot> {
-  const response = await fetch(
-    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials`,
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials`,
     { headers: { "X-Session-Token": connection.sessionToken } },
   );
   return requireJson(response, "源码材料读取失败");
@@ -288,18 +299,18 @@ export async function runSourceMaterialAction(
   strategy?: "standard" | "relaxed" | "maximum",
 ): Promise<SourceMaterialsSnapshot> {
   const query = action === "source-plan" && strategy ? `?strategy=${strategy}` : "";
-  const response = await fetch(
-    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/${action}${query}`,
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/${action}${query}`,
     { method: "POST", headers: { "X-Session-Token": connection.sessionToken } },
   );
   return requireJson(response, "源码材料生成失败");
 }
 
 export async function loadCodePagePreview(
-  connection: SidecarConnection, taskId: string,
+  connection: SidecarConnection, taskId: string, allPages = false,
 ): Promise<CodePagePreview> {
-  const response = await fetch(
-    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/code-preview/pages`,
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/code-preview/pages${allPages ? "?all_pages=true" : ""}`,
     { headers: { "X-Session-Token": connection.sessionToken } },
   );
   return requireJson(response, "分页内容读取失败");
@@ -307,6 +318,10 @@ export async function loadCodePagePreview(
 
 export async function revealSourceDocument(taskId: string): Promise<void> {
   await invoke("reveal_source_document", { taskId });
+}
+
+export async function exportSourceDocument(taskId: string, destination: string): Promise<void> {
+  await invoke("export_source_document", { taskId, destination });
 }
 
 export async function loadManualWorkspace(connection: SidecarConnection, taskId: string) {

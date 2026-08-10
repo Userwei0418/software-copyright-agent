@@ -2,6 +2,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::fs;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Manager, State};
@@ -61,13 +62,22 @@ async fn start_sidecar(
     app: tauri::AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<SidecarConnection, String> {
-    if let Some(session) = state
+    let existing = state
         .session
         .lock()
         .map_err(|_| "sidecar state poisoned")?
         .as_ref()
-    {
-        return Ok(session.connection.clone());
+        .map(|session| session.connection.clone());
+    if let Some(connection) = existing {
+        let healthy = reqwest::Client::new()
+            .get(format!("{}/api/v1/health", connection.base_url))
+            .header("X-Session-Token", &connection.session_token)
+            .timeout(Duration::from_secs(1))
+            .send().await.map(|response| response.status().is_success()).unwrap_or(false);
+        if healthy { return Ok(connection); }
+        if let Some(mut stale) = state.session.lock().map_err(|_| "sidecar state poisoned")?.take() {
+            if let Some(child) = stale.child.take() { let _ = child.kill(); }
+        }
     }
     let token = random_token();
     let data_dir = app
@@ -185,6 +195,48 @@ async fn reveal_source_document(
     reveal_in_file_manager(&path)
 }
 
+#[tauri::command]
+async fn export_source_document(
+    task_id: String,
+    destination: String,
+    app: tauri::AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<(), String> {
+    validate_task_id(&task_id)?;
+    let source = resolve_source_document(&task_id, &app, &state).await?;
+    let destination = PathBuf::from(destination);
+    if destination.extension().and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("docx")) != Some(true) {
+        return Err("export destination must use the .docx extension".into());
+    }
+    fs::copy(source, destination).map_err(|_| "failed to export source document")?;
+    Ok(())
+}
+
+async fn resolve_source_document(
+    task_id: &str,
+    app: &tauri::AppHandle,
+    state: &State<'_, SidecarState>,
+) -> Result<PathBuf, String> {
+    let connection = state.session.lock().map_err(|_| "sidecar state poisoned")?
+        .as_ref().map(|session| session.connection.clone())
+        .ok_or("local service is not connected")?;
+    let response = reqwest::Client::new().get(format!(
+        "{}/api/v1/tasks/{}/source-materials", connection.base_url, task_id))
+        .header("X-Session-Token", connection.session_token)
+        .timeout(Duration::from_secs(5)).send().await
+        .map_err(|_| "source document status request failed")?;
+    if !response.status().is_success() { return Err("source document status is unavailable".into()); }
+    let snapshot: SourceMaterialsSnapshot = response.json().await
+        .map_err(|_| "invalid source document status")?;
+    let document = snapshot.source_document.ok_or("source document has not been generated")?;
+    if document.integrity.status != "verified" {
+        return Err("source document integrity verification failed".into());
+    }
+    let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    verified_artifact_path(&data_dir, task_id, &document.artifact_relative_path)
+}
+
 fn validate_task_id(task_id: &str) -> Result<(), String> {
     if task_id.len() < 8
         || task_id.len() > 64
@@ -278,7 +330,8 @@ pub fn run() {
         .manage(SidecarState::default())
         .invoke_handler(tauri::generate_handler![
             start_sidecar,
-            reveal_source_document
+            reveal_source_document,
+            export_source_document
         ])
         .run(tauri::generate_context!())
         .expect("error while running desktop application");

@@ -106,8 +106,8 @@ class SourceMaterialsService:
         self._source_document.execute(task_id)
         return self.snapshot(task_id)
 
-    def preview_pages(self, task_id: str) -> dict:
-        """Return representative pages from the latest persisted pagination run."""
+    def preview_pages(self, task_id: str, all_pages: bool = False) -> dict:
+        """Return representative pages, or every page for the in-app document viewer."""
         self._database.initialize()
         with self._database.connect() as connection:
             task = connection.execute(
@@ -131,7 +131,9 @@ class SourceMaterialsService:
         pages = payload.get("pages", [])
         if not pages:
             return {"version": preview["version"], "total_pages": 0, "pages": []}
-        indexes = sorted({0, len(pages) // 2, len(pages) - 1})
+        indexes = list(range(len(pages))) if all_pages else sorted(
+            {0, len(pages) // 2, len(pages) - 1}
+        )
         sampled = []
         for index in indexes:
             page = pages[index]

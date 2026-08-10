@@ -1,19 +1,24 @@
 import { useEffect, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { CodePagePreview, loadCodePagePreview, loadSourceMaterials,
-  rescanProject, revealSourceDocument, runSourceMaterialAction, SidecarConnection,
+  exportSourceDocument, rescanProject, revealSourceDocument, runSourceMaterialAction, SidecarConnection,
   SourceMaterialsSnapshot } from "./api";
+import { ProjectSwitcher } from "./ProjectSwitcher";
 
 type Props = { connection: SidecarConnection | null; taskId: string;
-  onTaskCreated: (taskId: string) => void; onBackToOverview: () => void };
+  onTaskCreated: (taskId: string) => void; onBackToOverview: () => void;
+  previewRequested?: number };
 type Action = "source-plan" | "code-preview" | "source-docx";
 
-export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOverview }: Props) {
+export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOverview,
+  previewRequested = 0 }: Props) {
   const [snapshot, setSnapshot] = useState<SourceMaterialsSnapshot | null>(null);
   const [working, setWorking] = useState<Action | null>(null);
   const [message, setMessage] = useState("");
   const [pagePreview, setPagePreview] = useState<CodePagePreview | null>(null);
   const [activePage, setActivePage] = useState(0);
   const [strategy, setStrategy] = useState<"standard" | "relaxed" | "maximum">("standard");
+  const [documentPreview, setDocumentPreview] = useState<CodePagePreview | null>(null);
   useEffect(() => {
     setSnapshot(null);
     setPagePreview(null);
@@ -33,9 +38,31 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
       setSnapshot(await runSourceMaterialAction(connection, taskId, action,
         action === "source-plan" ? strategy : undefined));
       if (action === "code-preview") setPagePreview(null);
-      setMessage("本步已完成，结果已持久化。");
+      if (action === "source-docx") {
+        setMessage("源代码文档已生成，可以立即查看或导出。");
+        await openDocumentPreview();
+      } else setMessage("本步已完成，结果已持久化。");
     } catch (error) { setMessage(error instanceof Error ? error.message : "操作失败"); }
     finally { setWorking(null); }
+  }
+
+  async function openDocumentPreview() {
+    if (!connection || !taskId) return;
+    setMessage("正在载入文档预览…");
+    try { setDocumentPreview(await loadCodePagePreview(connection, taskId, true)); setActivePage(-1); setMessage(""); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "文档预览失败"); }
+  }
+
+  useEffect(() => { if (previewRequested && connection && taskId) openDocumentPreview(); },
+    [previewRequested]);
+
+  async function exportDocument() {
+    if (!snapshot?.source_document) return;
+    const destination = await save({ title: "导出源代码文档", defaultPath: "源代码文档.docx",
+      filters: [{ name: "Word 文档", extensions: ["docx"] }] });
+    if (!destination) return;
+    try { await exportSourceDocument(taskId, destination); setMessage(`文档已导出到 ${destination}`); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "DOCX 导出失败"); }
   }
 
   async function openPagePreview() {
@@ -68,11 +95,15 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
   return <main className="source-page">
     <header className="topbar"><div><p className="eyebrow">SOURCE MATERIALS</p><h1>源码材料</h1>
       <p>人工触发每个阶段，先预检页数和阻塞原因，再生成 DOCX。</p></div>
-      <span className="task-chip">{taskId ? `任务 ${taskId.slice(0, 8)}…` : "未选择任务"}</span></header>
+      <ProjectSwitcher connection={connection} taskId={taskId} onChange={onTaskCreated} /></header>
     {!taskId ? <section className="overview-placeholder source-empty"><span>01</span>
       <h2>请先选择项目</h2><p>到“项目概览”扫描新项目，或从最近任务恢复。</p></section> :
       <section className="source-content">
         {message && <div className={`source-notice ${working ? "working" : ""}`}>{message}</div>}
+        {snapshot?.source_document && <div className="artifact-success"><div><span>✓</span><div>
+          <strong>源代码文档已生成</strong><small>DOCX v{snapshot.source_document.version} · 可立即查看或导出到自选位置</small>
+        </div></div><div><button onClick={openDocumentPreview}>程序内查看</button>
+          <button className="primary" onClick={exportDocument}>导出…</button></div></div>}
         <div className="pipeline-grid">
           <Stage index="01" title="源码筛选计划" ready={!!snapshot?.source_plan}
             description="按业务价值分为 A/B/C 级，排除依赖、构建产物和敏感文件。"
@@ -133,6 +164,17 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
               onClick={revealDocument}>在文件管理器中显示</button></div>}
         </>}
       </section>}
+    {documentPreview && <div className="document-viewer" role="dialog" aria-modal="true">
+      <div className="document-viewer-shell"><header><div><strong>源代码文档预览</strong>
+        <small>封面 + {documentPreview.total_pages} 页代码正文</small></div><div>
+          <button onClick={exportDocument}>导出 DOCX…</button><button onClick={() => setDocumentPreview(null)}>关闭</button>
+        </div></header><div className="document-viewer-body"><aside><button className={activePage === -1 ? "active" : ""}
+          onClick={() => setActivePage(-1)}>封面</button>{documentPreview.pages.map((page, index) => <button
+          className={activePage === index ? "active" : ""} onClick={() => setActivePage(index)} key={page.page_number}>
+          第 {page.page_number} 页</button>)}</aside><section>{activePage === -1 ? <div className="document-cover">
+          <span>软件著作权登记材料</span><h2>源程序代码</h2><p>共 {documentPreview.total_pages + 1} 页</p></div> :
+          <CodePage page={documentPreview.pages[Math.max(0, activePage)]} total={documentPreview.total_pages} />}</section>
+        </div></div></div>}
   </main>;
 }
 
