@@ -5,6 +5,26 @@ import { AppSettings, deleteModelConfig, deleteModelCredential, listModelConfigs
 
 const defaults = { openai_compatible: "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com/v1", ollama: "http://127.0.0.1:11434" };
+type ProviderPreset = { id: string; label: string; name: string;
+  protocol: ModelConfig["protocol_id"]; baseUrl: string; models: string[]; hint: string };
+const providerPresets: ProviderPreset[] = [
+  { id: "senseaudio", label: "商汤 SenseAudio", name: "商汤 SenseAudio", protocol: "openai_compatible",
+    baseUrl: "https://api.senseaudio.cn/v1", models: ["senseaudio-s2", "deepseek-v4-pro",
+      "qwen3.6-27b", "kimi-k2.6", "glm-5.2", "minimax-m2.7"], hint: "自动协商 Messages、Chat Completions 或 Responses" },
+  { id: "alibaba", label: "阿里云百炼", name: "阿里云百炼", protocol: "openai_compatible",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    models: ["qwen3.7-plus", "qwen3.6-flash", "deepseek-v4-flash"], hint: "中国内地北京共享域名；专属空间或 Token Plan 请使用自定义" },
+  { id: "deepseek", label: "DeepSeek 官方", name: "DeepSeek", protocol: "openai_compatible",
+    baseUrl: "https://api.deepseek.com", models: ["deepseek-v4-pro", "deepseek-v4-flash"],
+    hint: "官方 OpenAI 兼容接口" },
+  { id: "longcat", label: "美团 LongCat", name: "美团 LongCat", protocol: "openai_compatible",
+    baseUrl: "https://api.longcat.chat/openai/v1", models: ["LongCat-2.0"],
+    hint: "LongCat 官方 OpenAI 兼容接口" },
+  { id: "kimi", label: "Kimi 开放平台", name: "Kimi", protocol: "openai_compatible",
+    baseUrl: "https://api.moonshot.cn/v1", models: ["kimi-k3"], hint: "Kimi 官方 Chat Completions 接口" },
+  { id: "custom", label: "自定义服务商", name: "", protocol: "openai_compatible",
+    baseUrl: defaults.openai_compatible, models: [], hint: "手工配置协议、请求地址和模型 ID" },
+];
 const defaultSettings: AppSettings = { manual_model_id: null, diagram_model_id: null,
   temperature: 0.3, max_output_tokens: 8192, source_strategy: "standard", auto_preview: true };
 const errorText = (error: unknown, fallback: string) => typeof error === "string"
@@ -15,13 +35,16 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   const [items, setItems] = useState<ModelConfig[]>([]);
   const [preferences, setPreferences] = useState<AppSettings>(defaultSettings);
   const [protocol, setProtocol] = useState<ModelConfig["protocol_id"]>("openai_compatible");
-  const [name, setName] = useState(""); const [baseUrl, setBaseUrl] = useState(defaults.openai_compatible);
-  const [apiKey, setApiKey] = useState(""); const [modelText, setModelText] = useState("");
+  const [name, setName] = useState(providerPresets[0].name);
+  const [baseUrl, setBaseUrl] = useState(providerPresets[0].baseUrl);
+  const [apiKey, setApiKey] = useState("");
+  const [modelText, setModelText] = useState(providerPresets[0].models.join("\n"));
   const [busy, setBusy] = useState<"detect" | "save" | "preferences" | "remove" | null>(null);
   const [message, setMessage] = useState("");
   const [testStates, setTestStates] = useState<Record<string, string>>({});
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [credentialStates, setCredentialStates] = useState<Record<string, boolean>>({});
+  const [presetId, setPresetId] = useState("senseaudio");
 
   async function refresh() {
     if (!connection) return;
@@ -39,8 +62,13 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
 
   function resetProviderForm() {
     providerId.current = crypto.randomUUID(); setEditingProviderId(null); setName("");
-    setProtocol("openai_compatible"); setBaseUrl(defaults.openai_compatible);
-    setApiKey(""); setModelText("");
+    setApiKey(""); applyPreset("senseaudio");
+  }
+
+  function applyPreset(id: string) {
+    const preset = providerPresets.find((item) => item.id === id) ?? providerPresets[providerPresets.length - 1];
+    setPresetId(preset.id); setName(preset.name); setProtocol(preset.protocol);
+    setBaseUrl(preset.baseUrl); setModelText(preset.models.join("\n"));
   }
 
   async function tryDiscover() {
@@ -101,6 +129,7 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   }, {}));
   async function editProvider(group: ModelConfig[]) {
     const first = group[0]; providerId.current = first.provider_id;
+    setPresetId("custom");
     setEditingProviderId(first.provider_id); setName(first.name); setProtocol(first.protocol_id);
     setBaseUrl(first.base_url); setApiKey(""); setModelText(group.map((item) => item.model_name).join("\n"));
     const hasKey = !first.has_credential || await hasModelCredential(first.provider_id);
@@ -139,12 +168,16 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
     <h1>设置</h1><p>一个连接可配置多个模型；API Key 经 AES-256-GCM 加密后本地保存。</p></div></header>
     <section className="settings-content"><div className="settings-provider-grid"><section className="model-form"><div>
       <h2>{editingProviderId ? "编辑模型连接" : "添加模型连接"}</h2><p>模型 ID 以换行或逗号分隔。自动获取是可选辅助，失败也能手工保存。</p></div>
+      {!editingProviderId && <label>模型厂商<select value={presetId} onChange={(event) => applyPreset(event.target.value)}>
+        {providerPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>}
       <label>连接名称<input required value={name} onChange={(event) => setName(event.target.value)}
         placeholder="例如：SenseAudio Token Plan" /></label>
-      <label>协议<select value={protocol} onChange={(event) => { const value = event.target.value as typeof protocol;
+      {(presetId === "custom" || editingProviderId) && <><label>协议<select value={protocol} onChange={(event) => { const value = event.target.value as typeof protocol;
         setProtocol(value); setBaseUrl(defaults[value]); }}><option value="openai_compatible">OpenAI 兼容</option>
         <option value="anthropic">Anthropic</option><option value="ollama">Ollama 本地</option></select></label>
-      <label>Base URL<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></label>
+      <label>Base URL<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></label></>}
+      {presetId !== "custom" && !editingProviderId && <div className="preset-summary"><strong>{baseUrl}</strong>
+        <small>{providerPresets.find((item) => item.id === presetId)?.hint}</small></div>}
       {protocol !== "ollama" && <label>API Key<input required type="password" autoComplete="new-password"
         value={apiKey} onChange={(event) => setApiKey(event.target.value)}
         placeholder={editingProviderId && credentialStates[editingProviderId] === false
