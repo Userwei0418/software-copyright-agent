@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "software-copyright-agent"
+version = "0.1.0"
+description = "Local-first software copyright material generator"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+copyright-agent = "software_copyright_agent.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

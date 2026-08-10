@@ -1,0 +1,37 @@
+# Software Copyright Agent
+
+一个完全独立于 Codex、本地优先的软件著作权材料辅助生成工具。目前处于 M1 领域内核开发阶段。
+
+## 当前可运行能力
+
+- 扫描本地项目目录。
+- 跳过常见依赖、构建、版本控制目录和敏感文件。
+- 跳过符号链接，避免越出项目根目录。
+- 为文件生成 SHA-256，并建立稳定的项目指纹。
+- 将项目、快照、任务、阶段和事件写入 SQLite。
+- 将扫描 manifest 原子写入独立任务目录。
+
+## 运行
+
+当前内核没有第三方 Python 依赖，要求 Python 3.9 或更高版本。
+
+```bash
+PYTHONPATH=src python3 -m software_copyright_agent \
+  --data-dir .software-copyright-agent \
+  scan /path/to/project --json
+```
+
+运行测试：
+
+```bash
+PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
+  python3 -m unittest discover -s tests -v
+```
+
+## 当前限制
+
+- 当前只接受本地目录，ZIP 输入尚未实现。
+- 尚未接入模型协议、代码筛选、DOCX、Draw.io 和桌面 UI。
+- 当前 CLI 是验证领域内核的纵向切片，不是最终用户界面。
+
+开发计划和每轮进度分别见 `DEVELOPMENT_PLAN.md` 与 `PROGRESS.md`。

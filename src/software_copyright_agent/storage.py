@@ -1,0 +1,119 @@
+import json
+import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+
+
+SCHEMA_VERSION = 1
+
+MIGRATION_001 = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL,
+    checksum TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_sources (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('directory', 'zip')),
+    original_path TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_opened_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_snapshots (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES project_sources(id),
+    root_fingerprint TEXT NOT NULL,
+    scanner_version TEXT NOT NULL,
+    rules_version TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    manifest_relative_path TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL REFERENCES project_sources(id),
+    snapshot_id TEXT REFERENCES project_snapshots(id),
+    status TEXT NOT NULL,
+    current_stage_key TEXT,
+    workflow_version TEXT NOT NULL,
+    quality_policy_version TEXT NOT NULL,
+    row_version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    updated_at TEXT NOT NULL,
+    failure_category TEXT,
+    safe_error_message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS task_stages (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    stage_key TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    input_fingerprint TEXT,
+    checkpoint_json TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    failure_category TEXT,
+    safe_error_message TEXT,
+    UNIQUE(task_id, stage_key, attempt)
+);
+
+CREATE TABLE IF NOT EXISTS task_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    stage_run_id TEXT REFERENCES task_stages(id),
+    event_type TEXT NOT NULL,
+    level TEXT NOT NULL,
+    message TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_events_task_id_id
+ON task_events(task_id, id);
+"""
+
+
+class Database:
+    def __init__(self, path: Path) -> None:
+        self.path = path.expanduser().resolve()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def initialize(self) -> None:
+        with self.connect() as connection:
+            connection.executescript(MIGRATION_001)
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO schema_migrations(version, applied_at, checksum)
+                VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)
+                """,
+                (SCHEMA_VERSION, "migration-001"),
+            )
+
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        connection = sqlite3.connect(str(self.path))
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA journal_mode = WAL")
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+
+def encode_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
