@@ -14,6 +14,7 @@ export type AssetRevision = {
   edit_source: "manual" | "ai";
   conflict_count: number;
   created_at: string;
+  operation_count?: number;
 };
 
 export type DiagramAsset = {
@@ -103,4 +104,37 @@ export async function saveRevision(
     },
   );
   return requireJson<AssetRevision>(response, "修订保存失败");
+}
+
+export async function listRevisions(
+  connection: SidecarConnection,
+  taskId: string,
+  diagramKey: DiagramAsset["diagram_key"],
+): Promise<AssetRevision[]> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/diagram-assets/${diagramKey}/revisions`,
+    { headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  const payload = await requireJson<{ items: AssetRevision[] }>(response, "历史版本读取失败");
+  return payload.items;
+}
+
+export async function rollbackRevision(
+  connection: SidecarConnection,
+  taskId: string,
+  diagramKey: DiagramAsset["diagram_key"],
+  version: number,
+): Promise<AssetRevision> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/diagram-assets/${diagramKey}/rollback`,
+    {
+      method: "POST",
+      headers: {
+        "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ version }),
+    },
+  );
+  return requireJson<AssetRevision>(response, "版本恢复失败");
 }

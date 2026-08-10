@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 import {
-  connectSidecar, DiagramAsset, loadPreview, loadRevision, loadWorkspace,
-  OverlayOperation, saveRevision, SidecarConnection, WorkspaceSnapshot,
+  AssetRevision, connectSidecar, DiagramAsset, listRevisions, loadPreview, loadRevision,
+  loadWorkspace, OverlayOperation, rollbackRevision, saveRevision, SidecarConnection,
+  WorkspaceSnapshot,
 } from "./api";
 import { InteractiveDiagram } from "./InteractiveDiagram";
 
@@ -21,6 +22,9 @@ export function App() {
   const [previewSvg, setPreviewSvg] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [revisions, setRevisions] = useState<AssetRevision[]>([]);
+  const [previewRevision, setPreviewRevision] = useState<AssetRevision | null>(null);
 
   useEffect(() => {
     connectSidecar().then((value) => {
@@ -31,14 +35,22 @@ export function App() {
 
   const assets = workspace?.assets ?? fallbackAssets;
   const active = assets.find((asset) => asset.diagram_key === selected) ?? assets[0];
+  const currentRevisionId = active.latest_revision?.revision_id;
+  const displayedRevisionId = previewRevision?.revision_id ?? currentRevisionId;
 
   useEffect(() => {
-    const revisionId = active.latest_revision?.revision_id;
+    const revisionId = displayedRevisionId;
     if (!connection || !revisionId) { setPreviewSvg(null); return; }
     loadPreview(connection, revisionId).then((source) => {
       setPreviewSvg(source);
     }).catch(() => setMessage("SVG 预览加载失败"));
-  }, [connection, active.latest_revision?.revision_id]);
+  }, [connection, displayedRevisionId]);
+
+  useEffect(() => {
+    setHistoryOpen(false);
+    setPreviewRevision(null);
+    setSelectedNode(null);
+  }, [selected]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -74,6 +86,42 @@ export function App() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "节点保存失败，已恢复原位置");
       throw error;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openHistory() {
+    if (!connection || !workspace) return;
+    setMessage("正在读取历史版本…");
+    try {
+      const items = await listRevisions(connection, workspace.task_id, active.diagram_key);
+      setRevisions(items);
+      setHistoryOpen(true);
+      setMessage(`已读取 ${items.length} 个修订版本`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "历史版本读取失败");
+    }
+  }
+
+  async function restoreVersion(version: number) {
+    if (!connection || !workspace) return;
+    setSaving(true);
+    setMessage(`正在恢复 revision v${version}…`);
+    try {
+      const restored = await rollbackRevision(
+        connection, workspace.task_id, active.diagram_key, version,
+      );
+      const [refreshed, items] = await Promise.all([
+        loadWorkspace(connection, workspace.task_id),
+        listRevisions(connection, workspace.task_id, active.diagram_key),
+      ]);
+      setWorkspace(refreshed);
+      setRevisions(items);
+      setPreviewRevision(null);
+      setMessage(`已从 v${version} 创建最新 revision v${restored.version}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "版本恢复失败");
     } finally {
       setSaving(false);
     }
@@ -125,20 +173,44 @@ export function App() {
         <div className="canvas-panel">
           <div className="canvas-toolbar"><div><strong>{active.title}</strong>
             <span>{active.revision_count} 个修订版本</span></div>
-            <div className="toolbar-actions"><button disabled>历史版本</button>
-              <button className="primary" disabled={!previewSvg || saving}>
-                {saving ? "正在保存…" : "拖拽编辑已开启"}
+            <div className="toolbar-actions"><button disabled={!currentRevisionId || saving}
+              onClick={openHistory}>历史版本</button>
+              <button className="primary" disabled={!previewSvg || saving || !!previewRevision}>
+                {saving ? "正在保存…" : previewRevision ? `预览 v${previewRevision.version}` : "拖拽编辑已开启"}
               </button></div>
           </div>
           <div className="canvas">
             {previewSvg ?
-              <InteractiveDiagram svg={previewSvg} disabled={saving}
+              <InteractiveDiagram svg={previewSvg} disabled={saving || !!previewRevision}
                 onMove={moveNode} onSelect={setSelectedNode} /> :
               <div className="empty-state"><div className="empty-diagram">
                 <span /><span /><span /><i /><i />
               </div><h2>准备好后在这里查看和编辑</h2>
                 <p>载入已有任务，或先完成图表语义生成。</p></div>}
           </div>
+          {historyOpen && <div className="history-drawer">
+            <div className="history-head"><div><strong>历史版本</strong>
+              <small>恢复操作会创建新版本，不覆盖历史</small></div>
+              <button onClick={() => { setHistoryOpen(false); setPreviewRevision(null); }}>×</button>
+            </div>
+            <div className="history-list">
+              {revisions.map((revision) => <div className={`history-item ${
+                displayedRevisionId === revision.revision_id ? "viewing" : ""}`}
+                key={revision.revision_id}>
+                <button className="history-preview" onClick={() => setPreviewRevision(
+                  revision.revision_id === currentRevisionId ? null : revision
+                )}>
+                  <b>v{revision.version}</b><span>{revision.edit_source === "ai" ? "AI" : "人工"}</span>
+                  <small>{revision.operation_count ?? 0} 项操作 · {
+                    revision.status === "conflicted" ? "有冲突" : "正常"}</small>
+                </button>
+                <button className="restore" disabled={revision.revision_id === currentRevisionId || saving}
+                  onClick={() => restoreVersion(revision.version)}>
+                  {revision.revision_id === currentRevisionId ? "当前" : "恢复"}
+                </button>
+              </div>)}
+            </div>
+          </div>}
           <footer><span>缩放 自适应</span><span>拖动结束后保存</span><span>证据关联开启</span></footer>
         </div>
 
