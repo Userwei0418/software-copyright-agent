@@ -33,6 +33,7 @@ from .diagram_plan_service import DiagramPlanError
 from .drawio_service import DrawioGenerationError
 from .storage import Database
 from .model_config import ModelConfigInput, ModelConfigService
+from .app_settings import AppSettingsService
 
 
 SIDECAR_PROTOCOL_VERSION = 1
@@ -104,6 +105,15 @@ class ModelConfigRequest(StrictModel):
     credential_ref: Optional[str] = Field(default=None, max_length=100)
 
 
+class AppSettingsRequest(StrictModel):
+    manual_model_id: Optional[str] = Field(default=None, max_length=64)
+    diagram_model_id: Optional[str] = Field(default=None, max_length=64)
+    temperature: float = Field(ge=0, le=2)
+    max_output_tokens: int = Field(ge=1024, le=32768)
+    source_strategy: Literal["standard", "relaxed", "maximum"]
+    auto_preview: bool
+
+
 class RequestSizeLimitMiddleware:
     def __init__(self, app, maximum_bytes: int = MAX_REQUEST_BYTES) -> None:
         self.app = app
@@ -139,6 +149,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     source_materials_service = SourceMaterialsService(database, data_dir)
     manual_workspace_service = ManualWorkspaceService(database, data_dir)
     model_config_service = ModelConfigService(database)
+    app_settings_service = AppSettingsService(database)
     api = DiagramAssetApi(service, session_token)
     app = FastAPI(title="Software Copyright Agent Sidecar", version=SIDECAR_VERSION,
                   docs_url=None, redoc_url=None)
@@ -269,6 +280,28 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 "error": {"code": "model_config_not_found", "message": str(error)}
             })
         return Response(status_code=204)
+
+    @app.get("/api/v1/settings")
+    def app_settings(token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        return app_settings_service.get()
+
+    @app.post("/api/v1/settings")
+    def save_app_settings(payload: AppSettingsRequest,
+                          token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return app_settings_service.save(payload.model_dump())
+        except ValueError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "settings_error", "message": str(error)}
+            })
 
     @app.post("/api/v1/tasks/{task_id}/rescan")
     def rescan_project(task_id: str,

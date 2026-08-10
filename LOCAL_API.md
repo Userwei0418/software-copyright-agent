@@ -47,6 +47,8 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | POST | `/api/v1/model-configs` | 新增或更新模型连接元数据；API Key 不进入此接口 |
 | POST | `/api/v1/model-configs/{config_id}/verified` | 连通性验证通过后记录验证时间 |
 | DELETE | `/api/v1/model-configs/{config_id}` | 删除模型配置元数据 |
+| GET | `/api/v1/settings` | 读取默认模型、生成参数与文档行为设置 |
+| POST | `/api/v1/settings` | 保存并校验应用通用设置 |
 | GET | `/api/v1/tasks/{task_id}/manual-workspace` | 读取说明书章节、图表计划和产物状态 |
 | POST | `/api/v1/tasks/{task_id}/manual-workspace/manual-plan` | 人工触发说明书章节与证据计划 |
 | POST | `/api/v1/tasks/{task_id}/manual-workspace/diagram-plan` | 人工触发图表语义计划 |

@@ -83,10 +83,23 @@ class SidecarFastApiTests(unittest.TestCase):
             f"/api/v1/model-configs/{config_id}/verified", headers=self.headers
         )
         self.assertIsNotNone(verified.json()["verified_at"])
+        defaults = self.client.get("/api/v1/settings", headers=self.headers)
+        self.assertEqual(defaults.json()["source_strategy"], "standard")
+        settings = self.client.post("/api/v1/settings", headers=self.headers, json={
+            "manual_model_id": config_id, "diagram_model_id": config_id,
+            "temperature": 0.2, "max_output_tokens": 16384,
+            "source_strategy": "relaxed", "auto_preview": False,
+        })
+        self.assertEqual(settings.status_code, 200)
+        self.assertEqual(settings.json()["manual_model_id"], config_id)
+        self.assertFalse(settings.json()["auto_preview"])
         deleted = self.client.delete(
             f"/api/v1/model-configs/{config_id}", headers=self.headers
         )
         self.assertEqual(deleted.status_code, 204)
+        cleared = self.client.get("/api/v1/settings", headers=self.headers).json()
+        self.assertIsNone(cleared["manual_model_id"])
+        self.assertIsNone(cleared["diagram_model_id"])
 
     def test_scan_project_returns_summary_facts_and_confirmations(self) -> None:
         project = self.data_dir / "project"

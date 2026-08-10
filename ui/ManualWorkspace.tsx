@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { loadManualWorkspace, ManualWorkspaceSnapshot, runManualAction,
-  listModelConfigs, ModelConfig, SidecarConnection } from "./api";
+  listModelConfigs, loadAppSettings, ModelConfig, SidecarConnection } from "./api";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
 type Action = "manual-plan" | "diagram-plan" | "diagram-artifacts";
@@ -12,9 +12,13 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   const [message, setMessage] = useState("");
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [modelId, setModelId] = useState("");
-  useEffect(() => { if (!connection) return; listModelConfigs(connection).then((items) => {
+  useEffect(() => { if (!connection) return; Promise.all([
+    listModelConfigs(connection), loadAppSettings(connection),
+  ]).then(([items, settings]) => {
     const verified = items.filter((item) => item.verified_at && item.enabled); setModels(verified);
-    setModelId((current) => current || verified[0]?.id || "");
+    const preferred = verified.some((item) => item.id === settings.manual_model_id)
+      ? settings.manual_model_id : verified[0]?.id;
+    setModelId(preferred || "");
   }).catch(() => setModels([])); }, [connection]);
   useEffect(() => {
     setData(null);

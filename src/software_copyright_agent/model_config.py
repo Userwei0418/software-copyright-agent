@@ -85,6 +85,11 @@ class ModelConfigService:
                 "DELETE FROM model_configs WHERE id = ?", (config_id,)
             ).rowcount:
                 raise ValueError("Model config not found")
+            connection.execute(
+                """UPDATE app_settings SET value_json = 'null', updated_at = ?
+                WHERE key IN ('manual_model_id', 'diagram_model_id') AND value_json = ?""",
+                (utc_now(), json.dumps(config_id, ensure_ascii=False, separators=(",", ":"))),
+            )
 
     @staticmethod
     def _public(row) -> dict:

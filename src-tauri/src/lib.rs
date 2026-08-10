@@ -303,7 +303,8 @@ async fn probe_model_config(request: ModelProbeRequest) -> Result<ModelProbeResu
         item.get(if request.protocol_id == "ollama" { "name" } else { "id" })
             .and_then(|value| value.as_str()).map(str::to_owned)
     }).take(100).collect();
-    let model_found = discovered_models.iter().any(|value| value == &request.model_name);
+    let model_found = request.model_name.is_empty()
+        || discovered_models.iter().any(|value| value == &request.model_name);
     Ok(ModelProbeResult { available: true, model_found, discovered_models })
 }
 

@@ -53,6 +53,9 @@ export type ModelConfig = { id: string; name: string;
   protocol_id: "openai_compatible" | "anthropic" | "ollama"; base_url: string;
   model_name: string; has_credential: boolean; enabled: boolean;
   verified_at: string | null; created_at: string; updated_at: string };
+export type AppSettings = { manual_model_id: string | null; diagram_model_id: string | null;
+  temperature: number; max_output_tokens: number;
+  source_strategy: "standard" | "relaxed" | "maximum"; auto_preview: boolean };
 export type Inspection = ProjectScanResult["inspection"];
 export type SourceMaterialsSnapshot = {
   task: { id: string; status: string; current_stage_key: string; safe_error_message?: string | null };
@@ -375,6 +378,20 @@ export async function probeModelConfig(config: { configId: string; protocolId: s
   baseUrl: string; modelName: string }) {
   return invoke<{ available: boolean; modelFound: boolean; discoveredModels: string[] }>(
     "probe_model_config", { request: config });
+}
+
+export async function loadAppSettings(connection: SidecarConnection): Promise<AppSettings> {
+  const response = await localFetch(connection, "/api/v1/settings", {
+    headers: { "X-Session-Token": connection.sessionToken },
+  });
+  return requireJson(response, "应用设置读取失败");
+}
+
+export async function saveAppSettings(connection: SidecarConnection, settings: AppSettings) {
+  const response = await localFetch(connection, "/api/v1/settings", { method: "POST",
+    headers: { "X-Session-Token": connection.sessionToken, "Content-Type": "application/json" },
+    body: JSON.stringify(settings) });
+  return requireJson<AppSettings>(response, "应用设置保存失败");
 }
 
 export async function loadManualWorkspace(connection: SidecarConnection, taskId: string) {

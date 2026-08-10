@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { CodePagePreview, loadCodePagePreview, loadSourceMaterials,
-  exportSourceDocument, rescanProject, revealExportedDocument, runSourceMaterialAction, SidecarConnection,
+  exportSourceDocument, loadAppSettings, rescanProject, revealExportedDocument,
+  runSourceMaterialAction, SidecarConnection,
   SourceMaterialsSnapshot } from "./api";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
@@ -20,6 +21,10 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
   const [strategy, setStrategy] = useState<"standard" | "relaxed" | "maximum">("standard");
   const [documentPreview, setDocumentPreview] = useState<CodePagePreview | null>(null);
   const [exportedPath, setExportedPath] = useState<string | null>(null);
+  const [autoPreview, setAutoPreview] = useState(true);
+  useEffect(() => { if (connection) loadAppSettings(connection).then((settings) => {
+    setStrategy(settings.source_strategy); setAutoPreview(settings.auto_preview);
+  }).catch(() => undefined); }, [connection]);
   useEffect(() => {
     setSnapshot(null);
     setPagePreview(null);
@@ -42,7 +47,7 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
       if (action === "code-preview") setPagePreview(null);
       if (action === "source-docx") {
         setMessage("源代码文档已生成，可以立即查看或导出。");
-        await openDocumentPreview();
+        if (autoPreview) await openDocumentPreview();
       } else setMessage("本步已完成，结果已持久化。");
     } catch (error) { setMessage(error instanceof Error ? error.message : "操作失败"); }
     finally { setWorking(null); }
