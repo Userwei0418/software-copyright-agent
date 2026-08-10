@@ -282,6 +282,18 @@ fn delete_model_credential(config_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn has_model_credential(config_id: String) -> Result<bool, String> {
+    validate_config_id(&config_id)?;
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &config_id)
+        .map_err(|_| "无法连接系统安全存储")?;
+    match entry.get_password() {
+        Ok(value) => Ok(!value.is_empty()),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(_) => Err("无法读取系统安全存储中的 API Key".into()),
+    }
+}
+
+#[tauri::command]
 async fn probe_model_config(request: ModelProbeRequest) -> Result<ModelProbeResult, String> {
     validate_config_id(&request.config_id)?;
     let base = normalize_model_base_url(&request.protocol_id, &request.base_url)?;
@@ -351,6 +363,11 @@ async fn test_model_connection(request: ModelProbeRequest) -> Result<ModelConnec
         .map_err(|_| "无法创建模型连接")?;
     let started = std::time::Instant::now();
     let response = match request.protocol_id.as_str() {
+        "openai_compatible" if is_senseaudio(&base) => client.post(format!("{base}/messages"))
+            .bearer_auth(credential.as_ref().unwrap()).json(&serde_json::json!({
+                "model": request.model_name, "messages": [{"role": "user", "content": "仅回复 OK"}],
+                "max_tokens": 2
+            })).send().await,
         "openai_compatible" => client.post(format!("{base}/chat/completions"))
             .bearer_auth(credential.as_ref().unwrap()).json(&serde_json::json!({
                 "model": request.model_name, "messages": [{"role": "user", "content": "仅回复 OK"}],
@@ -412,7 +429,8 @@ async fn validate_catalog_model(
         return Err("所选模型不在 SenseAudio 当前官方模型目录中".into());
     }
     let key = credential.ok_or("未找到该模型的 API Key")?;
-    let endpoint = format!("{base}/chat/completions");
+    let endpoint = if is_senseaudio(&base) { format!("{base}/messages") }
+        else { format!("{base}/chat/completions") };
     let response = client.post(&endpoint).bearer_auth(key).json(&serde_json::json!({
         "model": request.model_name,
         "messages": [{"role": "user", "content": "仅回复 OK"}],
@@ -558,6 +576,7 @@ pub fn run() {
             reveal_exported_document,
             store_model_credential,
             delete_model_credential,
+            has_model_credential,
             probe_model_config,
             test_model_connection
         ])

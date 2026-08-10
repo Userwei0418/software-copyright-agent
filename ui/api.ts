@@ -378,6 +378,10 @@ export async function deleteModelCredential(id: string) {
   await invoke("delete_model_credential", { configId: id });
 }
 
+export async function hasModelCredential(id: string) {
+  return invoke<boolean>("has_model_credential", { configId: id });
+}
+
 export async function probeModelConfig(config: { configId: string; protocolId: string;
   baseUrl: string; modelName: string }) {
   return invoke<{ available: boolean; modelFound: boolean; discoveredModels: string[];

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AppSettings, deleteModelConfig, deleteModelCredential, listModelConfigs,
-  loadAppSettings, ModelConfig, probeModelConfig, saveAppSettings, saveModelConfig,
+  hasModelCredential, loadAppSettings, ModelConfig, probeModelConfig, saveAppSettings, saveModelConfig,
   SidecarConnection, storeModelCredential, testModelConnection } from "./api";
 
 const defaults = { openai_compatible: "https://api.openai.com/v1",
@@ -21,11 +21,15 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   const [message, setMessage] = useState("");
   const [testStates, setTestStates] = useState<Record<string, string>>({});
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
+  const [credentialStates, setCredentialStates] = useState<Record<string, boolean>>({});
 
   async function refresh() {
     if (!connection) return;
     const [configs, settings] = await Promise.all([listModelConfigs(connection), loadAppSettings(connection)]);
     setItems(configs); setPreferences(settings);
+    const providerIds = [...new Set(configs.filter((item) => item.has_credential).map((item) => item.provider_id))];
+    const checks = await Promise.all(providerIds.map(async (id) => [id, await hasModelCredential(id)] as const));
+    setCredentialStates(Object.fromEntries(checks));
   }
   useEffect(() => { refresh().catch(() => setMessage("设置读取失败")); }, [connection]);
 
@@ -60,7 +64,7 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
     const models = enteredModels();
     const existing = editingProviderId
       ? items.filter((item) => item.provider_id === editingProviderId) : [];
-    const hasStoredCredential = existing.some((item) => item.has_credential);
+    const hasStoredCredential = !!editingProviderId && credentialStates[editingProviderId] === true;
     if (!connection || !name.trim() || !baseUrl.trim() || !models.length
       || (protocol !== "ollama" && !apiKey.trim() && !hasStoredCredential)) {
       setMessage("请填写连接名称、Base URL、API Key，并至少添加一个模型 ID。"); return;
@@ -95,11 +99,14 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   const providers = Object.values(items.reduce<Record<string, ModelConfig[]>>((result, item) => {
     (result[item.provider_id] ||= []).push(item); return result;
   }, {}));
-  function editProvider(group: ModelConfig[]) {
+  async function editProvider(group: ModelConfig[]) {
     const first = group[0]; providerId.current = first.provider_id;
     setEditingProviderId(first.provider_id); setName(first.name); setProtocol(first.protocol_id);
     setBaseUrl(first.base_url); setApiKey(""); setModelText(group.map((item) => item.model_name).join("\n"));
-    setMessage("正在编辑连接。API Key 留空会保留原值，填写新 Key 才会覆盖。");
+    const hasKey = !first.has_credential || await hasModelCredential(first.provider_id);
+    setCredentialStates((current) => ({ ...current, [first.provider_id]: hasKey }));
+    setMessage(hasKey ? "正在编辑连接。API Key 留空会保留原值，填写新 Key 才会覆盖。"
+      : "系统安全存储中未找到这个连接的 API Key，请重新填写后保存。");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   async function removeProvider(group: ModelConfig[]) {
@@ -137,7 +144,8 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
       <label>Base URL<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></label>
       {protocol !== "ollama" && <label>API Key<input required type="password" autoComplete="new-password"
         value={apiKey} onChange={(event) => setApiKey(event.target.value)}
-        placeholder={editingProviderId ? "留空保留现有 API Key" : "不会写入 SQLite"} /></label>}
+        placeholder={editingProviderId && credentialStates[editingProviderId] === false
+          ? "API Key 已缺失，请重新输入" : editingProviderId ? "留空保留现有 API Key" : "不会写入 SQLite"} /></label>}
       <label>模型 ID（每行一个）<textarea rows={6} value={modelText}
         onChange={(event) => setModelText(event.target.value)}
         placeholder={"senseaudio-s2\ndeepseek-v4-pro\nqwen3.6-27b"} /></label>
@@ -150,7 +158,8 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
     </section>
     <div className="model-list"><div className="section-title"><span>已配置连接</span><em>{providers.length}</em></div>
       {providers.length ? providers.map((group) => <article className="provider-card" key={group[0].provider_id}>
-        <div className="provider-heading"><span className="verified">已配置</span><div><strong>{group[0].name}</strong>
+        <div className="provider-heading"><span className={group[0].has_credential && credentialStates[group[0].provider_id] === false ? "credential-missing" : "verified"}>
+          {group[0].has_credential && credentialStates[group[0].provider_id] === false ? "缺少 Key" : "已配置"}</span><div><strong>{group[0].name}</strong>
           <small>{group[0].protocol_id} · {group.length} 个模型</small><code>{group[0].base_url}</code></div>
           <div className="provider-actions"><button disabled={!!busy} onClick={() => editProvider(group)}>编辑</button>
             <button className="danger" disabled={!!busy} onClick={() => removeProvider(group)}>删除</button></div></div>
