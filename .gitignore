@@ -11,6 +11,8 @@ node_modules/
 *.tsbuildinfo
 src-tauri/target/
 src-tauri/gen/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
 .DS_Store
 *.db
 *.db-shm

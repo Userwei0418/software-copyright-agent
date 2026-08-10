@@ -160,6 +160,15 @@ pnpm dev
 
 生产前端可用 `pnpm build` 构建；在离线环境中也可直接运行 `./node_modules/.bin/tsc -b && ./node_modules/.bin/vite build`。Tauri 开发运行还需要 Rust 工具链，并需要先把 Python sidecar 构建为 `src-tauri/binaries/copyright-agent-sidecar-<target-triple>`。
 
+构建当前平台的 sidecar external binary：
+
+```bash
+python3 -m pip install -e '.[packaging]'
+python3 scripts/build_sidecar.py
+```
+
+脚本优先读取 `rustc -vV` 的 host triple；未安装 Rust 时会根据受支持的平台和 CPU 推断。产物严格使用 Tauri external binary 命名，并生成独立 SHA-256 manifest。跨平台发行应分别在对应操作系统构建，不能在单一机器上伪造其他平台可执行文件。
+
 ## 当前限制
 
 - 尚未接入模型协议、说明书正文生成和桌面画布编辑；资产工作台首屏已经接入 sidecar 的工作台快照与 SVG 预览接口。

@@ -985,3 +985,20 @@
 1. 增加 PyInstaller sidecar 构建脚本，按 macOS、Windows 和 Linux target triple 输出 Tauri external binary。
 2. 安装或在 CI 配置 Rust 工具链，执行 `cargo check` 与 Tauri 桌面启动验收。
 3. 接入画布拖拽与 `node.move` 保存，增加撤销、重做和 revision 历史切换。
+
+### 2026-08-10：sidecar 跨平台构建与冻结产物验收
+
+- 新增 `packaging` 可选依赖组和 PyInstaller one-file 构建脚本，不把打包工具混入最终运行依赖。
+- 构建脚本优先读取 Rust host target triple；无 Rust 时仅对明确支持的 CPU/操作系统组合进行安全推断，未知架构直接拒绝。
+- 产物严格采用 Tauri external binary 约定：`copyright-agent-sidecar-<target-triple>[.exe]`，同时生成包含 target、大小和 SHA-256 的 manifest。
+- PyInstaller 缓存、work、spec 和 dist 全部使用临时目录，显式注入项目 `src`，不依赖 editable install 或用户目录写权限。
+- 新增 macOS、Windows 文件名以及 Apple Silicon 自动探测测试；全量测试从 61 项增加到 64 项并全部通过。
+- Apple Silicon 实际生成 `copyright-agent-sidecar-aarch64-apple-darwin`，大小 21,552,720 字节，SHA-256 为 `6981a7f164adc5cccff584a5e8d5fa7b86a8a27181f8b8540872ae362c90d670`。
+- 冻结可执行文件真实启动成功，握手端口为随机本地端口，认证健康检查返回版本 `0.1.0`、协议版本 1；进程可被正常终止。
+- 前端生产构建继续通过，主 JS gzip 约 63 KiB。生成的二进制与 manifest 默认忽略，不把单平台构建产物提交到源码仓库。
+
+下一步：
+
+1. 配置 Rust/Tauri 编译环境并执行 `cargo check`，修复可能的 Rust API 或配置问题。
+2. 使用本机 external binary 完成 Tauri 应用真实启动、sidecar 生命周期和首屏连接验收。
+3. 接入画布拖拽与 `node.move` 保存，增加撤销、重做和 revision 历史切换。
