@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -66,6 +67,12 @@ def sha256(path: Path) -> str:
 def build(target_triple: str, output_dir: Path) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     final_path = output_dir / artifact_name(target_triple)
+    docx_spec = importlib.util.find_spec("docx")
+    if docx_spec is None or docx_spec.origin is None:
+        raise RuntimeError("python-docx is required to build the sidecar")
+    docx_parts = Path(docx_spec.origin).resolve().parent / "parts"
+    if not docx_parts.is_dir():
+        raise RuntimeError(f"python-docx parts directory not found: {docx_parts}")
     with tempfile.TemporaryDirectory(prefix="copyright-agent-sidecar-") as temporary:
         temporary_path = Path(temporary)
         command = [
@@ -85,6 +92,13 @@ def build(target_triple: str, output_dir: Path) -> dict[str, object]:
             str(temporary_path / "spec"),
             "--collect-data",
             "software_copyright_agent",
+            "--collect-data",
+            "docx",
+            # python-docx resolves template paths through ``docx/parts/..``.
+            # PyInstaller otherwise keeps Python modules in its in-memory archive,
+            # so the intermediate directory is absent in one-file builds.
+            "--add-data",
+            f"{docx_parts}{os.pathsep}docx/parts",
             str(ENTRY_POINT),
         ]
         environment = os.environ.copy()

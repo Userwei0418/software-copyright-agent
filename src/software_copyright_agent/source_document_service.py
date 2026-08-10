@@ -45,7 +45,7 @@ class SourceDocumentService:
         self._database.initialize()
         with self._database.connect() as connection:
             task = connection.execute(
-                "SELECT status FROM tasks WHERE id = ?", (task_id,)
+                "SELECT status, failure_category FROM tasks WHERE id = ?", (task_id,)
             ).fetchone()
             preview = connection.execute(
                 """SELECT id, artifact_relative_path, summary_json
@@ -55,10 +55,14 @@ class SourceDocumentService:
             ).fetchone()
             if task is None or preview is None:
                 raise SourceDocumentError("Code pagination preview not found for task")
+            retryable_failure = (
+                task["status"] == TaskStatus.FAILED.value
+                and task["failure_category"] == "source_document_error"
+            )
             if task["status"] not in {
                 TaskStatus.COMPLETED.value,
                 TaskStatus.COMPLETED_WITH_WARNINGS.value,
-            }:
+            } and not retryable_failure:
                 raise SourceDocumentError(
                     "Task must be completed before source document generation"
                 )
@@ -123,7 +127,9 @@ class SourceDocumentService:
         except Exception as error:
             temporary_path.unlink(missing_ok=True)
             self._record_failure(task_id, stage_id, error)
-            raise
+            raise SourceDocumentError(
+                "源代码 DOCX 生成失败，任务已保留，可修复后重试"
+            ) from error
 
         finished_at = utc_now()
         run_id = new_id()

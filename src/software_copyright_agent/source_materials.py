@@ -73,12 +73,16 @@ class SourceMaterialsService:
         preview_sufficient = bool(
             preview_payload and preview_payload["summary"].get("sufficient")
         )
+        retryable_document = (
+            status == "failed" and task["failure_category"] == "source_document_error"
+        )
         actions = {
             "source_plan": status in {"completed", "completed_with_warnings"},
             "code_preview": plan_payload is not None
             and status in {"completed", "completed_with_warnings"},
             "source_docx": preview_sufficient
-            and status in {"completed", "completed_with_warnings"},
+            and (status in {"completed", "completed_with_warnings"}
+                 or retryable_document),
         }
         blockers = self._blockers(status, plan_payload, preview_payload)
         return {
