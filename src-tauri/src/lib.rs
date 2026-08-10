@@ -73,7 +73,18 @@ struct ModelProbeResult {
     available: bool,
     model_found: bool,
     discovered_models: Vec<String>,
+    normalized_base_url: String,
+    discovery_source: String,
+    warning: Option<String>,
 }
+
+const SENSEAUDIO_MODELS: &[&str] = &[
+    "senseaudio-s2", "senseaudio-s2-flash", "senseaudio-s2-lite", "senseaudio-s1",
+    "senseaudio-vl-1.0-260319", "senseaudio-vl-lite-1.0-260319",
+    "sensenova-6.7-flash-lite", "deepseek-v4-flash-0731", "deepseek-v4-flash",
+    "deepseek-v4-pro", "qwen3.6-27b", "qwen3.6-35b-a3b", "kimi-k2.6",
+    "glm-5.1", "glm-5.2", "minimax-m2.7", "doubao-seed-2-0-pro-260215",
+];
 
 #[tauri::command]
 async fn start_sidecar(
@@ -266,7 +277,7 @@ fn delete_model_credential(config_id: String) -> Result<(), String> {
 #[tauri::command]
 async fn probe_model_config(request: ModelProbeRequest) -> Result<ModelProbeResult, String> {
     validate_config_id(&request.config_id)?;
-    let base = request.base_url.trim_end_matches('/');
+    let base = normalize_model_base_url(&request.protocol_id, &request.base_url)?;
     if !base.starts_with("https://") && !base.starts_with("http://127.0.0.1")
         && !base.starts_with("http://localhost") {
         return Err("远程模型地址必须使用 HTTPS；本机 Ollama 可使用 HTTP".into());
@@ -284,15 +295,21 @@ async fn probe_model_config(request: ModelProbeRequest) -> Result<ModelProbeResu
     } else { None };
     let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()
         .map_err(|_| "无法创建模型连接")?;
-    let mut call = client.get(url);
+    let mut call = client.get(&url);
     if let Some(key) = credential.as_ref() {
         call = if request.protocol_id == "anthropic" {
             call.header("x-api-key", key).header("anthropic-version", "2023-06-01")
         } else { call.bearer_auth(key) };
     }
-    let response = call.send().await.map_err(|_| "模型服务连接失败")?;
+    let response = call.send().await.map_err(|error| format!("模型服务连接失败：{error}"))?;
     if !response.status().is_success() {
-        return Err(format!("模型服务验证失败（HTTP {}）", response.status().as_u16()));
+        let status = response.status().as_u16();
+        if request.protocol_id == "openai_compatible" && is_senseaudio(&base)
+            && matches!(status, 404 | 405) {
+            let discovered_models = SENSEAUDIO_MODELS.iter().map(|value| (*value).to_owned()).collect();
+            return validate_catalog_model(request, base, credential, client, discovered_models).await;
+        }
+        return Err(format!("模型列表请求失败（HTTP {status}，请求地址：{url}）"));
     }
     let payload: serde_json::Value = response.json().await
         .map_err(|_| "模型服务返回了无法识别的数据")?;
@@ -305,7 +322,57 @@ async fn probe_model_config(request: ModelProbeRequest) -> Result<ModelProbeResu
     }).take(100).collect();
     let model_found = request.model_name.is_empty()
         || discovered_models.iter().any(|value| value == &request.model_name);
-    Ok(ModelProbeResult { available: true, model_found, discovered_models })
+    Ok(ModelProbeResult { available: true, model_found, discovered_models,
+        normalized_base_url: base, discovery_source: "token_api".into(), warning: None })
+}
+
+fn normalize_model_base_url(protocol: &str, raw: &str) -> Result<String, String> {
+    let mut base = raw.trim().trim_end_matches('/').to_owned();
+    let suffixes: &[&str] = match protocol {
+        "openai_compatible" => &["/chat/completions", "/responses"],
+        "anthropic" => &["/messages"],
+        _ => &[],
+    };
+    for suffix in suffixes {
+        if base.ends_with(suffix) { base.truncate(base.len() - suffix.len()); break; }
+    }
+    if base.is_empty() { return Err("Base URL 不能为空".into()); }
+    Ok(base.trim_end_matches('/').to_owned())
+}
+
+fn is_senseaudio(base: &str) -> bool {
+    reqwest::Url::parse(base).ok().and_then(|url| url.host_str().map(str::to_owned))
+        .map(|host| host == "api.senseaudio.cn").unwrap_or(false)
+}
+
+async fn validate_catalog_model(
+    request: ModelProbeRequest, base: String, credential: Option<String>,
+    client: reqwest::Client, discovered_models: Vec<String>,
+) -> Result<ModelProbeResult, String> {
+    let warning = "该服务未提供模型列表接口；模型来自 SenseAudio 官方目录，保存时会发送极小请求验证当前 Token 权限。";
+    if request.model_name.is_empty() {
+        return Ok(ModelProbeResult { available: true, model_found: true, discovered_models,
+            normalized_base_url: base, discovery_source: "provider_catalog".into(),
+            warning: Some(warning.into()) });
+    }
+    if !discovered_models.iter().any(|value| value == &request.model_name) {
+        return Err("所选模型不在 SenseAudio 当前官方模型目录中".into());
+    }
+    let key = credential.ok_or("未找到该模型的 API Key")?;
+    let endpoint = format!("{base}/chat/completions");
+    let response = client.post(&endpoint).bearer_auth(key).json(&serde_json::json!({
+        "model": request.model_name,
+        "messages": [{"role": "user", "content": "仅回复 OK"}],
+        "max_tokens": 1,
+        "temperature": 0
+    })).send().await.map_err(|error| format!("模型权限验证连接失败：{error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("所选模型权限验证失败（HTTP {}，请求地址：{endpoint}）",
+            response.status().as_u16()));
+    }
+    Ok(ModelProbeResult { available: true, model_found: true, discovered_models,
+        normalized_base_url: base, discovery_source: "provider_catalog_verified".into(),
+        warning: Some(warning.into()) })
 }
 
 fn validate_config_id(value: &str) -> Result<(), String> {
@@ -487,5 +554,18 @@ mod tests {
         assert!(validate_task_id("3bb5b0f8-5f18-4bc8-9790-174a823e15b4").is_ok());
         assert!(validate_task_id("../tasks/other").is_err());
         assert!(validate_task_id("task/other").is_err());
+    }
+
+    #[test]
+    fn openai_chat_endpoint_is_normalized_to_api_root() {
+        assert_eq!(normalize_model_base_url("openai_compatible",
+            "https://api.senseaudio.cn/v1/chat/completions/").unwrap(),
+            "https://api.senseaudio.cn/v1");
+    }
+
+    #[test]
+    fn senseaudio_detection_requires_exact_official_host() {
+        assert!(is_senseaudio("https://api.senseaudio.cn/v1"));
+        assert!(!is_senseaudio("https://api.senseaudio.cn.example.com/v1"));
     }
 }

@@ -36,12 +36,13 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
       if (protocol !== "ollama") await storeModelCredential(draftId.current, apiKey);
       const result = await probeModelConfig({ configId: draftId.current, protocolId: protocol,
         baseUrl, modelName: "" });
+      setBaseUrl(result.normalizedBaseUrl);
       setModels(result.discoveredModels); setSelectedModel(result.discoveredModels[0] ?? "");
-      setMessage(result.discoveredModels.length
+      setMessage(result.warning ?? (result.discoveredModels.length
         ? `检测到 ${result.discoveredModels.length} 个当前 Token 可访问的模型。`
-        : "服务已连接，但没有返回可用模型；请检查 Token 套餐权限。");
+        : "服务已连接，但没有返回可用模型；请检查 Token 套餐权限。"));
     } catch (error) { setModels([]); setSelectedModel("");
-      setMessage(error instanceof Error ? error.message : "模型检测失败");
+      setMessage(typeof error === "string" ? error : error instanceof Error ? error.message : "模型检测失败");
     } finally { setBusy(null); }
   }
 
@@ -50,12 +51,15 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
     setBusy("save"); setMessage("正在保存已验证模型…");
     try {
       const id = draftId.current;
+      const verification = await probeModelConfig({ configId: id, protocolId: protocol,
+        baseUrl, modelName: selectedModel });
+      if (!verification.modelFound) throw new Error("当前 Token 无权使用所选模型");
       await saveModelConfig(connection, { id, name, protocol_id: protocol, base_url: baseUrl,
         model_name: selectedModel, credential_ref: protocol === "ollama" ? null : id });
       await markModelVerified(connection, id);
       draftId.current = crypto.randomUUID(); setName(""); setApiKey(""); setModels([]); setSelectedModel("");
       await refresh(); setMessage("模型已保存，可在说明书页面选择。");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "模型保存失败"); }
+    } catch (error) { setMessage(typeof error === "string" ? error : error instanceof Error ? error.message : "模型保存失败"); }
     finally { setBusy(null); }
   }
 

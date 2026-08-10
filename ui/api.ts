@@ -376,7 +376,8 @@ export async function storeModelCredential(id: string, apiKey: string) {
 
 export async function probeModelConfig(config: { configId: string; protocolId: string;
   baseUrl: string; modelName: string }) {
-  return invoke<{ available: boolean; modelFound: boolean; discoveredModels: string[] }>(
+  return invoke<{ available: boolean; modelFound: boolean; discoveredModels: string[];
+    normalizedBaseUrl: string; discoverySource: string; warning: string | null }>(
     "probe_model_config", { request: config });
 }
 
