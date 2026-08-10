@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from .confirmation import ConfirmationError, ConfirmationService
+from .diagram_plan_service import DiagramPlanError, DiagramPlanService
 from .code_preview import CodePreviewError
 from .code_preview_service import CodePreviewService
 from .ingestion import IngestionError
@@ -78,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     manual_plan_parser.add_argument("task_id", help="Completed task ID")
     manual_plan_parser.add_argument("--json", action="store_true", help="Print JSON output")
+    diagram_plan_parser = subparsers.add_parser(
+        "diagram-plan", help="Build evidence-linked architecture and workflow semantics"
+    )
+    diagram_plan_parser.add_argument("task_id", help="Task ID with a manual plan")
+    diagram_plan_parser.add_argument("--json", action="store_true", help="Print JSON output")
     return parser
 
 
@@ -253,6 +259,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print("Manual plan: v{0}".format(persisted.version))
             print("Sections: {0}".format(len(persisted.plan.sections)))
             print("Needs evidence: {0}".format(persisted.plan.needs_evidence_sections))
+            print("Artifact: {0}".format(persisted.artifact_path))
+        return 0
+
+    if args.command == "diagram-plan":
+        try:
+            persisted = DiagramPlanService(database, data_dir).execute(args.task_id)
+        except DiagramPlanError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        payload = {
+            "task_id": persisted.task_id, "run_id": persisted.run_id,
+            "version": persisted.version, "artifact_path": str(persisted.artifact_path),
+            "diagram_count": len(persisted.plan.diagrams),
+            "ready_diagrams": persisted.plan.ready_diagrams,
+            "needs_evidence_diagrams": persisted.plan.needs_evidence_diagrams,
+            "node_count": sum(len(item.nodes) for item in persisted.plan.diagrams),
+            "edge_count": sum(len(item.edges) for item in persisted.plan.diagrams),
+            "validation_passed": persisted.plan.validation["passed"],
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            print("Diagram plan: v{0}".format(persisted.version))
+            print("Ready diagrams: {0}/{1}".format(
+                persisted.plan.ready_diagrams, len(persisted.plan.diagrams)
+            ))
             print("Artifact: {0}".format(persisted.artifact_path))
         return 0
 

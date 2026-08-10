@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 from collections import Counter
@@ -239,10 +240,14 @@ class DeterministicFactExtractor:
         errors = []
         config_keys = []
         entrypoints = []
+        transitions = []
+        transaction_mechanisms = []
+        recovery_mechanisms = []
         refs = {
             "storage": [], "tables": [], "interfaces": [], "contracts": [],
             "errors": [], "lifecycles": [], "deployment": [], "config": [],
             "entrypoints": [],
+            "transitions": [], "transactions": [], "recovery": [],
         }
         total_bytes = 0
         selected_files = 0
@@ -370,6 +375,47 @@ class DeterministicFactExtractor:
                 ))
                 refs["entrypoints"].append(ref)
 
+            if PurePosixPath(item.relative_path).suffix.lower() == ".py":
+                transition_matches = self._allowed_transition_matches(text)
+                if transition_matches:
+                    transitions.extend(
+                        {**edge, "source": item.relative_path} for edge in transition_matches
+                    )
+                    ref = "structure:transitions:{0}".format(item.relative_path)
+                    evidence.append(self._pattern_evidence(
+                        ref, item.relative_path, {"transitions": transition_matches},
+                        "; ".join("{0}->{1}".format(edge["from"], edge["to"])
+                                  for edge in transition_matches),
+                        file_hashes, 0.98,
+                    ))
+                    refs["transitions"].append(ref)
+
+            transaction_matches, recovery_matches = self._transaction_recovery_matches(text)
+            if transaction_matches:
+                transaction_mechanisms.extend(
+                    {**item_match, "source": item.relative_path}
+                    for item_match in transaction_matches
+                )
+                ref = "structure:transactions:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"mechanisms": transaction_matches},
+                    ", ".join(item_match["kind"] for item_match in transaction_matches),
+                    file_hashes, 0.9,
+                ))
+                refs["transactions"].append(ref)
+            if recovery_matches:
+                recovery_mechanisms.extend(
+                    {**item_match, "source": item.relative_path}
+                    for item_match in recovery_matches
+                )
+                ref = "structure:recovery:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"mechanisms": recovery_matches},
+                    ", ".join(item_match["kind"] for item_match in recovery_matches),
+                    file_hashes, 0.85,
+                ))
+                refs["recovery"].append(ref)
+
             state_matches = self._state_matches(text)
             if state_matches:
                 lifecycles.extend(
@@ -430,6 +476,20 @@ class DeterministicFactExtractor:
         if entrypoints:
             facts.append(FactCandidate(
                 "runtime.entrypoints", entrypoints, 0.9, tuple(refs["entrypoints"])
+            ))
+        if transitions:
+            facts.append(FactCandidate(
+                "workflow.transitions", transitions, 0.98, tuple(refs["transitions"])
+            ))
+        if transaction_mechanisms:
+            facts.append(FactCandidate(
+                "data.transactions", transaction_mechanisms, 0.9,
+                tuple(refs["transactions"]),
+            ))
+        if recovery_mechanisms:
+            facts.append(FactCandidate(
+                "reliability.recovery", recovery_mechanisms, 0.85,
+                tuple(refs["recovery"]),
             ))
         testing_evidence, testing_fact = self._testing_fact(scan)
         evidence.extend(testing_evidence)
@@ -609,6 +669,65 @@ class DeterministicFactExtractor:
             0.9, (ref,),
         )
         return [evidence], fact
+
+    @staticmethod
+    def _allowed_transition_matches(text: str) -> List[dict]:
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return []
+        edges = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not any(isinstance(target, ast.Name) and target.id == "ALLOWED_TRANSITIONS"
+                       for target in targets):
+                continue
+            value = node.value
+            if not isinstance(value, ast.Dict):
+                continue
+            for source_node, target_node in zip(value.keys, value.values):
+                source = DeterministicFactExtractor._status_attribute(source_node)
+                if source is None:
+                    continue
+                candidates = []
+                if isinstance(target_node, (ast.Set, ast.List, ast.Tuple)):
+                    candidates = target_node.elts
+                elif (isinstance(target_node, ast.Call) and target_node.args and
+                      isinstance(target_node.args[0], (ast.Set, ast.List, ast.Tuple))):
+                    candidates = target_node.args[0].elts
+                for candidate in candidates:
+                    target = DeterministicFactExtractor._status_attribute(candidate)
+                    if target is not None:
+                        edges.append({"from": source, "to": target,
+                                      "line": getattr(source_node, "lineno", node.lineno)})
+        return edges
+
+    @staticmethod
+    def _status_attribute(node: ast.AST) -> Optional[str]:
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and
+                node.value.id.endswith("Status")):
+            return node.attr.lower()
+        return None
+
+    @staticmethod
+    def _transaction_recovery_matches(text: str) -> Tuple[List[dict], List[dict]]:
+        transactions = []
+        recovery = []
+        patterns = (
+            (r"['\"]BEGIN IMMEDIATE['\"]", "sqlite_immediate_transaction", transactions),
+            (r"\.(commit)\s*\(", "transaction_commit", transactions),
+            (r"\.(rollback)\s*\(", "transaction_rollback", transactions),
+            (r"\bos\.replace\s*\(", "atomic_file_replace", recovery),
+            (r"\.unlink\s*\(\s*missing_ok\s*=\s*True", "failed_output_cleanup", recovery),
+        )
+        for pattern, kind, destination in patterns:
+            for match in re.finditer(pattern, text):
+                item = {"kind": kind, "line": text.count("\n", 0, match.start()) + 1}
+                if item not in destination:
+                    destination.append(item)
+        return transactions, recovery
 
     @staticmethod
     def _pattern_evidence(ref: str, relative_path: str, locator: dict,

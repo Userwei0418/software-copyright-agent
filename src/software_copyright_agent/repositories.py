@@ -739,3 +739,29 @@ class ManualPlanRepository:
             (run_id, task_id, stage_run_id, version, rules_version,
              encode_json(summary), artifact_relative_path, fingerprint, now),
         )
+
+
+class DiagramPlanRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def next_version(self, task_id: str) -> int:
+        row = self._connection.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM diagram_plan_runs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        return int(row[0])
+
+    def add_run(self, run_id: str, task_id: str, manual_plan_run_id: str,
+                stage_run_id: str, version: int, rules_version: str,
+                summary: object, artifact_relative_path: str,
+                fingerprint: str, now: str) -> None:
+        self._connection.execute(
+            """INSERT INTO diagram_plan_runs
+            (id, task_id, manual_plan_run_id, stage_run_id, version, rules_version,
+             summary_json, artifact_relative_path, fingerprint, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, task_id, manual_plan_run_id, stage_run_id, version,
+             rules_version, encode_json(summary), artifact_relative_path,
+             fingerprint, now),
+        )

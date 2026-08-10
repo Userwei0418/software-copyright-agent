@@ -28,6 +28,7 @@
 - 从已确认 Fact/Evidence 生成版本化的软件说明书章节计划、缺失信息清单和图表需求。
 - 在受限读取预算内确定性识别数据库技术、SQL 表、HTTP 路由、状态枚举和部署描述文件，并保存文件哈希证据。
 - 只保存环境变量名称，并提取显式接口模型、HTTP 错误状态、程序入口和测试框架，不保存配置值或脚本命令正文。
+- 从显式状态转换表生成证据化图表语义计划；所有边必须关联 Fact、Evidence、源文件和行号，缺少依赖边时阻断绘图。
 
 ## 运行
 
@@ -108,6 +109,16 @@ PYTHONPATH=src python3 -m software_copyright_agent \
 ```
 
 计划包含 9 个标准章节、Fact/Evidence 引用、缺失信息及系统架构图和核心业务流程图需求。本阶段只规划内容，不生成未经证据支持的正文。
+
+生成图表语义计划：
+
+```bash
+PYTHONPATH=src python3 -m software_copyright_agent \
+  --data-dir .software-copyright-agent \
+  diagram-plan TASK_ID --json
+```
+
+该命令只生成节点和边的证据化 JSON 契约，不直接绘制 Draw.io。重复节点、悬空边或无证据边会阻断计划落库。
 
 运行测试：
 

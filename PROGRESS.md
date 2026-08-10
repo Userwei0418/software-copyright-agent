@@ -749,3 +749,47 @@
 1. 提取显式状态转换调用、异常恢复和事务边界，为核心流程图提供有方向的边证据。
 2. 定义架构图和流程图的节点、边、容器、Evidence ID 与完整性检查 Schema。
 3. 再扩展 README/manifest 中的软件用途、运行环境和安装命令候选，并保留用户确认门槛。
+
+### 2026-08-10：流程边证据与图表语义计划
+
+本轮目标：
+
+- 为流程图提取有方向、可定位的状态转换边。
+- 在生成 Draw.io 前建立节点、边和证据引用的持久化语义契约。
+
+完成内容：
+
+- 使用 Python AST 解析 `ALLOWED_TRANSITIONS`，只提取显式源状态、目标状态、文件和行号，生成 `workflow.transitions`。
+- 识别 `BEGIN IMMEDIATE`、commit 和 rollback，生成 `data.transactions`。
+- 识别原子文件替换和失败临时文件清理，生成 `reliability.recovery`；不把普通异常捕获自动解释为恢复能力。
+- 新增 `diagram-plan-v1`：系统架构图节点来自入口、模块和存储 Fact，核心流程图节点及边来自状态转换 Fact。
+- 每个节点和边保存 Fact ID、Evidence ID；每条流程边额外保存源文件和行号定位。
+- 图表计划校验重复节点键、重复边键、悬空边和无证据边。
+- 系统架构图在缺少模块依赖边时保持 `needs_evidence`，不会凭节点顺序自动连线。
+- 新增 SQLite v8 migration 和 `diagram_plan_runs`，关联最新说明书计划并保存版本、规则、摘要、路径和指纹。
+- 新增 `diagram-plan TASK_ID --json` CLI 和任务阶段 `08_plan_diagrams`。
+
+真实验证：
+
+- 从 `state_machine.py` 提取 8 个任务状态和 13 条允许转换。
+- 从 SQLite UnitOfWork 提取即时事务、commit 和 rollback；从各原子写入路径提取替换与失败清理机制。
+- 最新真实 diagram plan v2 共 2 张图、11 个节点、13 条边，结构校验通过，13 条边均包含源文件和行号。
+- 核心业务流程图状态为 `ready`；系统架构图包含 CLI、核心模块和 SQLite 三个节点，但因缺少模块依赖边保持 `needs_evidence`。
+- 说明书缺口从 23 项降至 22 项；安全可靠性章节仍缺安全控制与审计备份，未被错误放行。
+
+验证：
+
+- 49 项完整测试全部通过。
+- 定向测试覆盖 AST 状态边、事务/恢复机制、边证据、悬空引用校验、SQLite v8 migration、CLI 与版本化持久化。
+
+已知限制：
+
+- 当前只解析 Python 常量形式的状态转换表，尚未覆盖 TypeScript、Java 和数据库驱动的动态状态机。
+- 允许转换表能证明合法状态边，但不说明每条边由哪个用户操作或业务条件触发。
+- 架构图尚无 import/依赖关系证据，因此本轮不生成 Draw.io 文件。
+
+下一步：
+
+1. 提取 Python import 图及模块归属，形成有证据的架构依赖边。
+2. 为状态转换边关联调用位置、阶段名称和触发条件候选。
+3. 两张语义图达到门槛后，再使用 Draw.io 生成器输出可编辑 XML、SVG 并执行路由与视觉检查。

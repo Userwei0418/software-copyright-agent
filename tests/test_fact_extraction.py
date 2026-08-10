@@ -72,6 +72,23 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS orders (id TEXT);'''
 """,
                 encoding="utf-8",
             )
+            (source / "state_machine.py").write_text(
+                """ALLOWED_TRANSITIONS = {
+    TaskStatus.CREATED: frozenset({TaskStatus.RUNNING}),
+    TaskStatus.RUNNING: frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED}),
+}
+
+def persist(connection, temporary, destination):
+    connection.execute('BEGIN IMMEDIATE')
+    try:
+        connection.commit()
+        os.replace(temporary, destination)
+    except Exception:
+        connection.rollback()
+        temporary.unlink(missing_ok=True)
+""",
+                encoding="utf-8",
+            )
             tests = root / "tests"
             tests.mkdir()
             (tests / "test_api.py").write_text(
@@ -98,13 +115,28 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS orders (id TEXT);'''
             self.assertEqual(facts["runtime.entrypoints"].value[0]["name"], "start")
             self.assertEqual(facts["testing.strategy"].value["frameworks"], ["unittest"])
             self.assertEqual(
+                {(edge["from"], edge["to"]) for edge in facts["workflow.transitions"].value},
+                {("created", "running"), ("running", "completed"),
+                 ("running", "failed")},
+            )
+            self.assertEqual(
+                {item["kind"] for item in facts["data.transactions"].value},
+                {"sqlite_immediate_transaction", "transaction_commit",
+                 "transaction_rollback"},
+            )
+            self.assertEqual(
+                {item["kind"] for item in facts["reliability.recovery"].value},
+                {"atomic_file_replace", "failed_output_cleanup"},
+            )
+            self.assertEqual(
                 facts["data.lifecycle"].value[0]["states"], ["created", "paid"]
             )
             self.assertEqual(facts["deployment.method"].value[0]["kind"], "Dockerfile")
             for key in ("data.storage", "data.entities", "interfaces.catalog",
                         "interfaces.contracts", "interfaces.errors", "configuration.items",
                         "runtime.entrypoints", "testing.strategy", "data.lifecycle",
-                        "deployment.method"):
+                        "workflow.transitions", "data.transactions",
+                        "reliability.recovery", "deployment.method"):
                 self.assertTrue(facts[key].evidence_refs)
                 self.assertTrue(all(ref in evidence for ref in facts[key].evidence_refs))
             self.assertTrue(all(item.content_hash for item in evidence.values()
