@@ -126,3 +126,19 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 ```
 
 该接口读取本地加密凭据，并按模型已识别的 `messages`、`chat_completions`、`responses` 或 `ollama_chat` 协议调用。规则缺失项作为“待确认/禁止编造”约束进入提示词，不作为生成门禁。成功结果版本化写入 `artifacts/manual/manual-draft.vN.md`，工作台快照在 `manual_draft` 返回内容、模型、接口模式、耗时和字符数。
+
+> 上述接口保留为 legacy 草稿验证链路。正式说明书使用下面的版本化任务 API，Markdown 不再作为最终产物。
+
+## 正式说明书生成任务
+
+- `POST /api/v1/tasks/{task_id}/manual-jobs`：创建一个版本化说明书任务。
+- `GET /api/v1/tasks/{task_id}/manual-jobs`：列出项目的说明书版本。
+- `GET /api/v1/manual-jobs/{job_id}`：读取任务和各阶段状态。
+
+创建请求：
+
+```json
+{"model_config_id":"已启用的模型配置 ID"}
+```
+
+任务包含 `research`、`draft`、`diagrams`、`screenshots`、`assemble_docx`、`render_qa` 六个可独立重试的阶段。正文、图表、截图和 DOCX 使用独立结构化产物表持久化，部分失败不会删除已完成阶段。

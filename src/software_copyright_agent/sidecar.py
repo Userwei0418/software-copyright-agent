@@ -30,6 +30,7 @@ from .source_document import SourceDocumentError
 from .manual_workspace import ManualWorkspaceError, ManualWorkspaceService
 from .manual_plan_service import ManualPlanError
 from .manual_generation import ManualGenerationError
+from .manual_pipeline import ManualPipelineError, ManualPipelineService
 from .diagram_plan_service import DiagramPlanError
 from .drawio_service import DrawioGenerationError
 from .storage import Database
@@ -162,6 +163,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     catalog_service = ProjectCatalogService(database, data_dir)
     source_materials_service = SourceMaterialsService(database, data_dir)
     manual_workspace_service = ManualWorkspaceService(database, data_dir)
+    manual_pipeline_service = ManualPipelineService(database)
     model_config_service = ModelConfigService(database)
     credential_vault = CredentialVault(database, data_dir)
     app_settings_service = AppSettingsService(database)
@@ -591,6 +593,43 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
             lambda value: manual_workspace_service.generate_manual(value, payload.model_config_id),
             task_id, token,
         )
+
+    @app.post("/api/v1/tasks/{task_id}/manual-jobs")
+    def create_manual_job(task_id: str, payload: ManualGenerationRequest,
+                          token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_pipeline_service.create(task_id, payload.model_config_id)
+        except ManualPipelineError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_pipeline_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/tasks/{task_id}/manual-jobs")
+    def list_manual_jobs(task_id: str,
+                         token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        return {"items": manual_pipeline_service.list_for_task(task_id)}
+
+    @app.get("/api/v1/manual-jobs/{job_id}")
+    def get_manual_job(job_id: str,
+                       token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_pipeline_service.get(job_id)
+        except ManualPipelineError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_pipeline_not_found", "message": str(error)}
+            })
 
     @app.get("/api/v1/tasks/{task_id}/diagram-assets")
     def workspace(task_id: str, request: Request,

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -359,6 +359,105 @@ CREATE TABLE manual_draft_runs (
 CREATE INDEX idx_manual_draft_runs_latest ON manual_draft_runs(task_id, version DESC);
 """
 
+MIGRATION_015 = """
+CREATE TABLE manual_generation_jobs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    model_config_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+        'queued', 'running', 'completed', 'completed_with_warnings', 'failed', 'canceled'
+    )),
+    current_step TEXT,
+    progress_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    updated_at TEXT NOT NULL,
+    safe_error_message TEXT,
+    UNIQUE(task_id, version)
+);
+CREATE INDEX idx_manual_generation_jobs_latest
+ON manual_generation_jobs(task_id, version DESC);
+
+CREATE TABLE manual_generation_steps (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    step_key TEXT NOT NULL CHECK (step_key IN (
+        'research', 'draft', 'diagrams', 'screenshots', 'assemble_docx', 'render_qa'
+    )),
+    status TEXT NOT NULL CHECK (status IN (
+        'pending', 'running', 'completed', 'completed_with_warnings', 'failed', 'skipped'
+    )),
+    attempt INTEGER NOT NULL,
+    summary_json TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    safe_error_message TEXT,
+    UNIQUE(job_id, step_key, attempt)
+);
+CREATE INDEX idx_manual_generation_steps_job
+ON manual_generation_steps(job_id, step_key, attempt DESC);
+
+CREATE TABLE manual_section_artifacts (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    section_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'generated', 'confirmed', 'needs_review')),
+    content_json TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    inference_notes_json TEXT NOT NULL,
+    figure_requests_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(job_id, section_key)
+);
+
+CREATE TABLE manual_figure_artifacts (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    figure_key TEXT NOT NULL,
+    section_key TEXT NOT NULL,
+    figure_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('planned', 'rendered', 'verified', 'failed')),
+    semantic_json TEXT NOT NULL,
+    drawio_relative_path TEXT,
+    svg_relative_path TEXT,
+    png_relative_path TEXT,
+    qa_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(job_id, figure_key)
+);
+
+CREATE TABLE manual_screenshot_artifacts (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    screenshot_key TEXT NOT NULL,
+    section_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('automated', 'user')),
+    image_relative_path TEXT NOT NULL,
+    description_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(job_id, screenshot_key)
+);
+
+CREATE TABLE manual_document_artifacts (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('assembled', 'qa_passed', 'qa_failed')),
+    docx_relative_path TEXT NOT NULL,
+    preview_pdf_relative_path TEXT,
+    qa_json TEXT NOT NULL,
+    sha256 TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(job_id, version)
+);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -512,6 +611,16 @@ class Database:
                     """INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (14, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
                     ("migration-014",),
+                )
+            applied_v15 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 15"
+            ).fetchone()
+            if applied_v15 is None:
+                connection.executescript(MIGRATION_015)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (15, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-015",),
                 )
 
     @contextmanager
