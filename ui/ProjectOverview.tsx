@@ -28,11 +28,15 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("选择一个本地项目目录或 ZIP 压缩包开始分析。");
   const [recent, setRecent] = useState<RecentTask[]>([]);
+  const [recentLoaded, setRecentLoaded] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (!connection) return;
-    listRecentTasks(connection).then(setRecent).catch(() => setRecent([]));
+    if (!connection) { setRecentLoaded(false); return; }
+    setRecentLoaded(false);
+    listRecentTasks(connection).then((items) => { setRecent(items); setRecentLoaded(true); })
+      .catch((error) => { setRecentLoaded(true); setMessage(error instanceof Error
+        ? `最近任务读取失败：${error.message}` : "最近任务读取失败，请重试"); });
   }, [connection]);
 
   async function choose(kind: "directory" | "zip") {
@@ -160,6 +164,7 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
             connection ? "开始本地扫描" : "连接本地服务并扫描"}
         </button>
         <p className="intake-message">{message}</p>
+        {!recentLoaded && connection && <p className="intake-message">正在读取本地任务记录…</p>}
         {recent.length > 0 && <div className="recent-projects"><div className="section-title">
           <span>最近任务</span><button onClick={clearTasks} disabled={busy}>清理全部</button></div>
           {recent.slice(0, 6).map((task) => <div className="recent-row" key={task.task_id}><button

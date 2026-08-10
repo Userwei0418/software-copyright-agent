@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AssetRevision, connectSidecar, DiagramAsset, listRevisions, loadPreview, loadRevision,
-  loadWorkspace, OverlayOperation, rollbackRevision, saveRevision, SidecarConnection,
+  listRecentTasks, loadWorkspace, OverlayOperation, rollbackRevision, saveRevision, SidecarConnection,
   WorkspaceSnapshot,
 } from "./api";
 import { InteractiveDiagram } from "./InteractiveDiagram";
@@ -45,6 +45,9 @@ export function App() {
       const value = await connectSidecar();
       setConnection(value);
       setMessage(`本地服务已连接 · v${value.version}`);
+      listRecentTasks(value).then((recent) => {
+        if (recent.length) setTaskId((current) => current || recent[0].task_id);
+      }).catch(() => setMessage("本地服务已连接，但最近项目读取失败"));
       return value;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);

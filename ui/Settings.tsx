@@ -47,17 +47,21 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   const [presetId, setPresetId] = useState("senseaudio");
   const [selectedView, setSelectedView] = useState<string>("add");
   const [addStep, setAddStep] = useState<"catalog" | "form">("catalog");
+  const [loaded, setLoaded] = useState(false);
 
   async function refresh() {
-    if (!connection) return;
+    if (!connection) { setLoaded(false); return; }
     const [configs, settings] = await Promise.all([listModelConfigs(connection), loadAppSettings(connection)]);
     setItems(configs); setPreferences(settings);
     setSelectedView((current) => current === "add" && configs.length ? configs[0].provider_id : current);
     const providerIds = [...new Set(configs.filter((item) => item.has_credential).map((item) => item.provider_id))];
     const checks = await Promise.all(providerIds.map(async (id) => [id, await hasModelCredential(id)] as const));
     setCredentialStates(Object.fromEntries(checks));
+    setLoaded(true);
   }
-  useEffect(() => { refresh().catch(() => setMessage("设置读取失败")); }, [connection]);
+  useEffect(() => { setLoaded(false); refresh().catch((error) => {
+    setMessage(`设置读取失败：${errorText(error, "无法连接本地数据库")}`); setLoaded(true);
+  }); }, [connection]);
 
   function enteredModels() {
     return [...new Set(modelText.split(/[\n,，]+/).map((value) => value.trim()).filter(Boolean))];
@@ -198,9 +202,9 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
     <h1>模型与生成设置</h1><p>集中管理模型服务、连接状态和文档生成偏好。</p></div></header>
     <section className="settings-workbench"><aside className="provider-nav"><div className="provider-nav-title"><div><strong>模型服务</strong><small>{providers.length} 个连接</small></div>
       <button onClick={beginAddProvider}>＋ 添加</button></div>
-      <div className="provider-nav-list">{providers.map((group) => <button className={selectedView === group[0].provider_id ? "active" : ""} key={group[0].provider_id}
+      <div className="provider-nav-list">{!loaded ? <p>正在读取本地配置…</p> : providers.map((group) => <button className={selectedView === group[0].provider_id ? "active" : ""} key={group[0].provider_id}
         onClick={() => { setSelectedView(group[0].provider_id); setEditingProviderId(null); setMessage(""); }}><span>{group[0].name.slice(0, 1)}</span><div><strong>{group[0].name}</strong><small>{group.length} 个模型</small></div><i /></button>)}
-        {!providers.length && <p>还没有模型服务<br />从常用厂商开始添加</p>}</div>
+        {loaded && !providers.length && <p>还没有模型服务<br />从常用厂商开始添加</p>}</div>
       <button className={`preference-nav ${selectedView === "preferences" ? "active" : ""}`} onClick={() => setSelectedView("preferences")}><span>⚙</span><div><strong>生成偏好</strong><small>默认模型与参数</small></div></button>
     </aside><div className="settings-detail">{message && <p className="settings-message">{message}</p>}
       {selectedView === "add" && addStep === "catalog" && <section className="provider-catalog"><div><h2>添加模型服务</h2><p>选择服务商后，只需填写 API Key；模型与地址已为你预设。</p></div>
