@@ -152,6 +152,20 @@ class SidecarFastApiTests(unittest.TestCase):
         self.assertGreater(
             manual_planned.json()["manual_plan"]["summary"]["missing_information_count"], 0
         )
+        (project / "src" / "extra.ts").write_text(
+            "export const addedLater = true;\n", encoding="utf-8"
+        )
+        rescanned = self.client.post(
+            f"/api/v1/tasks/{payload['task_id']}/rescan", headers=self.headers
+        )
+        self.assertEqual(rescanned.status_code, 200)
+        self.assertNotEqual(rescanned.json()["task_id"], payload["task_id"])
+        self.assertEqual(rescanned.json()["summary"]["file_count"], 3)
+        self.assertEqual(rescanned.json()["inspection"]["task"]["status"], "completed")
+        self.assertTrue(any(
+            item["key"] == "project.version" and item["value"] == "V1.2.3"
+            for item in rescanned.json()["inspection"]["facts"]
+        ))
 
 
 if __name__ == "__main__":

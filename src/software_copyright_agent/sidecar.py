@@ -208,6 +208,64 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 "error": {"code": "invalid_request", "message": str(error)}
             })
 
+    @app.post("/api/v1/tasks/{task_id}/rescan")
+    def rescan_project(task_id: str,
+                       token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        database.initialize()
+        with database.connect() as connection:
+            source = connection.execute(
+                """SELECT ps.original_path FROM tasks t
+                JOIN project_sources ps ON ps.id = t.source_id WHERE t.id = ?""",
+                (task_id,),
+            ).fetchone()
+            confirmed_rows = connection.execute(
+                """SELECT fact_key, value_json FROM facts WHERE task_id = ?
+                AND status = 'confirmed' ORDER BY created_at DESC""",
+                (task_id,),
+            ).fetchall()
+        if source is None:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "task_not_found", "message": "Task source not found"}
+            })
+        try:
+            persisted = scan_service.execute(Path(source["original_path"]))
+            inspection = inspection_service.inspect(persisted.task_id)
+            confirmed = {}
+            for row in confirmed_rows:
+                confirmed.setdefault(row["fact_key"], json.loads(row["value_json"]))
+            pending_keys = {
+                item["field_key"] for item in inspection["confirmations"]
+                if item["status"] == "pending"
+            }
+            for field_key in sorted(pending_keys & confirmed.keys()):
+                value = confirmed[field_key]
+                if isinstance(value, (str, int, float, bool)):
+                    confirmation_service.answer(
+                        persisted.task_id, field_key, str(value)
+                    )
+            inspection = inspection_service.inspect(persisted.task_id)
+        except (IngestionError, ScanError) as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "project_rescan_error", "message": str(error)}
+            })
+        return {
+            "task_id": persisted.task_id,
+            "snapshot_id": persisted.snapshot_id,
+            "summary": {
+                "file_count": len(persisted.result.files),
+                "ignored_count": persisted.result.ignored_count,
+                "total_bytes": persisted.result.total_bytes,
+                "secret_finding_count": len(persisted.result.secret_findings),
+                "languages": sorted({item.language for item in persisted.result.files
+                                     if item.language}),
+            },
+            "inspection": inspection,
+        }
+
     @app.get("/api/v1/tasks/{task_id}/inspection")
     def inspection(task_id: str,
                    token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):

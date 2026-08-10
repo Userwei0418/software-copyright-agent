@@ -34,6 +34,7 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | --- | --- | --- |
 | POST | `/api/v1/projects/scan` | 扫描系统选择器授权的目录或 ZIP，并返回事实摘要 |
 | GET | `/api/v1/tasks?limit=20` | 列出最近持久化任务，不返回原始项目路径 |
+| POST | `/api/v1/tasks/{task_id}/rescan` | 使用已持久化的项目来源创建新扫描任务 |
 | GET | `/api/v1/tasks/{task_id}/inspection` | 读取任务状态、事实、证据和待确认项 |
 | POST | `/api/v1/tasks/{task_id}/confirmations/{field_key}` | 回答待确认项并返回刷新后的任务检查结果 |
 | GET | `/api/v1/tasks/{task_id}/source-materials` | 读取源码筛选、分页预检、DOCX 状态和阻塞原因 |
@@ -57,6 +58,7 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 `diagram_key` 首版只允许 `system_architecture` 和 `core_business_flow`。
 
 扫描请求为 `{"path":"/user-approved/project-or.zip"}`。目录采用原地只读扫描，ZIP 隔离解压到应用数据目录；桌面页面不提供自由路径文本框，只接受系统文件选择器返回值。
+重新扫描端点不接受新路径，只从 task ID 反查已授权的持久化项目来源；它创建新任务和快照，不覆盖旧材料，并继承原任务中与新待确认项匹配的标量 confirmed Fact。
 
 源码材料三个 POST 端点均是显式用户操作，不会因读取状态自动执行。代码不足 59 页时预检会持久化为警告，并禁止生成灌水 DOCX。
 分页样本端点不接受文件路径或页码输入，只从 SQLite 定位当前任务最新产物，并校验产物仍位于该任务数据目录内。

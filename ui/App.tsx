@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   AssetRevision, connectSidecar, DiagramAsset, listRevisions, loadPreview, loadRevision,
   loadWorkspace, OverlayOperation, rollbackRevision, saveRevision, SidecarConnection,
@@ -31,11 +31,13 @@ export function App() {
   const [undoVersion, setUndoVersion] = useState<number | null>(null);
   const [redoVersion, setRedoVersion] = useState<number | null>(null);
   const [page, setPage] = useState<"overview" | "source" | "diagrams" | "manual">("overview");
+  const connectionAttempt = useRef<Promise<SidecarConnection> | null>(null);
 
   async function ensureConnection(): Promise<SidecarConnection> {
     if (connection) return connection;
+    if (connectionAttempt.current) return connectionAttempt.current;
     setMessage("正在连接本地服务…");
-    try {
+    connectionAttempt.current = (async () => { try {
       const value = await connectSidecar();
       setConnection(value);
       setMessage(`本地服务已连接 · v${value.version}`);
@@ -44,7 +46,8 @@ export function App() {
       const detail = error instanceof Error ? error.message : String(error);
       setMessage(`本地服务连接失败 · ${detail}`);
       throw new Error(`本地服务连接失败：${detail}`);
-    }
+    } finally { connectionAttempt.current = null; } })();
+    return connectionAttempt.current;
   }
 
   useEffect(() => {
@@ -182,7 +185,8 @@ export function App() {
 
     {page === "overview" ? <ProjectOverview connection={connection}
       ensureConnection={ensureConnection} onTaskCreated={(value) => setTaskId(value)} /> : page === "source" ?
-      <SourceMaterials connection={connection} taskId={taskId} /> : page === "manual" ?
+      <SourceMaterials connection={connection} taskId={taskId}
+        onTaskCreated={setTaskId} onBackToOverview={() => setPage("overview")} /> : page === "manual" ?
       <ManualWorkspace connection={connection} taskId={taskId} /> : <main>
       <header className="topbar">
         <div><p className="eyebrow">DOCUMENT ASSETS</p><h1>图表资产</h1>

@@ -213,6 +213,16 @@ export async function scanProject(
   return requireJson<ProjectScanResult>(response, "项目扫描失败");
 }
 
+export async function rescanProject(
+  connection: SidecarConnection, taskId: string,
+): Promise<ProjectScanResult> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/rescan`,
+    { method: "POST", headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson<ProjectScanResult>(response, "项目重新扫描失败");
+}
+
 export async function listRecentTasks(
   connection: SidecarConnection,
 ): Promise<RecentTask[]> {

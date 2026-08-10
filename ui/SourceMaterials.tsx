@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { CodePagePreview, loadCodePagePreview, loadSourceMaterials,
-  revealSourceDocument, runSourceMaterialAction, SidecarConnection, SourceMaterialsSnapshot } from "./api";
+  rescanProject, revealSourceDocument, runSourceMaterialAction, SidecarConnection,
+  SourceMaterialsSnapshot } from "./api";
 
-type Props = { connection: SidecarConnection | null; taskId: string };
+type Props = { connection: SidecarConnection | null; taskId: string;
+  onTaskCreated: (taskId: string) => void; onBackToOverview: () => void };
 type Action = "source-plan" | "code-preview" | "source-docx";
 
-export function SourceMaterials({ connection, taskId }: Props) {
+export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOverview }: Props) {
   const [snapshot, setSnapshot] = useState<SourceMaterialsSnapshot | null>(null);
   const [working, setWorking] = useState<Action | null>(null);
   const [message, setMessage] = useState("");
@@ -49,6 +51,18 @@ export function SourceMaterials({ connection, taskId }: Props) {
     catch (error) { setMessage(error instanceof Error ? error.message : "DOCX 定位失败"); }
   }
 
+  async function rescan() {
+    if (!connection || !taskId) return;
+    setMessage("正在重新扫描当前项目…");
+    setWorking("source-plan");
+    try {
+      const result = await rescanProject(connection, taskId);
+      onTaskCreated(result.task_id);
+      setMessage(`重新扫描完成 · 新任务 ${result.task_id.slice(0, 8)}…`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "重新扫描失败"); }
+    finally { setWorking(null); }
+  }
+
   return <main className="source-page">
     <header className="topbar"><div><p className="eyebrow">SOURCE MATERIALS</p><h1>源码材料</h1>
       <p>人工触发每个阶段，先预检页数和阻塞原因，再生成 DOCX。</p></div>
@@ -77,7 +91,11 @@ export function SourceMaterials({ connection, taskId }: Props) {
           <Metric label="预计正文页" value={snapshot.code_preview?.summary.generated_pages ?? "—"} />
           <Metric label="目标正文页" value={snapshot.code_preview?.summary.target_pages ?? 59} /></div>
           {snapshot.blockers.length > 0 && <div className="blocker-panel"><strong>当前提示</strong>
-            {snapshot.blockers.map((item) => <p key={item}>{item}</p>)}</div>}
+            {snapshot.blockers.map((item) => <p key={item}>{item}</p>)}
+            {snapshot.code_preview && !snapshot.code_preview.summary.sufficient &&
+              <div className="blocker-actions"><button disabled={!!working} onClick={rescan}>
+                重新扫描当前项目</button><button className="secondary" onClick={onBackToOverview}>
+                返回项目概览</button></div>}</div>}
           {snapshot.code_preview && <div className="page-preview-entry"><div><strong>代码分页 v{snapshot.code_preview.version}</strong>
             <small>已生成 {snapshot.code_preview.summary.generated_pages} 页，可检查首页、中间页和末页的真实内容。</small></div>
             <button onClick={openPagePreview}>{pagePreview ? "刷新分页预览" : "查看分页内容"}</button></div>}
