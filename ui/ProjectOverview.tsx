@@ -1,6 +1,9 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useState } from "react";
-import { ProjectScanResult, scanProject, SidecarConnection } from "./api";
+import { useEffect, useState } from "react";
+import {
+  answerConfirmation, listRecentTasks, loadInspection, ProjectScanResult, RecentTask,
+  scanProject, SidecarConnection,
+} from "./api";
 
 type Props = {
   connection: SidecarConnection | null;
@@ -23,6 +26,13 @@ export function ProjectOverview({ connection, onTaskCreated }: Props) {
   const [result, setResult] = useState<ProjectScanResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("选择一个本地项目目录或 ZIP 压缩包开始分析。");
+  const [recent, setRecent] = useState<RecentTask[]>([]);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!connection) return;
+    listRecentTasks(connection).then(setRecent).catch(() => setRecent([]));
+  }, [connection]);
 
   async function choose(kind: "directory" | "zip") {
     try {
@@ -49,10 +59,51 @@ export function ProjectOverview({ connection, onTaskCreated }: Props) {
     try {
       const value = await scanProject(connection, selectedPath);
       setResult(value);
+      setRecent(await listRecentTasks(connection));
       onTaskCreated(value.task_id);
       setMessage(`扫描完成 · 任务 ${value.task_id.slice(0, 8)}…`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "项目扫描失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openRecent(task: RecentTask) {
+    if (!connection || !task.summary || !task.snapshot_id) return;
+    setBusy(true);
+    setMessage(`正在打开 ${task.display_name}…`);
+    try {
+      const inspection = await loadInspection(connection, task.task_id);
+      setResult({
+        task_id: task.task_id, snapshot_id: task.snapshot_id,
+        summary: task.summary, inspection,
+      });
+      onTaskCreated(task.task_id);
+      setSelectedPath(null);
+      setMessage(`已恢复任务 ${task.task_id.slice(0, 8)}…`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "最近任务打开失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirm(fieldKey: string) {
+    const value = answers[fieldKey]?.trim();
+    if (!connection || !result || !value) return;
+    setBusy(true);
+    setMessage(`正在确认 ${fieldKey}…`);
+    try {
+      const response = await answerConfirmation(connection, result.task_id, fieldKey, value);
+      setResult({ ...result, inspection: response.inspection });
+      setAnswers((current) => ({ ...current, [fieldKey]: "" }));
+      setRecent(await listRecentTasks(connection));
+      setMessage(response.remaining_required
+        ? `已确认，仍有 ${response.remaining_required} 项必填信息`
+        : "全部必填信息已确认，项目任务已完成");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "确认提交失败");
     } finally {
       setBusy(false);
     }
@@ -78,6 +129,14 @@ export function ProjectOverview({ connection, onTaskCreated }: Props) {
           {busy ? "正在扫描…" : "开始本地扫描"}
         </button>
         <p className="intake-message">{message}</p>
+        {recent.length > 0 && <div className="recent-projects"><div className="section-title">
+          <span>最近任务</span><em>{recent.length}</em></div>
+          {recent.slice(0, 6).map((task) => <button key={task.task_id}
+            onClick={() => openRecent(task)} disabled={busy || !task.snapshot_id}>
+            <span><strong>{task.display_name}</strong><small>{task.source_kind === "zip" ? "ZIP" : "目录"}</small></span>
+            <b>{task.status === "waiting_for_user" ? "待确认" : "已完成"}</b>
+          </button>)}
+        </div>}
       </div>
 
       {result ? <div className="overview-results">
@@ -99,6 +158,16 @@ export function ProjectOverview({ connection, onTaskCreated }: Props) {
             <em>{pending.length}</em></div>
             {pending.length ? pending.map((item) => <div className="confirmation-row" key={item.field_key}>
               <strong>{item.question}</strong><small>{item.field_key}</small>
+              {item.candidates.length > 0 && <div className="candidate-list">{item.candidates.map(
+                (candidate) => <button key={String(candidate)} onClick={() => setAnswers(
+                  (current) => ({ ...current, [item.field_key]: String(candidate) })
+                )}>{String(candidate)}</button>)}</div>}
+              <div className="confirmation-form"><input value={answers[item.field_key] ?? ""}
+                onChange={(event) => setAnswers((current) => ({
+                  ...current, [item.field_key]: event.target.value,
+                }))} placeholder="输入确认值" />
+                <button disabled={busy || !answers[item.field_key]?.trim()}
+                  onClick={() => confirm(item.field_key)}>确认</button></div>
             </div>) : <div className="all-clear">无需人工补充，项目元数据已确定。</div>}
           </section>
         </div>

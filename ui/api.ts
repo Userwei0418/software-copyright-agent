@@ -44,6 +44,12 @@ export type ProjectScanResult = {
     confirmations: ConfirmationItem[];
   };
 };
+export type RecentTask = {
+  task_id: string; snapshot_id: string | null; display_name: string;
+  source_kind: "directory" | "zip"; status: string; current_stage_key: string;
+  summary: ProjectScanResult["summary"] | null; updated_at: string;
+};
+export type Inspection = ProjectScanResult["inspection"];
 
 export type OverlayOperation = {
   action: "node.move" | "node.resize" | "node.style" | "node.label" | "node.hide" |
@@ -170,4 +176,44 @@ export async function scanProject(
     body: JSON.stringify({ path }),
   });
   return requireJson<ProjectScanResult>(response, "项目扫描失败");
+}
+
+export async function listRecentTasks(
+  connection: SidecarConnection,
+): Promise<RecentTask[]> {
+  const response = await fetch(`${connection.baseUrl}/api/v1/tasks?limit=20`, {
+    headers: { "X-Session-Token": connection.sessionToken },
+  });
+  return (await requireJson<{ items: RecentTask[] }>(response, "最近任务读取失败")).items;
+}
+
+export async function loadInspection(
+  connection: SidecarConnection,
+  taskId: string,
+): Promise<Inspection> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/inspection`,
+    { headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson<Inspection>(response, "项目详情读取失败");
+}
+
+export async function answerConfirmation(
+  connection: SidecarConnection,
+  taskId: string,
+  fieldKey: string,
+  value: string,
+): Promise<{ remaining_required: number; task_status: string; inspection: Inspection }> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/confirmations/${encodeURIComponent(fieldKey)}`,
+    {
+      method: "POST",
+      headers: {
+        "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ value }),
+    },
+  );
+  return requireJson(response, "确认提交失败");
 }

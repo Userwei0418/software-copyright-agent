@@ -64,7 +64,7 @@ class SidecarFastApiTests(unittest.TestCase):
         project = self.data_dir / "project"
         (project / "src").mkdir(parents=True)
         (project / "package.json").write_text(
-            '{"name":"desktop-demo","version":"1.2.3"}', encoding="utf-8"
+            '{"name":"desktop-demo"}', encoding="utf-8"
         )
         (project / "src" / "main.ts").write_text(
             "export const ready = true;\n", encoding="utf-8"
@@ -83,6 +83,20 @@ class SidecarFastApiTests(unittest.TestCase):
             f"/api/v1/tasks/{payload['task_id']}/inspection", headers=self.headers
         )
         self.assertEqual(inspection.status_code, 200)
+        recent = self.client.get("/api/v1/tasks?limit=5", headers=self.headers)
+        self.assertEqual(recent.status_code, 200)
+        self.assertEqual(recent.json()["items"][0]["task_id"], payload["task_id"])
+        confirmed = self.client.post(
+            f"/api/v1/tasks/{payload['task_id']}/confirmations/project.version",
+            headers=self.headers, json={"value": "V1.2.3"},
+        )
+        self.assertEqual(confirmed.status_code, 200)
+        self.assertEqual(confirmed.json()["remaining_required"], 0)
+        self.assertEqual(confirmed.json()["task_status"], "completed")
+        self.assertTrue(any(
+            item["key"] == "project.version" and item["status"] == "confirmed"
+            for item in confirmed.json()["inspection"]["facts"]
+        ))
 
 
 if __name__ == "__main__":

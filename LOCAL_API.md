@@ -33,7 +33,9 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | POST | `/api/v1/projects/scan` | 扫描系统选择器授权的目录或 ZIP，并返回事实摘要 |
+| GET | `/api/v1/tasks?limit=20` | 列出最近持久化任务，不返回原始项目路径 |
 | GET | `/api/v1/tasks/{task_id}/inspection` | 读取任务状态、事实、证据和待确认项 |
+| POST | `/api/v1/tasks/{task_id}/confirmations/{field_key}` | 回答待确认项并返回刷新后的任务检查结果 |
 | GET | `/api/v1/tasks/{task_id}/diagram-assets` | 读取资产工作台快照 |
 | GET | `/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions` | 列出版本 |
 | POST | `/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions` | 保存人工或 AI 覆盖 |

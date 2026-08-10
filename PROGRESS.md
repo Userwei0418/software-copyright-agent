@@ -1084,3 +1084,19 @@
 1. 在项目概览直接回答待确认项，并刷新任务状态和 confirmed Fact。
 2. 增加已持久化任务列表与最近项目恢复，避免每次启动依赖手工记忆 task ID。
 3. 启用“源码材料”页面，展示 A/B/C 选择计划、代码页数预算和 DOCX 生成状态。
+
+### 2026-08-10：待确认提交与最近任务恢复
+
+- 新增 `ProjectCatalogService`，按更新时间列出最近 20 个任务；只返回显示名称、目录/ZIP 类型、状态、扫描摘要和 task ID，不返回原始项目绝对路径。
+- 新增认证 `GET /api/v1/tasks?limit=N`，限制范围为 1–100；应用启动连接 sidecar 后自动读取最近任务。
+- 项目概览可打开最近任务并通过 inspection 恢复事实、待确认项、扫描摘要及后续共用 task ID，不重新扫描项目。
+- 新增认证确认端点，复用 `ConfirmationService` 创建用户确认 Evidence、confirmed Fact，并 supersede 旧候选；最后一个必填项提交后任务进入 completed。
+- 待确认卡支持候选值快捷填入和手动输入；空值、重复提交及非法任务状态由既有领域规则拒绝，提交成功后刷新事实、任务状态和最近任务列表。
+- FastAPI 集成测试扩展到最近任务排序、确认提交、remaining_required、completed 状态和 confirmed Fact；Python 全量 65 项测试全部通过。
+- TypeScript/Vite 生产构建通过，主 JS gzip 约 67.6 KiB；Apple Silicon 冻结 sidecar 已更新，大小约 21.56 MB。
+
+下一步：
+
+1. 启用“源码材料”页面并接入 source-plan、code-preview 和 source-docx 状态。
+2. 增加任务阶段时间线和错误/警告详情，明确每一步为何可继续或被阻断。
+3. 为确认后的项目提供“一键生成下一阶段”入口，但继续保持人工触发、不自动提交材料。
