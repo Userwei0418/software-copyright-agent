@@ -50,6 +50,23 @@ export type RecentTask = {
   summary: ProjectScanResult["summary"] | null; updated_at: string;
 };
 export type Inspection = ProjectScanResult["inspection"];
+export type SourceMaterialsSnapshot = {
+  task: { id: string; status: string; current_stage_key: string; safe_error_message?: string | null };
+  source_plan: null | { version: number; created_at: string; summary: {
+    total_source_files: number; selected_files: number; selected_code_lines: number;
+    excluded_files: number; grades: Record<"A" | "B" | "C", number>;
+  }; candidates: Array<{ relative_path: string; grade: string; score: number;
+    code_lines: number; language: string | null }> };
+  code_preview: null | { version: number; created_at: string; summary: {
+    available_visual_lines: number; used_visual_lines: number; required_visual_lines: number;
+    generated_pages: number; target_pages: number; sufficient: boolean; selected_files: number;
+    included_files: number; truncated: boolean;
+  } };
+  source_document: null | { version: number; created_at: string; artifact_relative_path: string;
+    sha256: string; summary: { total_pages_expected: number; code_pages: number; code_lines: number } };
+  actions: { source_plan: boolean; code_preview: boolean; source_docx: boolean };
+  blockers: string[];
+};
 
 export type OverlayOperation = {
   action: "node.move" | "node.resize" | "node.style" | "node.label" | "node.hide" |
@@ -216,4 +233,25 @@ export async function answerConfirmation(
     },
   );
   return requireJson(response, "确认提交失败");
+}
+
+export async function loadSourceMaterials(
+  connection: SidecarConnection, taskId: string,
+): Promise<SourceMaterialsSnapshot> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials`,
+    { headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson(response, "源码材料读取失败");
+}
+
+export async function runSourceMaterialAction(
+  connection: SidecarConnection, taskId: string,
+  action: "source-plan" | "code-preview" | "source-docx",
+): Promise<SourceMaterialsSnapshot> {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/${action}`,
+    { method: "POST", headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson(response, "源码材料生成失败");
 }

@@ -6,6 +6,7 @@ import {
 } from "./api";
 import { InteractiveDiagram } from "./InteractiveDiagram";
 import { ProjectOverview } from "./ProjectOverview";
+import { SourceMaterials } from "./SourceMaterials";
 
 const fallbackAssets: DiagramAsset[] = [
   { diagram_key: "system_architecture", title: "系统总体架构图", revision_count: 0,
@@ -28,7 +29,7 @@ export function App() {
   const [previewRevision, setPreviewRevision] = useState<AssetRevision | null>(null);
   const [undoVersion, setUndoVersion] = useState<number | null>(null);
   const [redoVersion, setRedoVersion] = useState<number | null>(null);
-  const [page, setPage] = useState<"overview" | "diagrams">("overview");
+  const [page, setPage] = useState<"overview" | "source" | "diagrams">("overview");
 
   useEffect(() => {
     connectSidecar().then((value) => {
@@ -154,7 +155,8 @@ export function App() {
       <nav>
         <button className={`nav-item ${page === "overview" ? "active" : ""}`}
           onClick={() => setPage("overview")}>项目概览</button>
-        <button className="nav-item" disabled>源码材料 <small>待开发</small></button>
+        <button className={`nav-item ${page === "source" ? "active" : ""}`}
+          onClick={() => setPage("source")}>源码材料</button>
         <button className={`nav-item ${page === "diagrams" ? "active" : ""}`}
           onClick={() => setPage("diagrams")}>图表资产</button>
         <button className="nav-item" disabled>说明书 <small>待开发</small></button>
@@ -165,7 +167,8 @@ export function App() {
     </aside>
 
     {page === "overview" ? <ProjectOverview connection={connection}
-      onTaskCreated={(value) => setTaskId(value)} /> : <main>
+      onTaskCreated={(value) => setTaskId(value)} /> : page === "source" ?
+      <SourceMaterials connection={connection} taskId={taskId} /> : <main>
       <header className="topbar">
         <div><p className="eyebrow">DOCUMENT ASSETS</p><h1>图表资产</h1>
           <p>自动生成后仍可修改，所有调整均保留版本与证据关联。</p></div>

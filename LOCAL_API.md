@@ -36,6 +36,10 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | GET | `/api/v1/tasks?limit=20` | 列出最近持久化任务，不返回原始项目路径 |
 | GET | `/api/v1/tasks/{task_id}/inspection` | 读取任务状态、事实、证据和待确认项 |
 | POST | `/api/v1/tasks/{task_id}/confirmations/{field_key}` | 回答待确认项并返回刷新后的任务检查结果 |
+| GET | `/api/v1/tasks/{task_id}/source-materials` | 读取源码筛选、分页预检、DOCX 状态和阻塞原因 |
+| POST | `/api/v1/tasks/{task_id}/source-materials/source-plan` | 人工触发 A/B/C 源码筛选计划 |
+| POST | `/api/v1/tasks/{task_id}/source-materials/code-preview` | 人工触发 59 页代码分页预检 |
+| POST | `/api/v1/tasks/{task_id}/source-materials/source-docx` | 预检通过后人工触发源代码 DOCX 生成 |
 | GET | `/api/v1/tasks/{task_id}/diagram-assets` | 读取资产工作台快照 |
 | GET | `/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions` | 列出版本 |
 | POST | `/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions` | 保存人工或 AI 覆盖 |
@@ -48,6 +52,8 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 `diagram_key` 首版只允许 `system_architecture` 和 `core_business_flow`。
 
 扫描请求为 `{"path":"/user-approved/project-or.zip"}`。目录采用原地只读扫描，ZIP 隔离解压到应用数据目录；桌面页面不提供自由路径文本框，只接受系统文件选择器返回值。
+
+源码材料三个 POST 端点均是显式用户操作，不会因读取状态自动执行。代码不足 59 页时预检会持久化为警告，并禁止生成灌水 DOCX。
 
 ## 保存请求
 

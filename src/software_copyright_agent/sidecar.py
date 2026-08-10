@@ -23,6 +23,10 @@ from .local_api import ApiResponse, DiagramAssetApi
 from .scanner import ScanError
 from .project_catalog import ProjectCatalogService
 from .service import ScanProjectService
+from .source_materials import SourceMaterialsError, SourceMaterialsService
+from .source_plan_service import SourcePlanError
+from .code_preview import CodePreviewError
+from .source_document import SourceDocumentError
 from .storage import Database
 
 
@@ -113,6 +117,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     inspection_service = InspectionService(database)
     confirmation_service = ConfirmationService(database)
     catalog_service = ProjectCatalogService(database)
+    source_materials_service = SourceMaterialsService(database, data_dir)
     api = DiagramAssetApi(service, session_token)
     app = FastAPI(title="Software Copyright Agent Sidecar", version=SIDECAR_VERSION,
                   docs_url=None, redoc_url=None)
@@ -228,6 +233,48 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
             "task_status": answered.task_status.value,
             "inspection": refreshed,
         }
+
+    def source_material_response(action, task_id: str, token: Optional[str]):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return action(task_id)
+        except SourceMaterialsError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "task_not_found", "message": str(error)}
+            })
+        except (SourcePlanError, CodePreviewError, SourceDocumentError) as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "source_material_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/tasks/{task_id}/source-materials")
+    def source_materials(task_id: str,
+                         token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return source_material_response(source_materials_service.snapshot, task_id, token)
+
+    @app.post("/api/v1/tasks/{task_id}/source-materials/source-plan")
+    def build_source_plan(task_id: str,
+                          token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return source_material_response(
+            source_materials_service.build_source_plan, task_id, token
+        )
+
+    @app.post("/api/v1/tasks/{task_id}/source-materials/code-preview")
+    def build_code_preview(task_id: str,
+                           token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return source_material_response(
+            source_materials_service.build_code_preview, task_id, token
+        )
+
+    @app.post("/api/v1/tasks/{task_id}/source-materials/source-docx")
+    def build_source_docx(task_id: str,
+                          token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return source_material_response(
+            source_materials_service.build_source_document, task_id, token
+        )
 
     @app.get("/api/v1/tasks/{task_id}/diagram-assets")
     def workspace(task_id: str, request: Request,

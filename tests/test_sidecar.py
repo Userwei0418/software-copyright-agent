@@ -97,6 +97,29 @@ class SidecarFastApiTests(unittest.TestCase):
             item["key"] == "project.version" and item["status"] == "confirmed"
             for item in confirmed.json()["inspection"]["facts"]
         ))
+        materials = self.client.get(
+            f"/api/v1/tasks/{payload['task_id']}/source-materials", headers=self.headers
+        )
+        self.assertEqual(materials.status_code, 200)
+        self.assertTrue(materials.json()["actions"]["source_plan"])
+        planned = self.client.post(
+            f"/api/v1/tasks/{payload['task_id']}/source-materials/source-plan",
+            headers=self.headers,
+        )
+        self.assertEqual(planned.status_code, 200)
+        self.assertGreater(planned.json()["source_plan"]["summary"]["selected_files"], 0)
+        previewed = self.client.post(
+            f"/api/v1/tasks/{payload['task_id']}/source-materials/code-preview",
+            headers=self.headers,
+        )
+        self.assertEqual(previewed.status_code, 200)
+        self.assertFalse(previewed.json()["code_preview"]["summary"]["sufficient"])
+        blocked = self.client.post(
+            f"/api/v1/tasks/{payload['task_id']}/source-materials/source-docx",
+            headers=self.headers,
+        )
+        self.assertEqual(blocked.status_code, 400)
+        self.assertEqual(blocked.json()["error"]["code"], "source_material_error")
 
 
 if __name__ == "__main__":
