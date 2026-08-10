@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 
-DRAWIO_GENERATOR_VERSION = "drawio-generator-v1"
+DRAWIO_GENERATOR_VERSION = "drawio-generator-v2"
 
 
 class DrawioDocumentError(RuntimeError):
@@ -16,8 +16,8 @@ class DrawioDocumentError(RuntimeError):
 
 
 NODE_STYLE = (
-    "rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#3b82f6;"
-    "fontColor=#1e3a8a;fontSize=12;strokeWidth=1.5;arcSize=12;"
+    "rounded=1;whiteSpace=wrap;html=1;fillColor=#eff6ff;strokeColor=#3b82f6;"
+    "fontColor=#1e3a8a;fontSize=12;strokeWidth=1.5;arcSize=12;spacing=8;"
 )
 STATE_STYLE = (
     "rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#64748b;"
@@ -25,12 +25,27 @@ STATE_STYLE = (
 )
 CONTEXT_STYLE = (
     "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#f97316;"
-    "fontColor=#9a3412;fontSize=12;strokeWidth=1.5;dashed=1;"
+    "fontColor=#9a3412;fontSize=12;strokeWidth=1.5;dashed=1;spacing=8;"
 )
 EDGE_STYLE = (
     "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
     "html=1;strokeColor=#64748b;strokeWidth=1.5;endArrow=block;endFill=1;"
 )
+
+DOMAIN_STYLE = NODE_STYLE.replace("#eff6ff", "#f5f3ff").replace(
+    "#3b82f6", "#8b5cf6").replace("#1e3a8a", "#5b21b6")
+PERSISTENCE_STYLE = NODE_STYLE.replace("#eff6ff", "#f0fdf4").replace(
+    "#3b82f6", "#22c55e").replace("#1e3a8a", "#166534")
+DOCUMENT_STYLE = NODE_STYLE.replace("#eff6ff", "#fff7ed").replace(
+    "#3b82f6", "#f97316").replace("#1e3a8a", "#9a3412")
+SUCCESS_STATE_STYLE = STATE_STYLE.replace("#f8fafc", "#f0fdf4").replace(
+    "#64748b", "#22c55e").replace("#1e293b", "#166534")
+WARNING_STATE_STYLE = STATE_STYLE.replace("#f8fafc", "#fffbeb").replace(
+    "#64748b", "#f59e0b").replace("#1e293b", "#92400e")
+ERROR_STATE_STYLE = STATE_STYLE.replace("#f8fafc", "#fef2f2").replace(
+    "#64748b", "#ef4444").replace("#1e293b", "#991b1b")
+RETURN_EDGE_STYLE = EDGE_STYLE.replace("#64748b", "#f59e0b") + "dashed=1;"
+FAILURE_EDGE_STYLE = EDGE_STYLE.replace("#64748b", "#ef4444")
 
 
 class DrawioDocumentBuilder:
@@ -76,11 +91,9 @@ class DrawioDocumentBuilder:
         })
         for node in diagram["nodes"]:
             x, y, width, height = positions[node["key"]]
-            style = STATE_STYLE if node["kind"] == "state" else (
-                CONTEXT_STYLE if node["kind"] in {"entrypoint", "storage"} else NODE_STYLE
-            )
+            style = self._node_style(node)
             cell = ET.SubElement(root, "mxCell", {
-                "id": node["key"], "value": self._display_label(node["label"]),
+                "id": node["key"], "value": self._display_label(node["label"], node["kind"]),
                 "vertex": "1", "parent": "1", "style": style,
             })
             ET.SubElement(cell, "mxGeometry", {
@@ -91,7 +104,8 @@ class DrawioDocumentBuilder:
             points = self._route(edge, positions, edge_index, diagram["key"])
             cell = ET.SubElement(root, "mxCell", {
                 "id": edge["key"], "value": "", "edge": "1", "parent": "1",
-                "source": edge["source"], "target": edge["target"], "style": EDGE_STYLE,
+                "source": edge["source"], "target": edge["target"],
+                "style": self._edge_style(edge, diagram["key"]),
             })
             geometry = ET.SubElement(cell, "mxGeometry", {
                 "relative": "1", "as": "geometry", "x": "0", "y": "0",
@@ -142,9 +156,9 @@ class DrawioDocumentBuilder:
             if child_x:
                 x = sum(child_x) / len(child_x)
             else:
-                x = 80 + leaf_cursor * 270
+                x = 60 + leaf_cursor * 220
                 leaf_cursor += 1
-            positions[node_key] = (round(x), 110 + depth * 150, 230, 58)
+            positions[node_key] = (round(x), 110 + depth * 150, 190, 62)
             return x
 
         for node in sorted(module_nodes, key=lambda item: (-len(adjacency[item["key"]]), item["key"])):
@@ -153,7 +167,7 @@ class DrawioDocumentBuilder:
                 leaf_cursor += 1
         max_y = max((value[1] for value in positions.values()), default=110)
         for index, node in enumerate(context_nodes):
-            positions[node["key"]] = (80 + index * 270, max_y + 150, 230, 54)
+            positions[node["key"]] = (60 + index * 220, max_y + 150, 190, 58)
         width = max((x + w for x, _, w, _ in positions.values()), default=1200) + 80
         height = max((y + h for _, y, _, h in positions.values()), default=800) + 80
         return positions, (max(1200, width), max(800, height))
@@ -202,8 +216,67 @@ class DrawioDocumentBuilder:
         return [(gutter, source_center[1]), (gutter, target_center[1])]
 
     @staticmethod
-    def _display_label(label: str) -> str:
-        return label.replace("software_copyright_agent.", "").replace("_", " ")
+    def _node_style(node: dict) -> str:
+        label, kind = node["label"], node["kind"]
+        if kind == "state":
+            if label in {"completed", "canceled"}:
+                return SUCCESS_STATE_STYLE
+            if label == "completed_with_warnings" or label == "waiting_for_user":
+                return WARNING_STATE_STYLE
+            if label == "failed":
+                return ERROR_STATE_STYLE
+            return STATE_STYLE
+        if kind in {"entrypoint", "storage"}:
+            return CONTEXT_STYLE
+        if label.endswith(("domain", "state_machine")):
+            return DOMAIN_STYLE
+        if label.endswith(("storage", "unit_of_work", "repositories")):
+            return PERSISTENCE_STYLE
+        if any(marker in label for marker in ("document", "preview", "diagram_plan", "manual_plan")):
+            return DOCUMENT_STYLE
+        return NODE_STYLE
+
+    @staticmethod
+    def _edge_style(edge: dict, diagram_key: str) -> str:
+        if diagram_key != "core_business_flow":
+            return EDGE_STYLE
+        source = edge["source"].replace("state-", "")
+        target = edge["target"].replace("state-", "")
+        if target == "running" and source != "created":
+            return RETURN_EDGE_STYLE
+        if target == "failed":
+            return FAILURE_EDGE_STYLE
+        return EDGE_STYLE
+
+    @staticmethod
+    def _display_label(label: str, kind: str) -> str:
+        state_labels = {
+            "created": "已创建", "running": "处理中",
+            "waiting_for_user": "等待用户确认", "cancel_requested": "请求取消",
+            "canceled": "已取消", "completed": "已完成",
+            "completed_with_warnings": "完成（有警告）", "failed": "执行失败",
+        }
+        if kind == "state" and label in state_labels:
+            return "<b>{0}</b><br><font color=\"#64748b\" style=\"font-size:10px\">{1}</font>".format(
+                state_labels[label], label
+            )
+        technical = label.replace("software_copyright_agent.", "")
+        role_labels = {
+            "cli": "命令入口", "service": "任务编排", "domain": "领域模型",
+            "storage": "本地存储", "state_machine": "状态机",
+            "unit_of_work": "事务工作单元", "diagram_plan_service": "图表规划",
+            "source_document_service": "源码文档生成",
+            "code_preview_service": "代码分页预览", "confirmation": "信息确认",
+            "manual_plan_service": "说明书规划",
+            "source_document_qa_service": "文档质量检查",
+            "copyright-agent": "本地命令入口", "SQLite": "SQLite 数据库",
+        }
+        title = role_labels.get(technical, technical.replace("_", " "))
+        if title == technical:
+            return "<b>{0}</b>".format(title)
+        return "<b>{0}</b><br><font color=\"#64748b\" style=\"font-size:10px\">{1}</font>".format(
+            title, technical
+        )
 
 
 class DrawioDocumentInspector:

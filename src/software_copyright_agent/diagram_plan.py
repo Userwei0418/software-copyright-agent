@@ -93,16 +93,6 @@ class DiagramPlanBuilder:
                     "module-{0}".format(self._slug(label, index)), label, "module",
                     module_fact.id, module_fact.evidence_ids,
                 ))
-        for fact_key, kind in (("runtime.entrypoints", "entrypoint"),
-                               ("data.storage", "storage")):
-            fact = facts.get(fact_key)
-            if fact is None:
-                continue
-            for index, label in enumerate(self._labels(fact.value)):
-                nodes.append(DiagramNode(
-                    "{0}-{1}".format(kind, self._slug(label, index)), label, kind,
-                    fact.id, fact.evidence_ids,
-                ))
         node_by_label = {node.label: node.key for node in nodes if node.kind == "module"}
         edges = []
         selected_dependencies = []
@@ -159,6 +149,12 @@ class DiagramPlanBuilder:
             "selected_module_edge_count_before_limit": len(selected_dependencies),
             "selected_edge_count": len(edges),
             "module_limit": MAX_ARCHITECTURE_MODULES,
+            "unconnected_context": {
+                "entrypoints": self._labels(facts["runtime.entrypoints"].value)
+                if "runtime.entrypoints" in facts else [],
+                "storage": self._labels(facts["data.storage"].value)
+                if "data.storage" in facts else [],
+            },
         }
         return DiagramDefinition(
             "system_architecture", "系统总体架构图", status,

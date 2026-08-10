@@ -131,7 +131,7 @@ class DemoService:
                 ).fetchone()
             finally:
                 connection.close()
-            self.assertEqual(row, (1, "drawio-generator-v1"))
+            self.assertEqual(row, (1, "drawio-generator-v2"))
 
 
 if __name__ == "__main__":
