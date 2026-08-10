@@ -15,9 +15,9 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   useEffect(() => { if (!connection) return; Promise.all([
     listModelConfigs(connection), loadAppSettings(connection),
   ]).then(([items, settings]) => {
-    const verified = items.filter((item) => item.verified_at && item.enabled); setModels(verified);
-    const preferred = verified.some((item) => item.id === settings.manual_model_id)
-      ? settings.manual_model_id : verified[0]?.id;
+    const available = items.filter((item) => item.enabled); setModels(available);
+    const preferred = available.some((item) => item.id === settings.manual_model_id)
+      ? settings.manual_model_id : available[0]?.id;
     setModelId(preferred || "");
   }).catch(() => setModels([])); }, [connection]);
   useEffect(() => {

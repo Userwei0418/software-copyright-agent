@@ -97,6 +97,7 @@ class ModelConfigService:
             "id": row["id"], "name": row["name"],
             "protocol_id": row["protocol_id"], "base_url": row["base_url"],
             "model_name": row["model_name"],
+            "provider_id": row["credential_ref"] or row["id"],
             "has_credential": bool(row["credential_ref"]),
             "enabled": bool(row["enabled"]), "verified_at": row["verified_at"],
             "created_at": row["created_at"], "updated_at": row["updated_at"],

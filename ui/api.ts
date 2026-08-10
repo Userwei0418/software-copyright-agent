@@ -51,7 +51,7 @@ export type RecentTask = {
 };
 export type ModelConfig = { id: string; name: string;
   protocol_id: "openai_compatible" | "anthropic" | "ollama"; base_url: string;
-  model_name: string; has_credential: boolean; enabled: boolean;
+  model_name: string; provider_id: string; has_credential: boolean; enabled: boolean;
   verified_at: string | null; created_at: string; updated_at: string };
 export type AppSettings = { manual_model_id: string | null; diagram_model_id: string | null;
   temperature: number; max_output_tokens: number;
@@ -372,6 +372,10 @@ export async function deleteModelConfig(connection: SidecarConnection, id: strin
 
 export async function storeModelCredential(id: string, apiKey: string) {
   await invoke("store_model_credential", { configId: id, apiKey });
+}
+
+export async function deleteModelCredential(id: string) {
+  await invoke("delete_model_credential", { configId: id });
 }
 
 export async function probeModelConfig(config: { configId: string; protocolId: string;

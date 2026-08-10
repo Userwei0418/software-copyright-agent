@@ -76,9 +76,18 @@ class SidecarFastApiTests(unittest.TestCase):
         })
         self.assertEqual(saved.status_code, 200)
         self.assertTrue(saved.json()["has_credential"])
+        self.assertEqual(saved.json()["provider_id"], config_id)
         self.assertNotIn("credential_ref", saved.json())
+        second_id = "22222222-2222-4222-8222-222222222222"
+        second = self.client.post("/api/v1/model-configs", headers=self.headers, json={
+            "id": second_id, "name": "Local model", "protocol_id": "openai_compatible",
+            "base_url": "https://models.example.test/v1", "model_name": "writer-v2",
+            "credential_ref": config_id,
+        })
+        self.assertEqual(second.json()["provider_id"], config_id)
         listed = self.client.get("/api/v1/model-configs", headers=self.headers)
-        self.assertEqual(listed.json()["items"][0]["model_name"], "writer-v1")
+        self.assertEqual({item["model_name"] for item in listed.json()["items"]},
+                         {"writer-v1", "writer-v2"})
         verified = self.client.post(
             f"/api/v1/model-configs/{config_id}/verified", headers=self.headers
         )
@@ -97,6 +106,7 @@ class SidecarFastApiTests(unittest.TestCase):
             f"/api/v1/model-configs/{config_id}", headers=self.headers
         )
         self.assertEqual(deleted.status_code, 204)
+        self.client.delete(f"/api/v1/model-configs/{second_id}", headers=self.headers)
         cleared = self.client.get("/api/v1/settings", headers=self.headers).json()
         self.assertIsNone(cleared["manual_model_id"])
         self.assertIsNone(cleared["diagram_model_id"])

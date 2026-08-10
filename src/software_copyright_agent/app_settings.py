@@ -42,12 +42,12 @@ class AppSettingsService:
         self._database.initialize()
         now = utc_now()
         with self._database.connect() as connection:
-            verified_ids = {row[0] for row in connection.execute(
-                "SELECT id FROM model_configs WHERE enabled = 1 AND verified_at IS NOT NULL"
+            available_ids = {row[0] for row in connection.execute(
+                "SELECT id FROM model_configs WHERE enabled = 1"
             ).fetchall()}
             for key in ("manual_model_id", "diagram_model_id"):
-                if merged[key] is not None and merged[key] not in verified_ids:
-                    raise ValueError("Default model must be verified and enabled")
+                if merged[key] is not None and merged[key] not in available_ids:
+                    raise ValueError("Default model must be configured and enabled")
             for key, value in merged.items():
                 connection.execute(
                     """INSERT INTO app_settings(key, value_json, updated_at) VALUES (?, ?, ?)
