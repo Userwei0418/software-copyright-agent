@@ -49,6 +49,10 @@ export type RecentTask = {
   source_kind: "directory" | "zip"; status: string; current_stage_key: string;
   summary: ProjectScanResult["summary"] | null; updated_at: string;
 };
+export type ModelConfig = { id: string; name: string;
+  protocol_id: "openai_compatible" | "anthropic" | "ollama"; base_url: string;
+  model_name: string; has_credential: boolean; enabled: boolean;
+  verified_at: string | null; created_at: string; updated_at: string };
 export type Inspection = ProjectScanResult["inspection"];
 export type SourceMaterialsSnapshot = {
   task: { id: string; status: string; current_stage_key: string; safe_error_message?: string | null };
@@ -329,6 +333,48 @@ export async function exportSourceDocument(taskId: string, destination: string):
 
 export async function revealExportedDocument(path: string): Promise<void> {
   await invoke("reveal_exported_document", { path });
+}
+
+export async function listModelConfigs(connection: SidecarConnection): Promise<ModelConfig[]> {
+  const response = await localFetch(connection, "/api/v1/model-configs", {
+    headers: { "X-Session-Token": connection.sessionToken },
+  });
+  return (await requireJson<{ items: ModelConfig[] }>(response, "模型配置读取失败")).items;
+}
+
+export async function saveModelConfig(connection: SidecarConnection, config: {
+  id: string; name: string; protocol_id: ModelConfig["protocol_id"];
+  base_url: string; model_name: string; credential_ref: string | null;
+}): Promise<ModelConfig> {
+  const response = await localFetch(connection, "/api/v1/model-configs", { method: "POST",
+    headers: { "X-Session-Token": connection.sessionToken, "Content-Type": "application/json" },
+    body: JSON.stringify(config) });
+  return requireJson(response, "模型配置保存失败");
+}
+
+export async function markModelVerified(connection: SidecarConnection, id: string) {
+  const response = await localFetch(connection, `/api/v1/model-configs/${encodeURIComponent(id)}/verified`, {
+    method: "POST", headers: { "X-Session-Token": connection.sessionToken },
+  });
+  return requireJson<ModelConfig>(response, "模型验证状态保存失败");
+}
+
+export async function deleteModelConfig(connection: SidecarConnection, id: string) {
+  const response = await localFetch(connection, `/api/v1/model-configs/${encodeURIComponent(id)}`, {
+    method: "DELETE", headers: { "X-Session-Token": connection.sessionToken },
+  });
+  if (!response.ok) throw new Error(`模型配置删除失败 (${response.status})`);
+  await invoke("delete_model_credential", { configId: id });
+}
+
+export async function storeModelCredential(id: string, apiKey: string) {
+  await invoke("store_model_credential", { configId: id, apiKey });
+}
+
+export async function probeModelConfig(config: { configId: string; protocolId: string;
+  baseUrl: string; modelName: string }) {
+  return invoke<{ available: boolean; modelFound: boolean; discoveredModels: string[] }>(
+    "probe_model_config", { request: config });
 }
 
 export async function loadManualWorkspace(connection: SidecarConnection, taskId: string) {

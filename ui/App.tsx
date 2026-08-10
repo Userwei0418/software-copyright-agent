@@ -10,6 +10,7 @@ import { SourceMaterials } from "./SourceMaterials";
 import { ManualWorkspace } from "./ManualWorkspace";
 import { AssetLibrary } from "./AssetLibrary";
 import { ProjectSwitcher } from "./ProjectSwitcher";
+import { Settings } from "./Settings";
 
 const fallbackAssets: DiagramAsset[] = [
   { diagram_key: "system_architecture", title: "系统总体架构图", revision_count: 0,
@@ -32,7 +33,7 @@ export function App() {
   const [previewRevision, setPreviewRevision] = useState<AssetRevision | null>(null);
   const [undoVersion, setUndoVersion] = useState<number | null>(null);
   const [redoVersion, setRedoVersion] = useState<number | null>(null);
-  const [page, setPage] = useState<"overview" | "source" | "diagrams" | "manual" | "assets">("overview");
+  const [page, setPage] = useState<"overview" | "source" | "diagrams" | "manual" | "assets" | "settings">("overview");
   const [previewRequested, setPreviewRequested] = useState(0);
   const connectionAttempt = useRef<Promise<SidecarConnection> | null>(null);
 
@@ -177,6 +178,8 @@ export function App() {
           onClick={() => setPage("diagrams")}>图表资产</button>
         <button className={`nav-item ${page === "assets" ? "active" : ""}`}
           onClick={() => setPage("assets")}>我的资产</button>
+        <button className={`nav-item ${page === "settings" ? "active" : ""}`}
+          onClick={() => setPage("settings")}>设置</button>
         <button className="nav-item" disabled>质量检查 <small>待开发</small></button>
       </nav>
       <div className="side-status"><i className={connection ? "online" : "offline"} />
@@ -191,7 +194,8 @@ export function App() {
       <ManualWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId}
         onOpenDiagrams={() => setPage("diagrams")} /> : page === "assets" ?
       <AssetLibrary connection={connection} onOpen={(value) => { setTaskId(value); setPage("source"); }}
-        onPreview={(value) => { setTaskId(value); setPreviewRequested((count) => count + 1); setPage("source"); }} /> : <main>
+        onPreview={(value) => { setTaskId(value); setPreviewRequested((count) => count + 1); setPage("source"); }} /> :
+      page === "settings" ? <Settings connection={connection} /> : <main>
       <header className="topbar">
         <div><p className="eyebrow">DOCUMENT ASSETS</p><h1>图表资产</h1>
           <p>自动生成后仍可修改，所有调整均保留版本与证据关联。</p></div>

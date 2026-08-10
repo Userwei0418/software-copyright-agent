@@ -32,6 +32,7 @@ from .manual_plan_service import ManualPlanError
 from .diagram_plan_service import DiagramPlanError
 from .drawio_service import DrawioGenerationError
 from .storage import Database
+from .model_config import ModelConfigInput, ModelConfigService
 
 
 SIDECAR_PROTOCOL_VERSION = 1
@@ -94,6 +95,15 @@ class ConfirmationAnswerRequest(StrictModel):
     value: str = Field(min_length=1, max_length=500)
 
 
+class ModelConfigRequest(StrictModel):
+    id: str = Field(min_length=8, max_length=64)
+    name: str = Field(min_length=1, max_length=100)
+    protocol_id: Literal["openai_compatible", "anthropic", "ollama"]
+    base_url: str = Field(min_length=8, max_length=2048)
+    model_name: str = Field(min_length=1, max_length=200)
+    credential_ref: Optional[str] = Field(default=None, max_length=100)
+
+
 class RequestSizeLimitMiddleware:
     def __init__(self, app, maximum_bytes: int = MAX_REQUEST_BYTES) -> None:
         self.app = app
@@ -128,6 +138,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     catalog_service = ProjectCatalogService(database, data_dir)
     source_materials_service = SourceMaterialsService(database, data_dir)
     manual_workspace_service = ManualWorkspaceService(database, data_dir)
+    model_config_service = ModelConfigService(database)
     api = DiagramAssetApi(service, session_token)
     app = FastAPI(title="Software Copyright Agent Sidecar", version=SIDECAR_VERSION,
                   docs_url=None, redoc_url=None)
@@ -207,6 +218,57 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
             return JSONResponse(status_code=400, content={
                 "error": {"code": "invalid_request", "message": str(error)}
             })
+
+    @app.get("/api/v1/model-configs")
+    def model_configs(token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        return {"items": model_config_service.list()}
+
+    @app.post("/api/v1/model-configs")
+    def save_model_config(payload: ModelConfigRequest,
+                          token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return model_config_service.upsert(ModelConfigInput(**payload.model_dump()))
+        except ValueError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "model_config_error", "message": str(error)}
+            })
+
+    @app.post("/api/v1/model-configs/{config_id}/verified")
+    def verify_model_config(config_id: str,
+                            token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return model_config_service.mark_verified(config_id)
+        except ValueError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "model_config_not_found", "message": str(error)}
+            })
+
+    @app.delete("/api/v1/model-configs/{config_id}")
+    def delete_model_config(config_id: str,
+                            token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            model_config_service.delete(config_id)
+        except ValueError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "model_config_not_found", "message": str(error)}
+            })
+        return Response(status_code=204)
 
     @app.post("/api/v1/tasks/{task_id}/rescan")
     def rescan_project(task_id: str,

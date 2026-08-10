@@ -1259,6 +1259,22 @@
 2. 接入真实 AI 说明书草稿阶段，记录模型、耗时、输入证据、调用 ID 和版本；页面右上角只展示已验证可用模型。
 3. 接入 AI 图表语义草稿，并使用专业 Draw.io 技能规则生成、校验和预览可编辑图表。
 
+### 2026-08-10：多协议模型设置与安全凭据闭环
+
+- 新增“设置”页面，支持 OpenAI 兼容协议、Anthropic 和 Ollama；OpenAI 兼容模式可覆盖多数国内外模型服务和自建网关。
+- 模型配置元数据持久化到 SQLite `model_configs`，新增 v11 migration；列表只返回 `has_credential`，不会返回凭据引用或 API Key。
+- API Key 通过 Rust `keyring` 写入 macOS Keychain、Windows Credential Manager 或 Linux 系统凭据后端，不写入 SQLite、日志或前端持久化状态。
+- 保存配置时执行真实连通性和模型发现测试：OpenAI/Anthropic 读取 `/models`，Ollama 读取 `/api/tags`；远程服务强制 HTTPS，本机回环地址允许 HTTP。
+- 只有服务连通且目标模型确实存在时才标记 verified；未验证配置保留在设置页供诊断，但不会进入说明书模型选择器。
+- 说明书右上角新增“生成模型”下拉框，只列出已验证且启用的模型，为下一步真实 AI 正文生成提供明确选择。
+- 引入 `keyring` 3.6.3；Rust 编译测试、TypeScript 检查和模型元数据 API 回归通过。
+
+下一步：
+
+1. 实现一次性凭据注入的模型调用代理，API Key 只在调用内存中出现，不写入 sidecar 数据库。
+2. 生成第一版 AI 说明书结构化草稿，保存模型、提示版本、证据引用、耗时和调用状态。
+3. 在草稿预览确认后，再生成 AI 图表语义并交给 Draw.io 技能管线渲染。
+
 ### 2026-08-10：DOCX 完整性与安全定位
 
 - 源码材料快照对最新 DOCX 重新计算 SHA-256，区分 `verified`、`missing`、`mismatch` 和 `invalid_path`，并显示文件大小。

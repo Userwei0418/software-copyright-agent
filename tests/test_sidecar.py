@@ -67,6 +67,27 @@ class SidecarFastApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
         self.assertEqual(response.json()["error"]["code"], "request_too_large")
 
+    def test_model_config_metadata_never_contains_api_key(self) -> None:
+        config_id = "11111111-1111-4111-8111-111111111111"
+        saved = self.client.post("/api/v1/model-configs", headers=self.headers, json={
+            "id": config_id, "name": "Local model", "protocol_id": "openai_compatible",
+            "base_url": "https://models.example.test/v1", "model_name": "writer-v1",
+            "credential_ref": config_id,
+        })
+        self.assertEqual(saved.status_code, 200)
+        self.assertTrue(saved.json()["has_credential"])
+        self.assertNotIn("credential_ref", saved.json())
+        listed = self.client.get("/api/v1/model-configs", headers=self.headers)
+        self.assertEqual(listed.json()["items"][0]["model_name"], "writer-v1")
+        verified = self.client.post(
+            f"/api/v1/model-configs/{config_id}/verified", headers=self.headers
+        )
+        self.assertIsNotNone(verified.json()["verified_at"])
+        deleted = self.client.delete(
+            f"/api/v1/model-configs/{config_id}", headers=self.headers
+        )
+        self.assertEqual(deleted.status_code, 204)
+
     def test_scan_project_returns_summary_facts_and_confirmations(self) -> None:
         project = self.data_dir / "project"
         (project / "src").mkdir(parents=True)

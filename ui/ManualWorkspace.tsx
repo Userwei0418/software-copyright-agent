@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { loadManualWorkspace, ManualWorkspaceSnapshot, runManualAction,
-  SidecarConnection } from "./api";
+  listModelConfigs, ModelConfig, SidecarConnection } from "./api";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
 type Action = "manual-plan" | "diagram-plan" | "diagram-artifacts";
@@ -10,6 +10,12 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   const [data, setData] = useState<ManualWorkspaceSnapshot | null>(null);
   const [working, setWorking] = useState<Action | null>(null);
   const [message, setMessage] = useState("");
+  const [models, setModels] = useState<ModelConfig[]>([]);
+  const [modelId, setModelId] = useState("");
+  useEffect(() => { if (!connection) return; listModelConfigs(connection).then((items) => {
+    const verified = items.filter((item) => item.verified_at && item.enabled); setModels(verified);
+    setModelId((current) => current || verified[0]?.id || "");
+  }).catch(() => setModels([])); }, [connection]);
   useEffect(() => {
     setData(null);
     if (!connection || !taskId) return;
@@ -27,7 +33,11 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   return <main className="manual-page"><header className="topbar"><div>
     <p className="eyebrow">TECHNICAL MANUAL</p><h1>说明书</h1>
     <p>先完成项目证据预检，再由已配置的 AI 生成说明书与图表草稿。</p></div>
-    <ProjectSwitcher connection={connection} taskId={taskId} onChange={onTaskChange} /></header>
+    <div className="manual-selectors"><ProjectSwitcher connection={connection} taskId={taskId} onChange={onTaskChange} />
+      <label className="model-switcher"><small>生成模型</small><select value={modelId}
+        onChange={(event) => setModelId(event.target.value)}><option value="">尚无可用模型</option>
+        {models.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.model_name}</option>)}</select></label>
+    </div></header>
     {!taskId ? <section className="overview-placeholder source-empty"><span>DOC</span>
       <h2>请先选择项目</h2><p>说明书将复用项目扫描得到的事实与证据。</p></section> :
       <section className="manual-content">{message && <div className="source-notice">{message}</div>}
@@ -46,7 +56,7 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
         </div>
         <div className="ai-generation-card"><div><span>AI</span><div><strong>生成说明书正文与图表语义</strong>
           <p>将调用用户选择的模型，并采用内置软著文档与专业 Draw.io 技能约束输出。</p></div></div>
-          <button disabled>需先接入模型设置</button></div>
+          <button disabled>{modelId ? "正文生成下一步接入" : "请先在设置中添加模型"}</button></div>
         {data?.manual_plan && <><div className="manual-summary"><Metric label="章节" value={data.manual_plan.summary.section_count} />
           <Metric label="已就绪" value={data.manual_plan.summary.ready_sections} />
           <Metric label="待补证据" value={data.manual_plan.summary.needs_evidence_sections} />

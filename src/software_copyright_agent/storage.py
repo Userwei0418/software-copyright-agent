@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -308,6 +308,23 @@ CREATE INDEX idx_diagram_asset_revisions_latest
 ON diagram_asset_revisions(task_id, diagram_key, version DESC);
 """
 
+MIGRATION_011 = """
+CREATE TABLE model_configs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    protocol_id TEXT NOT NULL CHECK (protocol_id IN ('openai_compatible', 'anthropic', 'ollama')),
+    base_url TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    credential_ref TEXT,
+    settings_json TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    verified_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_model_configs_enabled ON model_configs(enabled, updated_at DESC);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -421,6 +438,16 @@ class Database:
                     """INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (10, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
                     ("migration-010",),
+                )
+            applied_v11 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 11"
+            ).fetchone()
+            if applied_v11 is None:
+                connection.executescript(MIGRATION_011)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (11, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-011",),
                 )
 
     @contextmanager

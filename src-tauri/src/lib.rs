@@ -11,6 +11,7 @@ use tauri_plugin_shell::ShellExt;
 
 const PROTOCOL_VERSION: u32 = 1;
 const SIDECAR_NAME: &str = "copyright-agent-sidecar";
+const KEYRING_SERVICE: &str = "com.local.software-copyright-agent.model-api";
 
 #[derive(Default)]
 struct SidecarState {
@@ -55,6 +56,23 @@ struct SourceDocumentArtifact {
 #[derive(Deserialize)]
 struct ArtifactIntegrity {
     status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelProbeRequest {
+    config_id: String,
+    protocol_id: String,
+    base_url: String,
+    model_name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelProbeResult {
+    available: bool,
+    model_found: bool,
+    discovered_models: Vec<String>,
 }
 
 #[tauri::command]
@@ -225,6 +243,78 @@ fn reveal_exported_document(path: String) -> Result<(), String> {
     reveal_in_file_manager(&path)
 }
 
+#[tauri::command]
+fn store_model_credential(config_id: String, api_key: String) -> Result<(), String> {
+    validate_config_id(&config_id)?;
+    if api_key.trim().len() < 8 { return Err("API Key 长度不足".into()); }
+    keyring::Entry::new(KEYRING_SERVICE, &config_id)
+        .map_err(|_| "无法连接系统安全存储")?
+        .set_password(api_key.trim()).map_err(|_| "API Key 保存到系统安全存储失败".to_string())
+}
+
+#[tauri::command]
+fn delete_model_credential(config_id: String) -> Result<(), String> {
+    validate_config_id(&config_id)?;
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &config_id)
+        .map_err(|_| "无法连接系统安全存储")?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => Err("API Key 删除失败".into()),
+    }
+}
+
+#[tauri::command]
+async fn probe_model_config(request: ModelProbeRequest) -> Result<ModelProbeResult, String> {
+    validate_config_id(&request.config_id)?;
+    let base = request.base_url.trim_end_matches('/');
+    if !base.starts_with("https://") && !base.starts_with("http://127.0.0.1")
+        && !base.starts_with("http://localhost") {
+        return Err("远程模型地址必须使用 HTTPS；本机 Ollama 可使用 HTTP".into());
+    }
+    let (url, credential_required) = match request.protocol_id.as_str() {
+        "openai_compatible" => (format!("{base}/models"), true),
+        "anthropic" => (format!("{base}/models"), true),
+        "ollama" => (format!("{base}/api/tags"), false),
+        _ => return Err("不支持的模型协议".into()),
+    };
+    let credential = if credential_required {
+        Some(keyring::Entry::new(KEYRING_SERVICE, &request.config_id)
+            .map_err(|_| "无法连接系统安全存储")?.get_password()
+            .map_err(|_| "未找到该模型的 API Key")?)
+    } else { None };
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()
+        .map_err(|_| "无法创建模型连接")?;
+    let mut call = client.get(url);
+    if let Some(key) = credential.as_ref() {
+        call = if request.protocol_id == "anthropic" {
+            call.header("x-api-key", key).header("anthropic-version", "2023-06-01")
+        } else { call.bearer_auth(key) };
+    }
+    let response = call.send().await.map_err(|_| "模型服务连接失败")?;
+    if !response.status().is_success() {
+        return Err(format!("模型服务验证失败（HTTP {}）", response.status().as_u16()));
+    }
+    let payload: serde_json::Value = response.json().await
+        .map_err(|_| "模型服务返回了无法识别的数据")?;
+    let items = if request.protocol_id == "ollama" {
+        payload.get("models").and_then(|value| value.as_array())
+    } else { payload.get("data").and_then(|value| value.as_array()) };
+    let discovered_models: Vec<String> = items.into_iter().flatten().filter_map(|item| {
+        item.get(if request.protocol_id == "ollama" { "name" } else { "id" })
+            .and_then(|value| value.as_str()).map(str::to_owned)
+    }).take(100).collect();
+    let model_found = discovered_models.iter().any(|value| value == &request.model_name);
+    Ok(ModelProbeResult { available: true, model_found, discovered_models })
+}
+
+fn validate_config_id(value: &str) -> Result<(), String> {
+    if value.len() < 8 || value.len() > 64 || !value.chars().all(
+        |character| character.is_ascii_alphanumeric() || character == '-') {
+        return Err("invalid model config id".into());
+    }
+    Ok(())
+}
+
 async fn resolve_source_document(
     task_id: &str,
     app: &tauri::AppHandle,
@@ -344,7 +434,10 @@ pub fn run() {
             start_sidecar,
             reveal_source_document,
             export_source_document,
-            reveal_exported_document
+            reveal_exported_document,
+            store_model_credential,
+            delete_model_credential,
+            probe_model_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running desktop application");
