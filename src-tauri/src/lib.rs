@@ -1,5 +1,7 @@
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Manager, State};
@@ -36,6 +38,22 @@ struct SidecarHandshake {
     protocol_version: u32,
     version: String,
     pid: u32,
+}
+
+#[derive(Deserialize)]
+struct SourceMaterialsSnapshot {
+    source_document: Option<SourceDocumentArtifact>,
+}
+
+#[derive(Deserialize)]
+struct SourceDocumentArtifact {
+    artifact_relative_path: String,
+    integrity: ArtifactIntegrity,
+}
+
+#[derive(Deserialize)]
+struct ArtifactIntegrity {
+    status: String,
 }
 
 #[tauri::command]
@@ -122,6 +140,109 @@ async fn start_sidecar(
     Ok(connection)
 }
 
+#[tauri::command]
+async fn reveal_source_document(
+    task_id: String,
+    app: tauri::AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<(), String> {
+    validate_task_id(&task_id)?;
+    let connection = state
+        .session
+        .lock()
+        .map_err(|_| "sidecar state poisoned")?
+        .as_ref()
+        .map(|session| session.connection.clone())
+        .ok_or("local service is not connected")?;
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/api/v1/tasks/{}/source-materials",
+            connection.base_url, task_id
+        ))
+        .header("X-Session-Token", connection.session_token)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|_| "source document status request failed")?;
+    if !response.status().is_success() {
+        return Err("source document status is unavailable".into());
+    }
+    let snapshot: SourceMaterialsSnapshot = response
+        .json()
+        .await
+        .map_err(|_| "invalid source document status")?;
+    let document = snapshot
+        .source_document
+        .ok_or("source document has not been generated")?;
+    if document.integrity.status != "verified" {
+        return Err("source document integrity verification failed".into());
+    }
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    let path = verified_artifact_path(&data_dir, &task_id, &document.artifact_relative_path)?;
+    reveal_in_file_manager(&path)
+}
+
+fn validate_task_id(task_id: &str) -> Result<(), String> {
+    if task_id.len() < 8
+        || task_id.len() > 64
+        || !task_id
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || value == '-')
+    {
+        return Err("invalid task id".into());
+    }
+    Ok(())
+}
+
+fn verified_artifact_path(
+    data_dir: &Path,
+    task_id: &str,
+    relative: &str,
+) -> Result<PathBuf, String> {
+    let relative_path = Path::new(relative);
+    if relative_path.is_absolute()
+        || relative_path
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err("invalid source document path".into());
+    }
+    let task_root = data_dir
+        .join("tasks")
+        .join(task_id)
+        .canonicalize()
+        .map_err(|_| "task data directory is unavailable")?;
+    let artifact = task_root
+        .join(relative_path)
+        .canonicalize()
+        .map_err(|_| "source document is unavailable")?;
+    if !artifact.starts_with(&task_root) || !artifact.is_file() {
+        return Err("source document path escapes task directory".into());
+    }
+    Ok(artifact)
+}
+
+fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg("-R").arg(path).status();
+    #[cfg(target_os = "windows")]
+    let status = Command::new("explorer")
+        .arg(format!("/select,{}", path.display()))
+        .status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = Command::new("xdg-open")
+        .arg(path.parent().ok_or("invalid artifact parent")?)
+        .status();
+    status
+        .map_err(|_| "failed to start file manager")?
+        .success()
+        .then_some(())
+        .ok_or_else(|| "file manager could not reveal source document".into())
+}
+
 fn validate_handshake(value: &SidecarHandshake) -> Result<(), String> {
     if value.event != "sidecar.ready"
         || value.host != "127.0.0.1"
@@ -155,7 +276,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(SidecarState::default())
-        .invoke_handler(tauri::generate_handler![start_sidecar])
+        .invoke_handler(tauri::generate_handler![
+            start_sidecar,
+            reveal_source_document
+        ])
         .run(tauri::generate_context!())
         .expect("error while running desktop application");
 }
@@ -196,5 +320,12 @@ mod tests {
         handshake.host = "127.0.0.1".into();
         handshake.protocol_version += 1;
         assert!(validate_handshake(&handshake).is_err());
+    }
+
+    #[test]
+    fn task_id_rejects_path_syntax() {
+        assert!(validate_task_id("3bb5b0f8-5f18-4bc8-9790-174a823e15b4").is_ok());
+        assert!(validate_task_id("../tasks/other").is_err());
+        assert!(validate_task_id("task/other").is_err());
     }
 }

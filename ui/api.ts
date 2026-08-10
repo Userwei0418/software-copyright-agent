@@ -63,7 +63,9 @@ export type SourceMaterialsSnapshot = {
     included_files: number; truncated: boolean;
   } };
   source_document: null | { version: number; created_at: string; artifact_relative_path: string;
-    sha256: string; summary: { total_pages_expected: number; code_pages: number; code_lines: number } };
+    sha256: string; integrity: { status: "verified" | "missing" | "mismatch" | "invalid_path";
+      size_bytes: number | null };
+    summary: { total_pages_expected: number; code_pages: number; code_lines: number } };
   actions: { source_plan: boolean; code_preview: boolean; source_docx: boolean };
   blockers: string[];
 };
@@ -268,4 +270,8 @@ export async function loadCodePagePreview(
     { headers: { "X-Session-Token": connection.sessionToken } },
   );
   return requireJson(response, "分页内容读取失败");
+}
+
+export async function revealSourceDocument(taskId: string): Promise<void> {
+  await invoke("reveal_source_document", { taskId });
 }

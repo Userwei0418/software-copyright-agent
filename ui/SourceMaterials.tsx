@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CodePagePreview, loadCodePagePreview, loadSourceMaterials,
-  runSourceMaterialAction, SidecarConnection, SourceMaterialsSnapshot } from "./api";
+  revealSourceDocument, runSourceMaterialAction, SidecarConnection, SourceMaterialsSnapshot } from "./api";
 
 type Props = { connection: SidecarConnection | null; taskId: string };
 type Action = "source-plan" | "code-preview" | "source-docx";
@@ -41,6 +41,12 @@ export function SourceMaterials({ connection, taskId }: Props) {
       const value = await loadCodePagePreview(connection, taskId);
       setPagePreview(value); setActivePage(0); setMessage("");
     } catch (error) { setMessage(error instanceof Error ? error.message : "分页读取失败"); }
+  }
+
+  async function revealDocument() {
+    setMessage("正在校验并定位 DOCX…");
+    try { await revealSourceDocument(taskId); setMessage("已在文件管理器中定位 DOCX。"); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "DOCX 定位失败"); }
   }
 
   return <main className="source-page">
@@ -89,8 +95,14 @@ export function SourceMaterials({ connection, taskId }: Props) {
               <b className={`grade grade-${item.grade.toLowerCase()}`}>{item.grade}</b>
               <span title={item.relative_path}>{item.relative_path}</span><small>{item.language ?? "未知"}</small>
               <strong>{item.code_lines} 行</strong></div>)}</div></div>}
-          {snapshot.source_document && <div className="artifact-panel"><strong>DOCX v{snapshot.source_document.version} 已生成</strong>
-            <span>{snapshot.source_document.artifact_relative_path}</span><small>SHA-256 {snapshot.source_document.sha256}</small></div>}
+          {snapshot.source_document && <div className="artifact-panel"><div><strong>DOCX v{snapshot.source_document.version} 已生成</strong>
+            <span>{snapshot.source_document.artifact_relative_path}</span><small>SHA-256 {snapshot.source_document.sha256}</small>
+            <b className={`integrity-${snapshot.source_document.integrity.status}`}>{
+              snapshot.source_document.integrity.status === "verified" ?
+                `完整性已验证 · ${formatBytes(snapshot.source_document.integrity.size_bytes)}` :
+                `产物异常 · ${snapshot.source_document.integrity.status}`}</b></div>
+            <button disabled={snapshot.source_document.integrity.status !== "verified"}
+              onClick={revealDocument}>在文件管理器中显示</button></div>}
         </>}
       </section>}
   </main>;
@@ -111,4 +123,9 @@ function CodePage({ page, total }: { page: CodePagePreview["pages"][number]; tot
       className={entry.kind === "file_header" ? "file-line" : ""} key={`${index}-${entry.source_line}`}>
       <em>{entry.source_line ?? ""}</em><code>{entry.continuation ? "↳ " : ""}{entry.text || " "}</code></div>)}</div>
     <footer>{page.line_count} 个可视行</footer></div>;
+}
+function formatBytes(value: number | null) {
+  if (value === null) return "未知大小";
+  return value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KiB` :
+    `${(value / 1024 / 1024).toFixed(2)} MiB`;
 }
