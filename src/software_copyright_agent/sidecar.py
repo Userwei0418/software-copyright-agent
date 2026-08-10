@@ -38,6 +38,11 @@ SIDECAR_PROTOCOL_VERSION = 1
 SIDECAR_VERSION = "0.1.0"
 MAX_REQUEST_BYTES = 1024 * 1024
 SESSION_HEADER = "X-Session-Token"
+ALLOWED_DESKTOP_ORIGINS = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "http://127.0.0.1:1420",
+]
 
 
 class OverlayAction(str, Enum):
@@ -129,7 +134,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     app.add_middleware(RequestSizeLimitMiddleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["tauri://localhost", "http://tauri.localhost"],
+        allow_origins=ALLOWED_DESKTOP_ORIGINS,
         allow_credentials=False,
         allow_methods=["GET", "POST"],
         allow_headers=[SESSION_HEADER, "Content-Type"],

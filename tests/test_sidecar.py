@@ -34,10 +34,17 @@ class SidecarFastApiTests(unittest.TestCase):
         allowed = self.client.get(
             "/api/v1/health", headers={**self.headers, "origin": "tauri://localhost"}
         )
+        development = self.client.get(
+            "/api/v1/health",
+            headers={**self.headers, "origin": "http://127.0.0.1:1420"},
+        )
         denied = self.client.get(
             "/api/v1/health", headers={**self.headers, "origin": "https://example.com"}
         )
         self.assertEqual(allowed.headers["access-control-allow-origin"], "tauri://localhost")
+        self.assertEqual(
+            development.headers["access-control-allow-origin"], "http://127.0.0.1:1420"
+        )
         self.assertNotIn("access-control-allow-origin", denied.headers)
 
     def test_pydantic_schema_errors_use_stable_error_contract(self) -> None:
