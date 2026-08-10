@@ -41,6 +41,10 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | POST | `/api/v1/tasks/{task_id}/source-materials/code-preview` | 人工触发 59 页代码分页预检 |
 | GET | `/api/v1/tasks/{task_id}/source-materials/code-preview/pages` | 读取最新分页产物的首页、中间页和末页样本 |
 | POST | `/api/v1/tasks/{task_id}/source-materials/source-docx` | 预检通过后人工触发源代码 DOCX 生成 |
+| GET | `/api/v1/tasks/{task_id}/manual-workspace` | 读取说明书章节、图表计划和产物状态 |
+| POST | `/api/v1/tasks/{task_id}/manual-workspace/manual-plan` | 人工触发说明书章节与证据计划 |
+| POST | `/api/v1/tasks/{task_id}/manual-workspace/diagram-plan` | 人工触发图表语义计划 |
+| POST | `/api/v1/tasks/{task_id}/manual-workspace/diagram-artifacts` | 两张图就绪后生成 Draw.io 与 SVG 产物 |
 | GET | `/api/v1/tasks/{task_id}/diagram-assets` | 读取资产工作台快照 |
 | GET | `/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions` | 列出版本 |
 | POST | `/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions` | 保存人工或 AI 覆盖 |

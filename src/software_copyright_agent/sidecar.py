@@ -27,6 +27,10 @@ from .source_materials import SourceMaterialsError, SourceMaterialsService
 from .source_plan_service import SourcePlanError
 from .code_preview import CodePreviewError
 from .source_document import SourceDocumentError
+from .manual_workspace import ManualWorkspaceError, ManualWorkspaceService
+from .manual_plan_service import ManualPlanError
+from .diagram_plan_service import DiagramPlanError
+from .drawio_service import DrawioGenerationError
 from .storage import Database
 
 
@@ -118,6 +122,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     confirmation_service = ConfirmationService(database)
     catalog_service = ProjectCatalogService(database)
     source_materials_service = SourceMaterialsService(database, data_dir)
+    manual_workspace_service = ManualWorkspaceService(database, data_dir)
     api = DiagramAssetApi(service, session_token)
     app = FastAPI(title="Software Copyright Agent Sidecar", version=SIDECAR_VERSION,
                   docs_url=None, redoc_url=None)
@@ -282,6 +287,42 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
         return source_material_response(
             source_materials_service.build_source_document, task_id, token
         )
+
+    def manual_response(action, task_id: str, token: Optional[str]):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return action(task_id)
+        except ManualWorkspaceError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_workspace_unavailable", "message": str(error)}
+            })
+        except (ManualPlanError, DiagramPlanError, DrawioGenerationError) as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_workflow_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/tasks/{task_id}/manual-workspace")
+    def manual_workspace(task_id: str,
+                         token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return manual_response(manual_workspace_service.snapshot, task_id, token)
+
+    @app.post("/api/v1/tasks/{task_id}/manual-workspace/manual-plan")
+    def build_manual_plan(task_id: str,
+                          token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return manual_response(manual_workspace_service.build_manual_plan, task_id, token)
+
+    @app.post("/api/v1/tasks/{task_id}/manual-workspace/diagram-plan")
+    def build_diagram_plan(task_id: str,
+                           token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return manual_response(manual_workspace_service.build_diagram_plan, task_id, token)
+
+    @app.post("/api/v1/tasks/{task_id}/manual-workspace/diagram-artifacts")
+    def build_diagram_artifacts(task_id: str,
+                                token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        return manual_response(manual_workspace_service.build_diagrams, task_id, token)
 
     @app.get("/api/v1/tasks/{task_id}/diagram-assets")
     def workspace(task_id: str, request: Request,

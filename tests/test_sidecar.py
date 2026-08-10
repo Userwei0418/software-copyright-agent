@@ -131,6 +131,20 @@ class SidecarFastApiTests(unittest.TestCase):
         )
         self.assertEqual(blocked.status_code, 400)
         self.assertEqual(blocked.json()["error"]["code"], "source_material_error")
+        manual = self.client.get(
+            f"/api/v1/tasks/{payload['task_id']}/manual-workspace", headers=self.headers
+        )
+        self.assertEqual(manual.status_code, 200)
+        self.assertTrue(manual.json()["actions"]["manual_plan"])
+        manual_planned = self.client.post(
+            f"/api/v1/tasks/{payload['task_id']}/manual-workspace/manual-plan",
+            headers=self.headers,
+        )
+        self.assertEqual(manual_planned.status_code, 200)
+        self.assertEqual(len(manual_planned.json()["manual_plan"]["sections"]), 9)
+        self.assertGreater(
+            manual_planned.json()["manual_plan"]["summary"]["missing_information_count"], 0
+        )
 
 
 if __name__ == "__main__":

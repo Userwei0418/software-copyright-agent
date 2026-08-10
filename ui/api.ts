@@ -73,6 +73,18 @@ export type CodePagePreview = { version: number; total_pages: number; pages: Arr
   page_number: number; line_count: number; entries: Array<{ kind: string; path: string | null;
     source_line: number | null; continuation: boolean; text: string }>;
 }> };
+export type ManualWorkspaceSnapshot = {
+  task: { id: string; status: string; current_stage_key: string };
+  manual_plan: null | { version: number; summary: { section_count: number; ready_sections: number;
+    needs_evidence_sections: number; missing_information_count: number; diagram_count: number };
+    sections: Array<{ key: string; title: string; purpose: string; status: string;
+      missing_information: string[]; subsections: string[]; diagram_keys: string[] }>;
+    missing_information: string[]; diagram_requirements: Array<{ key: string; title: string }> };
+  diagram_plan: null | { version: number; summary: { diagram_count: number; ready_diagrams: number;
+    needs_evidence_diagrams: number; node_count: number; edge_count: number } };
+  diagram_artifacts: null | { version: number; summary: Record<string, unknown> };
+  actions: { manual_plan: boolean; diagram_plan: boolean; diagram_artifacts: boolean };
+};
 
 export type OverlayOperation = {
   action: "node.move" | "node.resize" | "node.style" | "node.label" | "node.hide" |
@@ -274,4 +286,21 @@ export async function loadCodePagePreview(
 
 export async function revealSourceDocument(taskId: string): Promise<void> {
   await invoke("reveal_source_document", { taskId });
+}
+
+export async function loadManualWorkspace(connection: SidecarConnection, taskId: string) {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/manual-workspace`,
+    { headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson<ManualWorkspaceSnapshot>(response, "说明书工作台读取失败");
+}
+
+export async function runManualAction(connection: SidecarConnection, taskId: string,
+  action: "manual-plan" | "diagram-plan" | "diagram-artifacts") {
+  const response = await fetch(
+    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/manual-workspace/${action}`,
+    { method: "POST", headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson<ManualWorkspaceSnapshot>(response, "说明书阶段执行失败");
 }
