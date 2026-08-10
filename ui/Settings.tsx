@@ -45,11 +45,14 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [credentialStates, setCredentialStates] = useState<Record<string, boolean>>({});
   const [presetId, setPresetId] = useState("senseaudio");
+  const [selectedView, setSelectedView] = useState<string>("add");
+  const [addStep, setAddStep] = useState<"catalog" | "form">("catalog");
 
   async function refresh() {
     if (!connection) return;
     const [configs, settings] = await Promise.all([listModelConfigs(connection), loadAppSettings(connection)]);
     setItems(configs); setPreferences(settings);
+    setSelectedView((current) => current === "add" && configs.length ? configs[0].provider_id : current);
     const providerIds = [...new Set(configs.filter((item) => item.has_credential).map((item) => item.provider_id))];
     const checks = await Promise.all(providerIds.map(async (id) => [id, await hasModelCredential(id)] as const));
     setCredentialStates(Object.fromEntries(checks));
@@ -62,7 +65,16 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
 
   function resetProviderForm() {
     providerId.current = crypto.randomUUID(); setEditingProviderId(null); setName("");
-    setApiKey(""); applyPreset("senseaudio");
+    setApiKey(""); applyPreset("senseaudio"); setAddStep("catalog");
+  }
+
+  function beginAddProvider() {
+    resetProviderForm(); setSelectedView("add"); setMessage("");
+  }
+
+  function choosePreset(id: string) {
+    providerId.current = crypto.randomUUID(); setEditingProviderId(null); setApiKey("");
+    applyPreset(id); setAddStep("form"); setSelectedView("add"); setMessage("");
   }
 
   function applyPreset(id: string) {
@@ -111,7 +123,8 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
       }
       for (const item of existing) if (!retainedIds.has(item.id)) await deleteModelConfig(connection, item.id);
       if (protocol === "ollama" && hasStoredCredential) await deleteModelCredential(sharedId);
-      const wasEditing = !!editingProviderId; resetProviderForm(); await refresh();
+      const wasEditing = !!editingProviderId; const savedProviderId = sharedId; resetProviderForm(); await refresh();
+      setSelectedView(savedProviderId);
       setMessage(`连接已${wasEditing ? "更新" : "保存"}，共配置 ${models.length} 个模型。`);
     } catch (error) { setMessage(errorText(error, "连接保存失败")); }
     finally { setBusy(null); }
@@ -136,7 +149,7 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
     setCredentialStates((current) => ({ ...current, [first.provider_id]: hasKey }));
     setMessage(hasKey ? "正在编辑连接。API Key 留空会保留原值，填写新 Key 才会覆盖。"
       : "系统安全存储中未找到这个连接的 API Key，请重新填写后保存。");
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    setSelectedView(first.provider_id); setAddStep("form"); window.scrollTo({ top: 0, behavior: "smooth" });
   }
   async function removeProvider(group: ModelConfig[]) {
     if (!connection || !window.confirm(`删除连接“${group[0].name}”及其 ${group.length} 个模型？`)) return;
@@ -144,7 +157,7 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
     try {
       for (const item of group) await deleteModelConfig(connection, item.id);
       if (group[0].has_credential) await deleteModelCredential(group[0].provider_id);
-      await refresh(); setMessage("连接及其模型已删除。");
+      await refresh(); setSelectedView("add"); setAddStep("catalog"); setMessage("连接及其模型已删除。");
     } catch (error) { setMessage(errorText(error, "删除失败")); }
     finally { setBusy(null); }
   }
@@ -164,49 +177,46 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
   }
 
   const available = items.filter((item) => item.enabled);
+  const selectedProvider = providers.find((group) => group[0].provider_id === selectedView);
+  const activePreset = providerPresets.find((item) => item.id === presetId);
+  const providerForm = <section className="provider-editor"><div className="editor-title">
+    <button className="back-link" onClick={() => { if (editingProviderId) setEditingProviderId(null); else setAddStep("catalog"); }}>← 返回</button>
+    <div><h2>{editingProviderId ? `编辑 ${name}` : `配置 ${activePreset?.label ?? "模型服务"}`}</h2>
+      <p>{editingProviderId ? "修改连接信息与模型列表；API Key 留空会保留原值。" : activePreset?.hint}</p></div></div>
+    <div className="connection-form-grid"><label>连接名称<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
+      {(presetId === "custom" || editingProviderId) && <><label>接口协议<select value={protocol} onChange={(event) => { const value = event.target.value as typeof protocol; setProtocol(value); setBaseUrl(defaults[value]); }}>
+        <option value="openai_compatible">OpenAI 兼容</option><option value="anthropic">Anthropic Messages</option><option value="ollama">Ollama 本地</option></select></label>
+        <label className="wide-field">请求地址（Base URL）<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></label></>}
+      {presetId !== "custom" && !editingProviderId && <div className="preset-summary wide-field"><small>请求地址</small><strong>{baseUrl}</strong></div>}
+      {protocol !== "ollama" && <label className="wide-field">API Key<input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)}
+        placeholder={editingProviderId ? "留空保留现有 API Key" : "输入后将加密保存在本机"} /></label>}
+      <label className="wide-field">模型 ID <small>每行一个；可随时增删</small><textarea rows={7} value={modelText} onChange={(event) => setModelText(event.target.value)} /></label></div>
+    <div className="editor-actions"><button className="secondary-action" disabled={!!busy || !connection} onClick={tryDiscover}>{busy === "detect" ? "正在获取…" : "自动获取模型"}</button>
+      <button disabled={!!busy || !connection} onClick={saveProvider}>{busy === "save" ? "正在保存…" : `${editingProviderId ? "保存修改" : "添加服务"}（${enteredModels().length} 个模型）`}</button></div>
+  </section>;
   return <main className="settings-page"><header className="topbar"><div><p className="eyebrow">SETTINGS</p>
-    <h1>设置</h1><p>一个连接可配置多个模型；API Key 经 AES-256-GCM 加密后本地保存。</p></div></header>
-    <section className="settings-content"><div className="settings-provider-grid"><section className="model-form"><div>
-      <h2>{editingProviderId ? "编辑模型连接" : "添加模型连接"}</h2><p>模型 ID 以换行或逗号分隔。自动获取是可选辅助，失败也能手工保存。</p></div>
-      {!editingProviderId && <label>模型厂商<select value={presetId} onChange={(event) => applyPreset(event.target.value)}>
-        {providerPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>}
-      <label>连接名称<input required value={name} onChange={(event) => setName(event.target.value)}
-        placeholder="例如：SenseAudio Token Plan" /></label>
-      {(presetId === "custom" || editingProviderId) && <><label>协议<select value={protocol} onChange={(event) => { const value = event.target.value as typeof protocol;
-        setProtocol(value); setBaseUrl(defaults[value]); }}><option value="openai_compatible">OpenAI 兼容</option>
-        <option value="anthropic">Anthropic</option><option value="ollama">Ollama 本地</option></select></label>
-      <label>Base URL<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></label></>}
-      {presetId !== "custom" && !editingProviderId && <div className="preset-summary"><strong>{baseUrl}</strong>
-        <small>{providerPresets.find((item) => item.id === presetId)?.hint}</small></div>}
-      {protocol !== "ollama" && <label>API Key<input required type="password" autoComplete="new-password"
-        value={apiKey} onChange={(event) => setApiKey(event.target.value)}
-        placeholder={editingProviderId && credentialStates[editingProviderId] === false
-          ? "API Key 已缺失，请重新输入" : editingProviderId ? "留空保留现有 API Key" : "数据库只保存加密密文"} /></label>}
-      <label>模型 ID（每行一个）<textarea rows={6} value={modelText}
-        onChange={(event) => setModelText(event.target.value)}
-        placeholder={"senseaudio-s2\ndeepseek-v4-pro\nqwen3.6-27b"} /></label>
-      <div className="detected-models"><button type="button" disabled={!!busy || !connection} onClick={tryDiscover}>
-        {busy === "detect" ? "正在尝试获取…" : "尝试获取模型（可选）"}</button>
-        <button type="button" disabled={!!busy || !connection} onClick={saveProvider}>
-          {busy === "save" ? "正在保存…" : `${editingProviderId ? "保存修改" : "保存连接与模型"}${enteredModels().length ? `（${enteredModels().length}）` : ""}`}</button>
-        {editingProviderId && <button className="secondary-action" type="button" disabled={!!busy} onClick={resetProviderForm}>取消编辑</button>}</div>
-      {message && <p className="settings-message">{message}</p>}
-    </section>
-    <div className="model-list"><div className="section-title"><span>已配置连接</span><em>{providers.length}</em></div>
-      {providers.length ? providers.map((group) => <article className="provider-card" key={group[0].provider_id}>
-        <div className="provider-heading"><span className={group[0].has_credential && credentialStates[group[0].provider_id] === false ? "credential-missing" : "verified"}>
-          {group[0].has_credential && credentialStates[group[0].provider_id] === false ? "缺少 Key" : "已配置"}</span><div><strong>{group[0].name}</strong>
-          <small>{group[0].protocol_id} · {group.length} 个模型</small><code>{group[0].base_url}</code></div>
-          <div className="provider-actions"><button disabled={!!busy} onClick={() => editProvider(group)}>编辑</button>
-            <button className="danger" disabled={!!busy} onClick={() => removeProvider(group)}>删除</button></div></div>
-        <div className="provider-models">{group.map((item) => <div className="provider-model" key={item.id}>
-          <div><strong>{item.model_name}</strong>{(testStates[item.id] || item.endpoint_mode) &&
-            <small className={testStates[item.id]?.startsWith("连接成功") ? "test-ok" : "test-note"}>
-              {testStates[item.id] || `已协商接口 · ${item.endpoint_mode}`}</small>}</div>
-          <button disabled={testStates[item.id] === "正在测试…"} onClick={() => testSavedModel(item)}>测试连接</button>
-        </div>)}</div></article>) : <div className="settings-empty">尚未配置连接</div>}
-    </div></div>
-    <section className="preference-form"><div className="section-title"><span>生成与文档默认设置</span></div>
+    <h1>模型与生成设置</h1><p>集中管理模型服务、连接状态和文档生成偏好。</p></div></header>
+    <section className="settings-workbench"><aside className="provider-nav"><div className="provider-nav-title"><div><strong>模型服务</strong><small>{providers.length} 个连接</small></div>
+      <button onClick={beginAddProvider}>＋ 添加</button></div>
+      <div className="provider-nav-list">{providers.map((group) => <button className={selectedView === group[0].provider_id ? "active" : ""} key={group[0].provider_id}
+        onClick={() => { setSelectedView(group[0].provider_id); setEditingProviderId(null); setMessage(""); }}><span>{group[0].name.slice(0, 1)}</span><div><strong>{group[0].name}</strong><small>{group.length} 个模型</small></div><i /></button>)}
+        {!providers.length && <p>还没有模型服务<br />从常用厂商开始添加</p>}</div>
+      <button className={`preference-nav ${selectedView === "preferences" ? "active" : ""}`} onClick={() => setSelectedView("preferences")}><span>⚙</span><div><strong>生成偏好</strong><small>默认模型与参数</small></div></button>
+    </aside><div className="settings-detail">{message && <p className="settings-message">{message}</p>}
+      {selectedView === "add" && addStep === "catalog" && <section className="provider-catalog"><div><h2>添加模型服务</h2><p>选择服务商后，只需填写 API Key；模型与地址已为你预设。</p></div>
+        <div className="provider-catalog-grid">{providerPresets.map((preset) => <button key={preset.id} onClick={() => choosePreset(preset.id)}><span>{preset.id === "custom" ? "+" : preset.label.slice(0, 1)}</span>
+          <div><strong>{preset.label}</strong><small>{preset.id === "custom" ? "兼容其他 OpenAI / Anthropic / Ollama 服务" : `${preset.models.length} 个推荐模型`}</small></div><b>›</b></button>)}</div></section>}
+      {selectedView === "add" && addStep === "form" && providerForm}
+      {selectedProvider && editingProviderId === selectedProvider[0].provider_id && providerForm}
+      {selectedProvider && editingProviderId !== selectedProvider[0].provider_id && <section className="provider-detail"><header><div className="provider-identity"><span>{selectedProvider[0].name.slice(0, 1)}</span><div><h2>{selectedProvider[0].name}</h2><p>{selectedProvider[0].base_url}</p></div></div>
+        <div className="provider-actions"><button onClick={() => editProvider(selectedProvider)}>编辑配置</button><button className="danger" onClick={() => removeProvider(selectedProvider)}>删除</button></div></header>
+        <div className="connection-status"><span className={credentialStates[selectedProvider[0].provider_id] === false ? "warning" : "ok"} />
+          <div><strong>{credentialStates[selectedProvider[0].provider_id] === false ? "需要重新配置 API Key" : "凭据已安全保存"}</strong><small>{selectedProvider[0].protocol_id} · API Key 加密存储于本机</small></div></div>
+        <div className="model-table-title"><div><h3>可用模型</h3><p>逐个测试可自动识别该模型支持的接口协议。</p></div><em>{selectedProvider.length}</em></div>
+        <div className="provider-models">{selectedProvider.map((item) => <div className="provider-model" key={item.id}><div><strong>{item.model_name}</strong>
+          <small className={testStates[item.id]?.startsWith("连接成功") ? "test-ok" : "test-note"}>{testStates[item.id] || (item.endpoint_mode ? `已识别 · ${item.endpoint_mode}` : "尚未测试")}</small></div>
+          <button disabled={testStates[item.id] === "正在测试…"} onClick={() => testSavedModel(item)}>测试连接</button></div>)}</div></section>}
+      {selectedView === "preferences" && <section className="preference-form"><div className="preference-heading"><h2>生成偏好</h2><p>这些配置作为新任务的默认值，仍可在具体生成页面临时切换。</p></div>
       <div className="preference-grid"><label>说明书默认模型<select value={preferences.manual_model_id ?? ""}
         onChange={(event) => setPreferences({ ...preferences, manual_model_id: event.target.value || null })}>
         <option value="">每次手动选择</option>{available.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.model_name}</option>)}</select></label>
@@ -223,5 +233,5 @@ export function Settings({ connection }: { connection: SidecarConnection | null 
       <label className="check-setting"><input type="checkbox" checked={preferences.auto_preview}
         onChange={(event) => setPreferences({ ...preferences, auto_preview: event.target.checked })} />生成完成后自动打开预览</label></div>
       <button disabled={!!busy || !connection} onClick={savePreferences}>{busy === "preferences" ? "正在保存…" : "保存通用设置"}</button>
-    </section></section></main>;
+    </section>}</div></section></main>;
 }
