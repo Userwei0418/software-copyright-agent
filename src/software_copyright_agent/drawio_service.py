@@ -60,7 +60,8 @@ class DrawioGenerationService:
             if task is None or plan_run is None:
                 raise DrawioGenerationError("Diagram plan not found for task")
             if task["status"] not in {TaskStatus.COMPLETED.value,
-                                      TaskStatus.COMPLETED_WITH_WARNINGS.value}:
+                                      TaskStatus.COMPLETED_WITH_WARNINGS.value,
+                                      TaskStatus.FAILED.value}:
                 raise DrawioGenerationError("Task must be completed before diagram generation")
         plan_path = self._data_root / "tasks" / task_id / plan_run["artifact_relative_path"]
         payload = json.loads(plan_path.read_text(encoding="utf-8"))

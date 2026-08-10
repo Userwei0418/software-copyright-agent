@@ -76,7 +76,7 @@ class ManualWorkspaceService:
                 "edge_count": len(item.get("edges", [])),
                 "missing_information": item.get("missing_information", []),
             } for item in content.get("diagrams", [])]
-        allowed = task["status"] in {"completed", "completed_with_warnings"}
+        allowed = task["status"] in {"completed", "completed_with_warnings", "failed"}
         draft_payload = self._run(draft)
         if draft_payload is not None:
             path = (self._data_root / "tasks" / task_id / draft["artifact_relative_path"]).resolve()
@@ -112,7 +112,23 @@ class ManualWorkspaceService:
         return self.snapshot(task_id)
 
     def generate_manual(self, task_id: str, model_config_id: str) -> dict:
+        with self._database.connect() as connection:
+            has_manual = connection.execute(
+                "SELECT 1 FROM manual_plan_runs WHERE task_id = ? LIMIT 1", (task_id,)
+            ).fetchone() is not None
+            has_diagram = connection.execute(
+                "SELECT 1 FROM diagram_plan_runs WHERE task_id = ? LIMIT 1", (task_id,)
+            ).fetchone() is not None
+        if not has_manual:
+            self._manual_plan.execute(task_id)
+        if not has_diagram:
+            self._diagram_plan.execute(task_id)
         self._generation.execute(task_id, model_config_id)
+        try:
+            self._drawio.execute(task_id)
+        except DrawioGenerationError:
+            # The manual draft remains useful; diagram failure is exposed as a retryable warning.
+            pass
         return self.snapshot(task_id)
 
     @staticmethod

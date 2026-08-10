@@ -39,9 +39,9 @@ class ManualPlanService:
             task = connection.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if task is None:
                 raise ManualPlanError("Task not found: {0}".format(task_id))
-            if task["status"] not in {
-                TaskStatus.COMPLETED.value, TaskStatus.COMPLETED_WITH_WARNINGS.value,
-            }:
+            if task["status"] not in {TaskStatus.COMPLETED.value,
+                                      TaskStatus.COMPLETED_WITH_WARNINGS.value,
+                                      TaskStatus.FAILED.value}:
                 raise ManualPlanError("Task must be completed before manual planning")
             rows = connection.execute(
                 """SELECT id, fact_key, value_json, confidence, evidence_ids_json

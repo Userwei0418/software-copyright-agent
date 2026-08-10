@@ -28,7 +28,7 @@ class ManualGenerationService:
             task = connection.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if task is None:
                 raise ManualGenerationError("任务不存在")
-            if task["status"] not in {"completed", "completed_with_warnings"}:
+            if task["status"] not in {"completed", "completed_with_warnings", "failed"}:
                 raise ManualGenerationError("项目扫描尚未完成")
             config = connection.execute(
                 """SELECT id, protocol_id, base_url, model_name, credential_ref, settings_json

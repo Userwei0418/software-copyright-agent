@@ -53,23 +53,17 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
     {!taskId ? <section className="overview-placeholder source-empty"><span>DOC</span>
       <h2>请先选择项目</h2><p>说明书将复用项目扫描得到的事实与证据。</p></section> :
       <section className="manual-content">{message && <div className="source-notice">{message}</div>}
-        <div className="generation-boundary"><strong>当前阶段：项目证据预检</strong>
-          <p>下面三步由本地规则执行，不调用 AI，也不代表说明书正文已经生成。AI 正文生成将在模型配置接入后单独显示模型、耗时和调用记录。</p></div>
-        <div className="manual-actions">
-          <ActionCard number="01" title="章节证据预检（规则）" ready={!!data?.manual_plan}
-            detail="本地规则规划章节并列出缺失证据，不生成正文。"
-            disabled={!data?.actions.manual_plan || !!working} onClick={() => run("manual-plan")} />
-          <ActionCard number="02" title="图表证据预检（规则）" ready={!!data?.diagram_plan}
-            detail="检查源码中可支撑架构图和流程图的节点、连线与缺口。"
-            disabled={!data?.actions.diagram_plan || !!working} onClick={() => run("diagram-plan")} />
-          <ActionCard number="03" title="渲染可编辑图表（规则）" ready={!!data?.diagram_artifacts}
-            detail="证据完整时把语义计划渲染为 Draw.io 与 SVG；不调用图片生成模型。"
-            disabled={!data?.actions.diagram_artifacts || !!working} onClick={() => run("diagram-artifacts")} />
-        </div>
         <div className="ai-generation-card"><div><span>AI</span><div><strong>生成说明书正文与图表语义</strong>
-          <p>将调用用户选择的模型，并采用内置软著文档与专业 Draw.io 技能约束输出。</p></div></div>
+          <p>一次完成证据整理、AI 正文草稿、图表规划与可编辑 Draw.io 草稿。</p></div></div>
           <button disabled={!modelId || !data?.actions.manual_generate || generating} onClick={generateDraft}>
-            {generating ? "AI 正在生成…" : !modelId ? "请先在设置中添加模型" : data?.manual_draft ? "重新生成草稿" : "生成说明书草稿"}</button></div>
+            {generating ? "正在一键生成…" : !modelId ? "请先在设置中添加模型" : data?.manual_draft ? "重新一键生成" : "一键生成说明书与图表"}</button></div>
+        <details className="manual-advanced"><summary>高级：查看或单独重跑内部步骤</summary><p>这些规则仅用于证据追踪和问题诊断，一键生成会自动执行必要步骤。</p>
+          <div className="manual-actions"><ActionCard number="01" title="章节证据预检" ready={!!data?.manual_plan}
+            detail="规划章节并列出待确认信息。" disabled={!data?.actions.manual_plan || !!working} onClick={() => run("manual-plan")} />
+          <ActionCard number="02" title="图表证据预检" ready={!!data?.diagram_plan}
+            detail="提取架构与流程的节点和连线。" disabled={!data?.actions.diagram_plan || !!working} onClick={() => run("diagram-plan")} />
+          <ActionCard number="03" title="渲染可编辑图表" ready={!!data?.diagram_artifacts}
+            detail="将现有语义计划渲染为 Draw.io 与 SVG。" disabled={!data?.actions.diagram_artifacts || !!working} onClick={() => run("diagram-artifacts")} /></div></details>
         {data?.manual_draft && <section className="manual-draft"><header><div><strong>AI 说明书草稿 v{data.manual_draft.version}</strong>
           <small>{data.manual_draft.summary.model_name} · {(data.manual_draft.elapsed_ms / 1000).toFixed(1)} 秒 · {data.manual_draft.summary.character_count} 字符</small></div>
           <span>已持久化</span></header><pre>{data.manual_draft.content}</pre></section>}

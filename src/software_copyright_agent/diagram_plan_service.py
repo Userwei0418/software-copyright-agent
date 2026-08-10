@@ -44,9 +44,9 @@ class DiagramPlanService:
             ).fetchone()
             if task is None or manual_run is None:
                 raise DiagramPlanError("Manual plan not found for task")
-            if task["status"] not in {
-                TaskStatus.COMPLETED.value, TaskStatus.COMPLETED_WITH_WARNINGS.value,
-            }:
+            if task["status"] not in {TaskStatus.COMPLETED.value,
+                                      TaskStatus.COMPLETED_WITH_WARNINGS.value,
+                                      TaskStatus.FAILED.value}:
                 raise DiagramPlanError("Task must be completed before diagram planning")
             rows = connection.execute(
                 """SELECT id, fact_key, value_json, confidence, evidence_ids_json
