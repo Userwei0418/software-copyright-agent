@@ -108,6 +108,9 @@ class SidecarFastApiTests(unittest.TestCase):
             f"/api/v1/tasks/{payload['task_id']}/source-materials", headers=self.headers
         )
         self.assertEqual(materials.status_code, 200)
+        self.assertEqual(materials.json()["project"], {
+            "name": "desktop-demo", "version": "V1.2.3"
+        })
         self.assertTrue(materials.json()["actions"]["source_plan"])
         planned = self.client.post(
             f"/api/v1/tasks/{payload['task_id']}/source-materials/source-plan",

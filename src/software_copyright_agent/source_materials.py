@@ -26,12 +26,24 @@ class SourceMaterialsService:
         self._database.initialize()
         with self._database.connect() as connection:
             task = connection.execute(
-                """SELECT id, status, current_stage_key, failure_category,
-                safe_error_message FROM tasks WHERE id = ?""",
+                """SELECT t.id, t.status, t.current_stage_key, t.failure_category,
+                t.safe_error_message, s.display_name FROM tasks t
+                JOIN project_sources s ON s.id = t.source_id WHERE t.id = ?""",
                 (task_id,),
             ).fetchone()
             if task is None:
                 raise SourceMaterialsError("Task not found: {0}".format(task_id))
+            metadata_rows = connection.execute(
+                """SELECT fact_key, value_json, status, created_at FROM facts
+                WHERE task_id = ? AND fact_key IN ('project.name', 'project.version')
+                AND status IN ('candidate', 'confirmed')
+                ORDER BY CASE status WHEN 'confirmed' THEN 0 ELSE 1 END, created_at DESC""",
+                (task_id,),
+            ).fetchall()
+            metadata = {}
+            for row in metadata_rows:
+                if row["fact_key"] not in metadata:
+                    metadata[row["fact_key"]] = json.loads(row["value_json"])
 
             plan = connection.execute(
                 """SELECT id, version, summary_json, created_at FROM source_plan_runs
@@ -86,7 +98,13 @@ class SourceMaterialsService:
         }
         blockers = self._blockers(status, plan_payload, preview_payload)
         return {
-            "task": dict(task),
+            "task": {key: task[key] for key in (
+                "id", "status", "current_stage_key", "failure_category", "safe_error_message"
+            )},
+            "project": {
+                "name": metadata.get("project.name") or task["display_name"],
+                "version": metadata.get("project.version") or "",
+            },
             "source_plan": plan_payload,
             "code_preview": preview_payload,
             "source_document": document_payload,

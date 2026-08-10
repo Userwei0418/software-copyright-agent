@@ -52,6 +52,7 @@ export type RecentTask = {
 export type Inspection = ProjectScanResult["inspection"];
 export type SourceMaterialsSnapshot = {
   task: { id: string; status: string; current_stage_key: string; safe_error_message?: string | null };
+  project: { name: string; version: string };
   source_plan: null | { version: number; created_at: string; summary: {
     total_source_files: number; selected_files: number; selected_code_lines: number;
     excluded_files: number; grades: Record<"A" | "B" | "C", number>;
@@ -322,6 +323,10 @@ export async function revealSourceDocument(taskId: string): Promise<void> {
 
 export async function exportSourceDocument(taskId: string, destination: string): Promise<void> {
   await invoke("export_source_document", { taskId, destination });
+}
+
+export async function revealExportedDocument(path: string): Promise<void> {
+  await invoke("reveal_exported_document", { path });
 }
 
 export async function loadManualWorkspace(connection: SidecarConnection, taskId: string) {

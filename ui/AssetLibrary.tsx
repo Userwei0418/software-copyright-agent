@@ -1,9 +1,10 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import { exportSourceDocument, listRecentTasks, loadSourceMaterials, RecentTask,
-  revealSourceDocument, SidecarConnection, SourceMaterialsSnapshot } from "./api";
+  revealExportedDocument, SidecarConnection, SourceMaterialsSnapshot } from "./api";
 
-type AssetRow = { task: RecentTask; source: SourceMaterialsSnapshot["source_document"] };
+type AssetRow = { task: RecentTask; source: SourceMaterialsSnapshot["source_document"];
+  project: SourceMaterialsSnapshot["project"] };
 
 export function AssetLibrary({ connection, onOpen, onPreview }: {
   connection: SidecarConnection | null; onOpen: (taskId: string) => void;
@@ -11,22 +12,27 @@ export function AssetLibrary({ connection, onOpen, onPreview }: {
 }) {
   const [rows, setRows] = useState<AssetRow[]>([]);
   const [message, setMessage] = useState("正在汇总本地产物…");
+  const [exported, setExported] = useState<Record<string, string>>({});
   useEffect(() => {
     if (!connection) return;
     listRecentTasks(connection).then(async (tasks) => {
       const loaded = await Promise.all(tasks.map(async (task) => {
-        try { return { task, source: (await loadSourceMaterials(connection, task.task_id)).source_document }; }
-        catch { return { task, source: null }; }
+        try { const snapshot = await loadSourceMaterials(connection, task.task_id);
+          return { task, source: snapshot.source_document, project: snapshot.project }; }
+        catch { return { task, source: null, project: { name: task.display_name, version: "" } }; }
       }));
       setRows(loaded); setMessage("");
     }).catch(() => setMessage("资产读取失败，请检查本地服务。"));
   }, [connection]);
 
   async function exportDoc(row: AssetRow) {
-    const destination = await save({ title: "导出源代码文档", defaultPath: `${row.task.display_name}-源代码.docx`,
+    const destination = await save({ title: "导出源代码文档",
+      defaultPath: `${safeFilename(row.project.name)}-${safeFilename(row.project.version || "未标版本")}-源代码文档.docx`,
       filters: [{ name: "Word 文档", extensions: ["docx"] }] });
     if (!destination) return;
-    try { await exportSourceDocument(row.task.task_id, destination); setMessage(`已导出到 ${destination}`); }
+    try { await exportSourceDocument(row.task.task_id, destination);
+      setExported((current) => ({ ...current, [row.task.task_id]: destination }));
+      setMessage(`已导出到 ${destination}`); }
     catch (error) { setMessage(error instanceof Error ? error.message : "导出失败"); }
   }
 
@@ -41,9 +47,16 @@ export function AssetLibrary({ connection, onOpen, onPreview }: {
       <div className={`asset-file ${row.source ? "ready" : "pending"}`}><b>DOCX</b><div>
         <strong>源代码文档</strong><small>{row.source ? `v${row.source.version} · ${row.source.summary.total_pages_expected} 页` : "尚未生成"}</small></div>
         {row.source && <div className="asset-file-actions"><button onClick={() => onPreview(row.task.task_id)}>程序内查看</button>
-          <button onClick={() => exportDoc(row)}>导出…</button><button onClick={() => revealSourceDocument(row.task.task_id)}>文件夹</button></div>}
+          <button onClick={() => exported[row.task.task_id]
+            ? revealExportedDocument(exported[row.task.task_id]) : exportDoc(row)}>
+            {exported[row.task.task_id] ? "在文件夹中显示" : "导出…"}</button></div>}
       </div>
       <div className="asset-file pending"><b>DOCX</b><div><strong>软件说明书</strong><small>尚未生成</small></div></div>
     </article>)}</div>
   </section></main>;
+}
+
+function safeFilename(value: string) {
+  return value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+    .replace(/[. ]+$/g, "").trim() || "项目";
 }

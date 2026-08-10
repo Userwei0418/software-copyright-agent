@@ -213,6 +213,18 @@ async fn export_source_document(
     Ok(())
 }
 
+#[tauri::command]
+fn reveal_exported_document(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !path.is_absolute() || !path.is_file()
+        || path.extension().and_then(|value| value.to_str())
+            .map(|value| value.eq_ignore_ascii_case("docx")) != Some(true)
+    {
+        return Err("exported document is unavailable".into());
+    }
+    reveal_in_file_manager(&path)
+}
+
 async fn resolve_source_document(
     task_id: &str,
     app: &tauri::AppHandle,
@@ -331,7 +343,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_sidecar,
             reveal_source_document,
-            export_source_document
+            export_source_document,
+            reveal_exported_document
         ])
         .run(tauri::generate_context!())
         .expect("error while running desktop application");

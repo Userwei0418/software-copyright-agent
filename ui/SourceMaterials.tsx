@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { CodePagePreview, loadCodePagePreview, loadSourceMaterials,
-  exportSourceDocument, rescanProject, revealSourceDocument, runSourceMaterialAction, SidecarConnection,
+  exportSourceDocument, rescanProject, revealExportedDocument, runSourceMaterialAction, SidecarConnection,
   SourceMaterialsSnapshot } from "./api";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
@@ -19,9 +19,11 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
   const [activePage, setActivePage] = useState(0);
   const [strategy, setStrategy] = useState<"standard" | "relaxed" | "maximum">("standard");
   const [documentPreview, setDocumentPreview] = useState<CodePagePreview | null>(null);
+  const [exportedPath, setExportedPath] = useState<string | null>(null);
   useEffect(() => {
     setSnapshot(null);
     setPagePreview(null);
+    setExportedPath(null);
     if (!connection || !taskId) return;
     setMessage("正在读取源码材料状态…");
     loadSourceMaterials(connection, taskId).then((value) => {
@@ -58,11 +60,21 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
 
   async function exportDocument() {
     if (!snapshot?.source_document) return;
-    const destination = await save({ title: "导出源代码文档", defaultPath: "源代码文档.docx",
+    const project = safeFilename(snapshot.project.name || "项目");
+    const version = safeFilename(snapshot.project.version || "未标版本");
+    const destination = await save({ title: "导出源代码文档",
+      defaultPath: `${project}-${version}-源代码文档.docx`,
       filters: [{ name: "Word 文档", extensions: ["docx"] }] });
     if (!destination) return;
-    try { await exportSourceDocument(taskId, destination); setMessage(`文档已导出到 ${destination}`); }
+    try { await exportSourceDocument(taskId, destination); setExportedPath(destination);
+      setMessage(`文档已导出到 ${destination}`); }
     catch (error) { setMessage(error instanceof Error ? error.message : "DOCX 导出失败"); }
+  }
+
+  async function showExport() {
+    if (!exportedPath) return;
+    try { await revealExportedDocument(exportedPath); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "导出文件定位失败"); }
   }
 
   async function openPagePreview() {
@@ -72,12 +84,6 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
       const value = await loadCodePagePreview(connection, taskId);
       setPagePreview(value); setActivePage(0); setMessage("");
     } catch (error) { setMessage(error instanceof Error ? error.message : "分页读取失败"); }
-  }
-
-  async function revealDocument() {
-    setMessage("正在校验并定位 DOCX…");
-    try { await revealSourceDocument(taskId); setMessage("已在文件管理器中定位 DOCX。"); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "DOCX 定位失败"); }
   }
 
   async function rescan() {
@@ -103,7 +109,8 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
         {snapshot?.source_document && <div className="artifact-success"><div><span>✓</span><div>
           <strong>源代码文档已生成</strong><small>DOCX v{snapshot.source_document.version} · 可立即查看或导出到自选位置</small>
         </div></div><div><button onClick={openDocumentPreview}>程序内查看</button>
-          <button className="primary" onClick={exportDocument}>导出…</button></div></div>}
+          <button className="primary" onClick={exportedPath ? showExport : exportDocument}>
+            {exportedPath ? "在文件夹中显示" : "导出…"}</button></div></div>}
         <div className="pipeline-grid">
           <Stage index="01" title="源码筛选计划" ready={!!snapshot?.source_plan}
             description="按业务价值分为 A/B/C 级，排除依赖、构建产物和敏感文件。"
@@ -154,20 +161,13 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
               <b className={`grade grade-${item.grade.toLowerCase()}`}>{item.grade}</b>
               <span title={item.relative_path}>{item.relative_path}</span><small>{item.language ?? "未知"}</small>
               <strong>{item.code_lines} 行</strong></div>)}</div></div>}
-          {snapshot.source_document && <div className="artifact-panel"><div><strong>DOCX v{snapshot.source_document.version} 已生成</strong>
-            <span>{snapshot.source_document.artifact_relative_path}</span><small>SHA-256 {snapshot.source_document.sha256}</small>
-            <b className={`integrity-${snapshot.source_document.integrity.status}`}>{
-              snapshot.source_document.integrity.status === "verified" ?
-                `完整性已验证 · ${formatBytes(snapshot.source_document.integrity.size_bytes)}` :
-                `产物异常 · ${snapshot.source_document.integrity.status}`}</b></div>
-            <button disabled={snapshot.source_document.integrity.status !== "verified"}
-              onClick={revealDocument}>在文件管理器中显示</button></div>}
         </>}
       </section>}
     {documentPreview && <div className="document-viewer" role="dialog" aria-modal="true">
       <div className="document-viewer-shell"><header><div><strong>源代码文档预览</strong>
         <small>封面 + {documentPreview.total_pages} 页代码正文</small></div><div>
-          <button onClick={exportDocument}>导出 DOCX…</button><button onClick={() => setDocumentPreview(null)}>关闭</button>
+          <button onClick={exportedPath ? showExport : exportDocument}>
+            {exportedPath ? "在文件夹中显示" : "导出 DOCX…"}</button><button onClick={() => setDocumentPreview(null)}>关闭</button>
         </div></header><div className="document-viewer-body"><aside><button className={activePage === -1 ? "active" : ""}
           onClick={() => setActivePage(-1)}>封面</button>{documentPreview.pages.map((page, index) => <button
           className={activePage === index ? "active" : ""} onClick={() => setActivePage(index)} key={page.page_number}>
@@ -194,8 +194,7 @@ function CodePage({ page, total }: { page: CodePagePreview["pages"][number]; tot
       <em>{entry.source_line ?? ""}</em><code>{entry.continuation ? "↳ " : ""}{entry.text || " "}</code></div>)}</div>
     <footer>{page.line_count} 个可视行</footer></div>;
 }
-function formatBytes(value: number | null) {
-  if (value === null) return "未知大小";
-  return value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KiB` :
-    `${(value / 1024 / 1024).toFixed(2)} MiB`;
+function safeFilename(value: string) {
+  return value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+    .replace(/[. ]+$/g, "").trim() || "项目";
 }
