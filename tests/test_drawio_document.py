@@ -136,7 +136,8 @@ class DemoService:
                 connection.close()
             self.assertEqual(row, (1, "drawio-generator-v3"))
 
-            revision = DiagramAssetService(Database(data / "app.db"), data).create_revision(
+            asset_service = DiagramAssetService(Database(data / "app.db"), data)
+            revision = asset_service.create_revision(
                 task_id, "system_architecture", [{
                     "action": "node.move", "target": "module-service",
                     "payload": {"x": 140, "y": 90},
@@ -144,6 +145,12 @@ class DemoService:
             )
             self.assertEqual(revision.status, "clean")
             self.assertTrue(revision.artifact_path.is_file())
+            self.assertTrue(all(path.is_file() for path in revision.preview_paths.values()))
+            snapshot = asset_service.workspace_snapshot(task_id)
+            architecture_asset = next(item for item in snapshot["assets"]
+                                      if item["diagram_key"] == "system_architecture")
+            self.assertEqual(architecture_asset["revision_count"], 1)
+            self.assertIn("node.move", architecture_asset["supported_actions"])
             connection = sqlite3.connect(str(data / "app.db"))
             try:
                 stored = connection.execute(
@@ -153,6 +160,28 @@ class DemoService:
             finally:
                 connection.close()
             self.assertEqual(stored, (1, "manual", "clean"))
+            self.assertEqual(asset_service.list_revisions(
+                task_id, "system_architecture"
+            )[0]["operation_count"], 1)
+            self.assertEqual(asset_service.get_revision(revision.revision_id)["version"], 1)
+
+            rollback = asset_service.rollback_to(task_id, "system_architecture", 1)
+            self.assertEqual((rollback.version, rollback.status), (2, "clean"))
+            changed_plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            changed_architecture = next(item for item in changed_plan["diagrams"]
+                                        if item["key"] == "system_architecture")
+            changed_architecture["nodes"][0]["label"] = "demo.application_service"
+            plan_path.write_text(json.dumps(changed_plan, ensure_ascii=False), encoding="utf-8")
+            rebased = asset_service.rebase_latest(task_id, "system_architecture")
+            self.assertEqual(rebased.status, "conflicted")
+            self.assertEqual(rebased.result.conflicts[0]["reason"], "target_changed")
+            resolved = asset_service.resolve_conflicts(rebased.revision_id, [{
+                "operation_index": 0, "resolution": "accept_current",
+            }])
+            self.assertEqual((resolved.version, resolved.status), (4, "clean"))
+            self.assertEqual(len(asset_service.list_revisions(
+                task_id, "system_architecture"
+            )), 4)
 
     def test_internal_svg_renderer_and_visual_overrides(self) -> None:
         diagram = {
