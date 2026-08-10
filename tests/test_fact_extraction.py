@@ -48,7 +48,8 @@ class DeterministicFactExtractorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "package.json").write_text(
-                '{"name":"api","version":"1.0.0","dependencies":{"redis":"1"}}',
+                '{"name":"api","version":"1.0.0","dependencies":{"redis":"1"},'
+                '"scripts":{"start":"node server.js"}}',
                 encoding="utf-8",
             )
             (root / "Dockerfile").write_text("FROM python:3.12\n", encoding="utf-8")
@@ -58,9 +59,10 @@ class DeterministicFactExtractorTests(unittest.TestCase):
                 """import sqlite3
 from enum import Enum
 
-@app.post('/orders')
-def create_order():
-    pass
+@app.post('/orders', response_model=OrderOutput)
+def create_order(payload: OrderInput) -> OrderOutput:
+    token_name = os.getenv('SERVICE_TOKEN')
+    raise HTTPException(status_code=409)
 
 class OrderStatus(str, Enum):
     CREATED = 'created'
@@ -68,6 +70,12 @@ class OrderStatus(str, Enum):
 
 SCHEMA = '''CREATE TABLE IF NOT EXISTS orders (id TEXT);'''
 """,
+                encoding="utf-8",
+            )
+            tests = root / "tests"
+            tests.mkdir()
+            (tests / "test_api.py").write_text(
+                "import unittest\nclass ApiTests(unittest.TestCase): pass\n",
                 encoding="utf-8",
             )
 
@@ -80,11 +88,23 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS orders (id TEXT);'''
             self.assertEqual(facts["interfaces.catalog"].value[0]["method"], "POST")
             self.assertEqual(facts["interfaces.catalog"].value[0]["path"], "/orders")
             self.assertEqual(
+                facts["interfaces.contracts"].value[0]["request_models"], ["OrderInput"]
+            )
+            self.assertEqual(
+                facts["interfaces.contracts"].value[0]["response_model"], "OrderOutput"
+            )
+            self.assertEqual(facts["interfaces.errors"].value[0]["status_code"], 409)
+            self.assertEqual(facts["configuration.items"].value[0]["name"], "SERVICE_TOKEN")
+            self.assertEqual(facts["runtime.entrypoints"].value[0]["name"], "start")
+            self.assertEqual(facts["testing.strategy"].value["frameworks"], ["unittest"])
+            self.assertEqual(
                 facts["data.lifecycle"].value[0]["states"], ["created", "paid"]
             )
             self.assertEqual(facts["deployment.method"].value[0]["kind"], "Dockerfile")
             for key in ("data.storage", "data.entities", "interfaces.catalog",
-                        "data.lifecycle", "deployment.method"):
+                        "interfaces.contracts", "interfaces.errors", "configuration.items",
+                        "runtime.entrypoints", "testing.strategy", "data.lifecycle",
+                        "deployment.method"):
                 self.assertTrue(facts[key].evidence_refs)
                 self.assertTrue(all(ref in evidence for ref in facts[key].evidence_refs))
             self.assertTrue(all(item.content_hash for item in evidence.values()

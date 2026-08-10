@@ -235,7 +235,15 @@ class DeterministicFactExtractor:
         interfaces = []
         lifecycles = []
         deployment = []
-        refs = {"storage": [], "tables": [], "interfaces": [], "lifecycles": [], "deployment": []}
+        contracts = []
+        errors = []
+        config_keys = []
+        entrypoints = []
+        refs = {
+            "storage": [], "tables": [], "interfaces": [], "contracts": [],
+            "errors": [], "lifecycles": [], "deployment": [], "config": [],
+            "entrypoints": [],
+        }
         total_bytes = 0
         selected_files = 0
 
@@ -314,6 +322,54 @@ class DeterministicFactExtractor:
                 ))
                 refs["interfaces"].append(ref)
 
+            contract_matches = self._interface_contract_matches(text)
+            if contract_matches:
+                contracts.extend(
+                    {**contract, "source": item.relative_path}
+                    for contract in contract_matches
+                )
+                ref = "structure:contracts:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"contracts": contract_matches},
+                    "; ".join(contract["handler"] for contract in contract_matches[:20]),
+                    file_hashes, 0.8,
+                ))
+                refs["contracts"].append(ref)
+
+            error_matches = self._http_error_matches(text)
+            if error_matches:
+                errors.extend({**error, "source": item.relative_path} for error in error_matches)
+                ref = "structure:http-errors:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"http_errors": error_matches},
+                    ", ".join(str(error["status_code"]) for error in error_matches),
+                    file_hashes, 0.9,
+                ))
+                refs["errors"].append(ref)
+
+            environment_keys = self._environment_key_matches(text)
+            if environment_keys:
+                config_keys.extend(
+                    {"name": name, "source": item.relative_path} for name in environment_keys
+                )
+                ref = "structure:config:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"environment_keys": environment_keys},
+                    ", ".join(environment_keys), file_hashes, 0.9,
+                ))
+                refs["config"].append(ref)
+
+            file_entrypoints = self._entrypoint_matches(item.relative_path, text)
+            if file_entrypoints:
+                entrypoints.extend(file_entrypoints)
+                ref = "structure:entrypoints:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"entrypoints": file_entrypoints},
+                    ", ".join(entry["name"] for entry in file_entrypoints),
+                    file_hashes, 0.9,
+                ))
+                refs["entrypoints"].append(ref)
+
             state_matches = self._state_matches(text)
             if state_matches:
                 lifecycles.extend(
@@ -351,6 +407,14 @@ class DeterministicFactExtractor:
             facts.append(FactCandidate(
                 "interfaces.catalog", interfaces, 0.9, tuple(refs["interfaces"])
             ))
+        if contracts:
+            facts.append(FactCandidate(
+                "interfaces.contracts", contracts, 0.8, tuple(refs["contracts"])
+            ))
+        if errors:
+            facts.append(FactCandidate(
+                "interfaces.errors", errors, 0.9, tuple(refs["errors"])
+            ))
         if lifecycles:
             facts.append(FactCandidate(
                 "data.lifecycle", lifecycles, 0.85, tuple(refs["lifecycles"])
@@ -359,6 +423,18 @@ class DeterministicFactExtractor:
             facts.append(FactCandidate(
                 "deployment.method", deployment, 0.95, tuple(refs["deployment"])
             ))
+        if config_keys:
+            facts.append(FactCandidate(
+                "configuration.items", config_keys, 0.9, tuple(refs["config"])
+            ))
+        if entrypoints:
+            facts.append(FactCandidate(
+                "runtime.entrypoints", entrypoints, 0.9, tuple(refs["entrypoints"])
+            ))
+        testing_evidence, testing_fact = self._testing_fact(scan)
+        evidence.extend(testing_evidence)
+        if testing_fact is not None:
+            facts.append(testing_fact)
         return evidence, facts
 
     @staticmethod
@@ -395,6 +471,144 @@ class DeterministicFactExtractor:
                 matches.append({"name": match.group(1), "states": values,
                                 "line": text.count("\n", 0, match.start()) + 1})
         return matches
+
+    @staticmethod
+    def _interface_contract_matches(text: str) -> List[dict]:
+        matches = []
+        pattern = re.compile(
+            r"(?ms)^\s*@(?:app|router|blueprint)\.(?:get|post|put|patch|delete)"
+            r"\((.*?)\)\s*\n\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)"
+            r"\s*\((.*?)\)\s*(?:->\s*([^:\n]+))?:"
+        )
+        primitive = {"str", "int", "float", "bool", "bytes", "request", "response"}
+        for match in pattern.finditer(text):
+            decorator_args, handler, parameters, return_annotation = match.groups()
+            response_match = re.search(
+                r"\bresponse_model\s*=\s*([A-Za-z_][A-Za-z0-9_.\[\], ]*)",
+                decorator_args,
+            )
+            request_models = []
+            for annotation in re.findall(
+                r"[A-Za-z_][A-Za-z0-9_]*\s*:\s*([A-Za-z_][A-Za-z0-9_.\[\]]*)",
+                parameters,
+            ):
+                base = annotation.rsplit(".", 1)[-1].split("[", 1)[0].lower()
+                if base not in primitive and base not in {"depends", "optional", "list", "dict"}:
+                    request_models.append(annotation)
+            response_model = response_match.group(1).strip() if response_match else None
+            if response_model is None and return_annotation:
+                response_model = return_annotation.strip()
+            if request_models or response_model:
+                matches.append({
+                    "handler": handler,
+                    "request_models": list(dict.fromkeys(request_models)),
+                    "response_model": response_model,
+                    "line": text.count("\n", 0, match.start()) + 1,
+                })
+        return matches
+
+    @staticmethod
+    def _http_error_matches(text: str) -> List[dict]:
+        matches = []
+        seen = set()
+        patterns = (
+            r"HTTPException\s*\([^)]*?status_code\s*=\s*(?:status\.)?HTTP_([1-5][0-9]{2})",
+            r"HTTPException\s*\([^)]*?status_code\s*=\s*([1-5][0-9]{2})",
+            r"\babort\s*\(\s*([1-5][0-9]{2})",
+            r"\b(?:res|response)\.status\s*\(\s*([1-5][0-9]{2})\s*\)",
+        )
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, re.MULTILINE):
+                value = (int(match.group(1)), text.count("\n", 0, match.start()) + 1)
+                if value not in seen:
+                    seen.add(value)
+                    matches.append({"status_code": value[0], "line": value[1]})
+        return matches
+
+    @staticmethod
+    def _environment_key_matches(text: str) -> List[str]:
+        patterns = (
+            r"\bos\.(?:getenv|environ\.get)\(\s*['\"]([A-Z][A-Z0-9_]*)['\"]",
+            r"\bos\.environ\[\s*['\"]([A-Z][A-Z0-9_]*)['\"]\s*\]",
+            r"\bprocess\.env\.([A-Z][A-Z0-9_]*)",
+            r"\bSystem\.getenv\(\s*['\"]([A-Z][A-Z0-9_]*)['\"]",
+        )
+        return sorted({match.group(1) for pattern in patterns
+                       for match in re.finditer(pattern, text)})
+
+    @staticmethod
+    def _entrypoint_matches(relative_path: str, text: str) -> List[dict]:
+        name = PurePosixPath(relative_path).name.lower()
+        entries = []
+        if name == "pyproject.toml":
+            block = DeterministicFactExtractor._toml_section(text, "project.scripts")
+            for match in re.finditer(
+                r"(?m)^\s*([A-Za-z0-9_.-]+)\s*=\s*['\"]([^'\"]+)['\"]", block
+            ):
+                entries.append({"name": match.group(1), "target": match.group(2),
+                                "source": relative_path})
+        elif name == "package.json":
+            try:
+                scripts = json.loads(text).get("scripts", {})
+            except (json.JSONDecodeError, AttributeError):
+                scripts = {}
+            if isinstance(scripts, dict):
+                entries.extend(
+                    {"name": str(key), "target": None, "source": relative_path}
+                    for key in sorted(scripts) if str(key).strip()
+                )
+        elif name == "dockerfile":
+            for match in re.finditer(r"(?im)^\s*(CMD|ENTRYPOINT)\b", text):
+                entries.append({"name": match.group(1).upper(), "target": None,
+                                "source": relative_path})
+        return entries
+
+    @staticmethod
+    def _testing_fact(scan: ScanResult) -> Tuple[List[EvidenceCandidate], Optional[FactCandidate]]:
+        test_files = []
+        frameworks = set()
+        analyzed_files = 0
+        analyzed_bytes = 0
+        for item in scan.files:
+            parts = {part.lower() for part in PurePosixPath(item.relative_path).parts}
+            stem = PurePosixPath(item.relative_path).stem.lower()
+            if not (parts & {"test", "tests", "spec", "specs"} or
+                    stem.startswith("test_") or stem.endswith("_test")):
+                continue
+            test_files.append(item.relative_path)
+            path = scan.root / PurePosixPath(item.relative_path)
+            if item.is_binary or item.size > STRUCTURAL_MAX_FILE_BYTES:
+                continue
+            if (analyzed_files >= STRUCTURAL_MAX_FILES or
+                    analyzed_bytes + item.size > STRUCTURAL_MAX_TOTAL_BYTES):
+                continue
+            try:
+                lowered = path.read_text(encoding="utf-8").lower()
+            except (OSError, UnicodeDecodeError):
+                continue
+            analyzed_files += 1
+            analyzed_bytes += item.size
+            for marker, label in (
+                ("unittest", "unittest"), ("pytest", "pytest"),
+                ("vitest", "Vitest"), ("jest", "Jest"),
+                ("junit", "JUnit"), ("xunit", "xUnit"),
+            ):
+                if re.search(r"(?<![a-z0-9_]){0}(?![a-z0-9_])".format(marker), lowered):
+                    frameworks.add(label)
+        if not test_files:
+            return [], None
+        ref = "structure:testing"
+        evidence = EvidenceCandidate(
+            ref=ref, kind="derived", relative_path=None,
+            locator={"source": "manifest", "test_file_count": len(test_files)},
+            excerpt=None, content_hash=scan.root_fingerprint, confidence=0.9,
+        )
+        fact = FactCandidate(
+            "testing.strategy",
+            {"frameworks": sorted(frameworks), "test_file_count": len(test_files)},
+            0.9, (ref,),
+        )
+        return [evidence], fact
 
     @staticmethod
     def _pattern_evidence(ref: str, relative_path: str, locator: dict,

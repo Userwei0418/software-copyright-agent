@@ -712,3 +712,40 @@
 1. 提取模块职责候选、接口请求响应 Schema 和显式错误处理证据。
 2. 提取配置项、启动入口、安装升级与测试策略，继续降低说明书缺口。
 3. 定义图表节点、边、容器和 Evidence ID 的确定性契约，状态转换边必须来自代码证据。
+
+### 2026-08-10：接口契约、入口、配置与测试证据
+
+本轮目标：
+
+- 在不读取配置值的前提下补充运行入口和配置项证据。
+- 提取显式接口请求响应模型、HTTP 错误状态和测试策略。
+
+完成内容：
+
+- 对 FastAPI/Flask 风格路由提取处理函数、参数类型、返回注解和 `response_model`，生成 `interfaces.contracts`。
+- 识别显式 `HTTPException`、`abort` 和响应状态调用，生成只含状态码、文件和行号的 `interfaces.errors`。
+- 识别 Python、Node.js 和 Java 的环境变量读取；`configuration.items` 只保存变量名和来源文件，不保存默认值、实际值或完整表达式。
+- 从 `pyproject.toml` 的 `[project.scripts]`、`package.json` 的脚本名和 Dockerfile 的 CMD/ENTRYPOINT 提取 `runtime.entrypoints`；Node/Docker 脚本不保存命令正文。
+- 从测试路径、文件名和显式框架导入生成 `testing.strategy`，记录框架列表和测试文件数量。
+- 运行配置和测试内容分析沿用 2,000 文件、16MB 总量、单文件 512KB 的读取预算。
+- 说明书运行环境章节新增“启动入口”和“运行配置项”两个稳定事实契约。
+
+验证：
+
+- 47 项完整测试全部通过。
+- 正向样例验证 `OrderInput`、`OrderOutput`、HTTP 409、`SERVICE_TOKEN` 键名、npm `start` 入口和 unittest 策略均能回链证据。
+- 真实仓库只识别 `COPYRIGHT_AGENT_SOFFICE` 配置键、`copyright-agent` 入口和 16 个 unittest 测试文件；没有因提取器规则文本虚报接口或错误状态。
+- 最新真实说明书 plan v1 保持数据设计章节 `ready`，总缺口从上一轮 24 项降至 23 项；其余章节未因弱证据被错误放行。
+
+已知限制：
+
+- 请求响应模型只覆盖显式静态注解，不解析运行时依赖注入、动态 Schema 或 GraphQL 类型系统。
+- HTTP 状态码能证明存在错误分支，但不能单独证明触发条件和恢复流程。
+- 测试文件数量和框架只能证明测试资产存在，不等同于测试已执行或验收通过。
+- 环境变量名可能暗示配置用途，但正文仍不得虚构其默认值、是否必填或安全存储方式。
+
+下一步：
+
+1. 提取显式状态转换调用、异常恢复和事务边界，为核心流程图提供有方向的边证据。
+2. 定义架构图和流程图的节点、边、容器、Evidence ID 与完整性检查 Schema。
+3. 再扩展 README/manifest 中的软件用途、运行环境和安装命令候选，并保留用户确认门槛。
