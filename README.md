@@ -94,7 +94,7 @@ PYTHONPATH=src python3 -m software_copyright_agent \
   qa-source-docx TASK_ID --json
 ```
 
-门禁会验证产物哈希、A4 分节、显式分页、页码字段、内嵌字体结构、字体与许可证哈希、所需 Unicode 字形、实际 60 页、页面尺寸一致性和空白页。可用 `COPYRIGHT_AGENT_SOFFICE=/path/to/soffice` 指定应用自带或外部 LibreOffice；未通过时命令返回退出码 3，渲染器故障返回退出码 2。
+门禁会验证产物哈希、A4 分节、显式分页、页码字段、内嵌字体结构、字体与许可证哈希、所需 Unicode 字形、实际 60 页、页面尺寸一致性、空白页和源码正文纵向覆盖率。可用 `COPYRIGHT_AGENT_SOFFICE=/path/to/soffice` 指定应用自带或外部 LibreOffice；未通过时命令返回退出码 3，渲染器故障返回退出码 2。
 
 运行测试：
 
@@ -109,7 +109,7 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
 - 当前 CLI 是验证领域内核的纵向切片，不是最终用户界面。
 - `.gitignore` 当前实现常用 glob、目录、锚定和否定规则，不承诺覆盖 Git 的全部边缘语义。
 - A/B/C 当前是确定性初筛；后续模型只对未排除候选做语义重排，不能恢复安全规则排除项。
-- 自动 QA 能阻断结构、页数、尺寸和全空白页问题，但不能替代最终人工视觉抽检；QA 报告会明确保留 `visual_review_required=true`。
+- 自动 QA 能阻断结构、页数、尺寸、全空白页和正文纵向覆盖不足问题，但不能替代最终人工视觉抽检；QA 报告会明确保留 `visual_review_required=true`。
 - 当前内置字体覆盖常用简体中文；遇到字体 cmap 不包含的扩展字符时会阻断出件，而不是静默显示方框。
 
 开发计划和每轮进度分别见 `DEVELOPMENT_PLAN.md` 与 `PROGRESS.md`。

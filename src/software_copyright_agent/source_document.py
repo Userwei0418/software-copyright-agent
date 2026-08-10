@@ -26,8 +26,8 @@ class SourceDocumentTemplate:
     page_size: str = "A4"
     code_font: str = "Courier New"
     east_asia_font: str = DEFAULT_CJK_FAMILY
-    code_size_pt: float = 8.0
-    code_line_height_pt: float = 11.0
+    code_size_pt: float = 9.0
+    code_line_height_pt: float = 15.0
     code_pages: int = 59
     lines_per_page: int = 50
 

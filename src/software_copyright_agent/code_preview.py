@@ -19,7 +19,7 @@ class SourceChangedError(CodePreviewError):
 
 @dataclass(frozen=True)
 class CodePreviewConfig:
-    max_visual_width: int = 100
+    max_visual_width: int = 90
     lines_per_page: int = 50
     target_code_pages: int = 59
     tab_size: int = 4

@@ -16,7 +16,8 @@ from PIL import Image, ImageChops
 from .font_assets import FontAsset
 
 
-QA_POLICY_VERSION = "source-docx-qa-v2"
+QA_POLICY_VERSION = "source-docx-qa-v3"
+MINIMUM_BODY_FILL_RATIO = 0.86
 
 
 class SourceDocumentQaError(RuntimeError):
@@ -162,6 +163,8 @@ class SourceDocumentQaInspector:
 
         dimensions = []
         blank_pages = []
+        body_fill_ratios = []
+        underfilled_pages = []
         for index, page_path in enumerate(render.page_paths, start=1):
             with Image.open(page_path) as image:
                 rgb = image.convert("RGB")
@@ -171,11 +174,24 @@ class SourceDocumentQaInspector:
                 bbox = difference.point(lambda value: 255 if value > 12 else 0).getbbox()
                 if bbox is None:
                     blank_pages.append(index)
+                if index > 1:
+                    body_top = int(rgb.height * 0.06)
+                    body_bottom = int(rgb.height * 0.92)
+                    body = difference.crop((0, body_top, rgb.width, body_bottom))
+                    body_bbox = body.point(lambda value: 255 if value > 12 else 0).getbbox()
+                    fill_ratio = 0.0 if body_bbox is None else (body_top + body_bbox[3]) / rgb.height
+                    body_fill_ratios.append(fill_ratio)
+                    if fill_ratio < MINIMUM_BODY_FILL_RATIO:
+                        underfilled_pages.append(index)
         consistent_dimensions = len(set(dimensions)) == 1
         checks.append(self._check("render.consistent_dimensions", True, consistent_dimensions))
         a4_ratio = all(abs((width / height) - (210 / 297)) < 0.01 for width, height in dimensions)
         checks.append(self._check("render.a4_ratio", True, a4_ratio))
         checks.append(self._check("render.blank_pages", [], blank_pages))
+        minimum_fill = min(body_fill_ratios) if body_fill_ratios else 0.0
+        checks.append(self._minimum_check(
+            "render.minimum_body_fill_ratio", MINIMUM_BODY_FILL_RATIO, minimum_fill
+        ))
         passed = all(check.passed for check in checks)
         summary = {
             "passed": passed,
@@ -183,6 +199,8 @@ class SourceDocumentQaInspector:
             "failed_check_count": sum(1 for check in checks if not check.passed),
             "rendered_pages": len(render.page_paths),
             "blank_pages": blank_pages,
+            "minimum_body_fill_ratio": round(minimum_fill, 4),
+            "underfilled_pages": underfilled_pages,
             "page_dimensions": list(dimensions[0]) if dimensions else None,
             "document_sha256": actual_sha,
             "visual_review_required": True,
@@ -200,6 +218,14 @@ class SourceDocumentQaInspector:
         return QaCheck(
             key, passed, expected, actual,
             "passed" if passed else "Expected {0!r}, got {1!r}".format(expected, actual),
+        )
+
+    @staticmethod
+    def _minimum_check(key: str, minimum: float, actual: float) -> QaCheck:
+        passed = actual >= minimum
+        return QaCheck(
+            key, passed, ">= {0:.2f}".format(minimum), round(actual, 4),
+            "passed" if passed else "Expected >= {0:.2f}, got {1:.4f}".format(minimum, actual),
         )
 
 
