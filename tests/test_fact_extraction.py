@@ -43,3 +43,77 @@ class DeterministicFactExtractorTests(unittest.TestCase):
                 [item.field_key for item in extraction.confirmations],
                 ["project.name", "project.version"],
             )
+
+    def test_structural_storage_routes_states_and_deployment_are_evidence_linked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "package.json").write_text(
+                '{"name":"api","version":"1.0.0","dependencies":{"redis":"1"}}',
+                encoding="utf-8",
+            )
+            (root / "Dockerfile").write_text("FROM python:3.12\n", encoding="utf-8")
+            source = root / "src"
+            source.mkdir()
+            (source / "api.py").write_text(
+                """import sqlite3
+from enum import Enum
+
+@app.post('/orders')
+def create_order():
+    pass
+
+class OrderStatus(str, Enum):
+    CREATED = 'created'
+    PAID = 'paid'
+
+SCHEMA = '''CREATE TABLE IF NOT EXISTS orders (id TEXT);'''
+""",
+                encoding="utf-8",
+            )
+
+            extraction = DeterministicFactExtractor().extract(ProjectScanner().scan(root))
+            facts = {fact.key: fact for fact in extraction.facts}
+            evidence = {item.ref: item for item in extraction.evidence}
+
+            self.assertEqual(facts["data.storage"].value, ["Redis", "SQLite"])
+            self.assertEqual(facts["data.entities"].value[0]["name"], "orders")
+            self.assertEqual(facts["interfaces.catalog"].value[0]["method"], "POST")
+            self.assertEqual(facts["interfaces.catalog"].value[0]["path"], "/orders")
+            self.assertEqual(
+                facts["data.lifecycle"].value[0]["states"], ["created", "paid"]
+            )
+            self.assertEqual(facts["deployment.method"].value[0]["kind"], "Dockerfile")
+            for key in ("data.storage", "data.entities", "interfaces.catalog",
+                        "data.lifecycle", "deployment.method"):
+                self.assertTrue(facts[key].evidence_refs)
+                self.assertTrue(all(ref in evidence for ref in facts[key].evidence_refs))
+            self.assertTrue(all(item.content_hash for item in evidence.values()
+                                if item.ref.startswith("structure:")))
+
+    def test_keywords_and_test_fixtures_do_not_create_structural_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "package.json").write_text(
+                '{"name":"plain","version":"1.0.0"}', encoding="utf-8"
+            )
+            source = root / "src"
+            source.mkdir()
+            (source / "catalog.py").write_text(
+                "MARKERS = ['sqlite3', 'redis', 'mongodb', 'postgres']\n",
+                encoding="utf-8",
+            )
+            tests = root / "tests"
+            tests.mkdir()
+            (tests / "test_fixture.py").write_text(
+                "@app.get('/fake')\n"
+                "def fake(): pass\n"
+                "SCHEMA = 'CREATE TABLE fake (id TEXT)'\n",
+                encoding="utf-8",
+            )
+
+            extraction = DeterministicFactExtractor().extract(ProjectScanner().scan(root))
+            fact_keys = {fact.key for fact in extraction.facts}
+
+            self.assertNotIn("data.storage", fact_keys)
+            self.assertNotIn("data.entities", fact_keys)
+            self.assertNotIn("interfaces.catalog", fact_keys)

@@ -59,6 +59,43 @@ FRAMEWORK_MARKERS = {
     "electron": "Electron",
 }
 
+STRUCTURAL_MAX_FILES = 2_000
+STRUCTURAL_MAX_FILE_BYTES = 512 * 1024
+STRUCTURAL_MAX_TOTAL_BYTES = 16 * 1024 * 1024
+STORAGE_MARKERS = {
+    "sqlite": "SQLite", "sqlite3": "SQLite", "sqlalchemy": "SQLAlchemy",
+    "postgres": "PostgreSQL", "psycopg": "PostgreSQL", "mysql": "MySQL",
+    "redis": "Redis", "mongodb": "MongoDB", "mongoose": "MongoDB",
+    "prisma": "Prisma", "typeorm": "TypeORM",
+}
+SOURCE_STORAGE_PATTERNS = {
+    "SQLite": r"(?m)(?:^\s*(?:import\s+sqlite3|from\s+sqlite3\s+import)|\bsqlite3\.connect\s*\()",
+    "SQLAlchemy": r"(?m)^\s*(?:import\s+sqlalchemy|from\s+sqlalchemy\s+import)",
+    "PostgreSQL": r"(?m)^\s*(?:import\s+psycopg\w*|from\s+psycopg\w*\s+import)",
+    "MySQL": r"(?m)^\s*(?:import\s+(?:pymysql|mysql)|from\s+(?:pymysql|mysql)\s+import)",
+    "Redis": r"(?m)^\s*(?:import\s+redis|from\s+redis\s+import)",
+    "MongoDB": r"(?m)^\s*(?:import\s+pymongo|from\s+pymongo\s+import)",
+    "Prisma": r"(?m)^\s*(?:import\s+.*prisma|from\s+prisma\s+import)",
+    "TypeORM": r"(?m)^\s*import\s+.*\s+from\s+['\"]typeorm['\"]",
+}
+STRUCTURAL_EXCLUDED_PARTS = frozenset({
+    "test", "tests", "testing", "fixture", "fixtures", "mock", "mocks",
+    "demo", "demos", "example", "examples", "sample", "samples",
+})
+STORAGE_CONFIG_NAMES = frozenset({
+    "package.json", "pyproject.toml", "requirements.txt", "pom.xml",
+    "cargo.toml", "composer.json", "go.mod", "schema.prisma",
+    "application.yml", "application.yaml", "docker-compose.yml",
+    "docker-compose.yaml", "compose.yml", "compose.yaml",
+})
+DEPLOYMENT_FILES = {
+    "dockerfile": "Dockerfile", "docker-compose.yml": "Docker Compose",
+    "docker-compose.yaml": "Docker Compose", "compose.yml": "Docker Compose",
+    "compose.yaml": "Docker Compose", "fly.toml": "Fly.io",
+    "vercel.json": "Vercel", "netlify.toml": "Netlify",
+    "tauri.conf.json": "Tauri desktop bundle", "tauri.conf.json5": "Tauri desktop bundle",
+}
+
 
 class DeterministicFactExtractor:
     def extract(self, scan: ScanResult) -> FactExtractionResult:
@@ -180,7 +217,194 @@ class DeterministicFactExtractor:
                 )
             )
 
+        structural_evidence, structural_facts = self._extract_structural_facts(
+            scan, file_hashes
+        )
+        evidence.extend(structural_evidence)
+        facts.extend(structural_facts)
+
         return FactExtractionResult(tuple(evidence), tuple(facts), tuple(confirmations))
+
+    def _extract_structural_facts(
+        self, scan: ScanResult, file_hashes: Dict[str, str]
+    ) -> Tuple[List[EvidenceCandidate], List[FactCandidate]]:
+        evidence: List[EvidenceCandidate] = []
+        facts: List[FactCandidate] = []
+        storage = set()
+        tables = []
+        interfaces = []
+        lifecycles = []
+        deployment = []
+        refs = {"storage": [], "tables": [], "interfaces": [], "lifecycles": [], "deployment": []}
+        total_bytes = 0
+        selected_files = 0
+
+        for item in scan.files:
+            if item.is_binary or item.size > STRUCTURAL_MAX_FILE_BYTES:
+                continue
+            if item.category.value not in {"source", "config"}:
+                continue
+            path_parts = {part.lower() for part in PurePosixPath(item.relative_path).parts}
+            if path_parts & STRUCTURAL_EXCLUDED_PARTS or PurePosixPath(
+                item.relative_path
+            ).stem.lower().startswith("test_"):
+                continue
+            if selected_files >= STRUCTURAL_MAX_FILES or total_bytes + item.size > STRUCTURAL_MAX_TOTAL_BYTES:
+                break
+            path = scan.root / PurePosixPath(item.relative_path)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            selected_files += 1
+            total_bytes += item.size
+            lowered = text.lower()
+
+            if (item.category.value == "config" and
+                    PurePosixPath(item.relative_path).name.lower() in STORAGE_CONFIG_NAMES):
+                matched_storage = sorted({
+                    label for marker, label in STORAGE_MARKERS.items()
+                    if re.search(
+                        r"(?<![a-z0-9_]){0}(?![a-z0-9_])".format(re.escape(marker)),
+                        lowered,
+                    )
+                })
+            elif item.category.value == "source":
+                matched_storage = sorted(
+                    label for label, pattern in SOURCE_STORAGE_PATTERNS.items()
+                    if re.search(pattern, text)
+                )
+            else:
+                matched_storage = []
+            if matched_storage:
+                storage.update(matched_storage)
+                ref = "structure:storage:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"markers": matched_storage},
+                    ", ".join(matched_storage), file_hashes, 0.85,
+                ))
+                refs["storage"].append(ref)
+
+            table_matches = sorted(set(re.findall(
+                r"(?im)\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?[\"`\[]?([a-z_][a-z0-9_]*)",
+                text,
+            )))
+            if table_matches:
+                tables.extend(
+                    {"name": name, "source": item.relative_path} for name in table_matches
+                )
+                ref = "structure:tables:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"table_names": table_matches},
+                    ", ".join(table_matches), file_hashes, 0.95,
+                ))
+                refs["tables"].append(ref)
+
+            route_matches = self._route_matches(text)
+            if route_matches:
+                interfaces.extend(
+                    {**route, "source": item.relative_path} for route in route_matches
+                )
+                ref = "structure:routes:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"routes": route_matches},
+                    "; ".join("{0} {1}".format(route["method"], route["path"])
+                              for route in route_matches[:20]),
+                    file_hashes, 0.9,
+                ))
+                refs["interfaces"].append(ref)
+
+            state_matches = self._state_matches(text)
+            if state_matches:
+                lifecycles.extend(
+                    {**state, "source": item.relative_path} for state in state_matches
+                )
+                ref = "structure:states:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"state_models": state_matches},
+                    "; ".join(state["name"] for state in state_matches),
+                    file_hashes, 0.85,
+                ))
+                refs["lifecycles"].append(ref)
+
+            deployment_label = DEPLOYMENT_FILES.get(PurePosixPath(item.relative_path).name.lower())
+            if deployment_label:
+                deployment.append({"kind": deployment_label, "source": item.relative_path})
+                ref = "structure:deployment:{0}".format(item.relative_path)
+                evidence.append(self._pattern_evidence(
+                    ref, item.relative_path, {"deployment_kind": deployment_label},
+                    deployment_label, file_hashes, 0.95,
+                ))
+                refs["deployment"].append(ref)
+
+        if storage:
+            facts.append(FactCandidate("data.storage", sorted(storage), 0.85, tuple(refs["storage"])))
+            external_storage = sorted(storage & {"PostgreSQL", "MySQL", "Redis", "MongoDB"})
+            if external_storage:
+                facts.append(FactCandidate(
+                    "deployment.dependencies", external_storage, 0.75,
+                    tuple(refs["storage"]),
+                ))
+        if tables:
+            facts.append(FactCandidate("data.entities", tables, 0.95, tuple(refs["tables"])))
+        if interfaces:
+            facts.append(FactCandidate(
+                "interfaces.catalog", interfaces, 0.9, tuple(refs["interfaces"])
+            ))
+        if lifecycles:
+            facts.append(FactCandidate(
+                "data.lifecycle", lifecycles, 0.85, tuple(refs["lifecycles"])
+            ))
+        if deployment:
+            facts.append(FactCandidate(
+                "deployment.method", deployment, 0.95, tuple(refs["deployment"])
+            ))
+        return evidence, facts
+
+    @staticmethod
+    def _route_matches(text: str) -> List[dict]:
+        matches = []
+        patterns = (
+            r"(?im)^\s*@(?:app|router|blueprint)\.(get|post|put|patch|delete)\(\s*['\"]([^'\"]+)",
+            r"(?im)\b(?:app|router)\.(get|post|put|patch|delete)\(\s*['\"]([^'\"]+)",
+            r"(?im)@(Get|Post|Put|Patch|Delete)Mapping\(\s*(?:value\s*=\s*)?['\"]([^'\"]+)",
+        )
+        seen = set()
+        for pattern in patterns:
+            for match in re.finditer(pattern, text):
+                value = (match.group(1).upper(), match.group(2))
+                if value not in seen:
+                    seen.add(value)
+                    matches.append({"method": value[0], "path": value[1],
+                                    "line": text.count("\n", 0, match.start()) + 1})
+        return matches
+
+    @staticmethod
+    def _state_matches(text: str) -> List[dict]:
+        matches = []
+        for match in re.finditer(
+            r"(?m)^class\s+([A-Za-z_][A-Za-z0-9_]*(?:Status|State))\s*\([^)]*(?:Enum|str)[^)]*\)\s*:",
+            text,
+        ):
+            start = match.end()
+            following = text[start:]
+            next_class = re.search(r"(?m)^class\s+", following)
+            block = following[:next_class.start()] if next_class else following
+            values = re.findall(r"(?m)^\s+[A-Z][A-Z0-9_]*\s*=\s*['\"]([^'\"]+)['\"]", block)
+            if values:
+                matches.append({"name": match.group(1), "states": values,
+                                "line": text.count("\n", 0, match.start()) + 1})
+        return matches
+
+    @staticmethod
+    def _pattern_evidence(ref: str, relative_path: str, locator: dict,
+                          excerpt: str, file_hashes: Dict[str, str],
+                          confidence: float) -> EvidenceCandidate:
+        return EvidenceCandidate(
+            ref=ref, kind="source_pattern", relative_path=relative_path,
+            locator=locator, excerpt=excerpt[:500],
+            content_hash=file_hashes.get(relative_path), confidence=confidence,
+        )
 
     def _extract_metadata(
         self, root: Path, file_hashes: Dict[str, str]

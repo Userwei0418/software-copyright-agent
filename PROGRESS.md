@@ -669,3 +669,46 @@
 1. 扩展项目理解，确定性提取数据存储、接口入口、任务/状态模型、配置和部署证据。
 2. 为架构图和核心流程图定义节点、边、容器、证据引用及完整性检查契约。
 3. 证据覆盖达到门槛后，再接入模型协议生成受 Schema 约束的章节候选内容。
+
+### 2026-08-10：结构事实提取第一阶段
+
+本轮目标：
+
+- 从仓库中确定性提取数据存储、SQL 实体、HTTP 接口、状态模型和部署方式。
+- 直接补充说明书章节规划所需 Fact key，不依赖模型推断业务语义。
+
+完成内容：
+
+- 新增结构分析预算：最多 2,000 个文件、16MB 总文本、单文件 512KB，只读取扫描清单中的非二进制源码和配置。
+- 识别配置依赖声明及源码 import/调用模式中的 SQLite、PostgreSQL、MySQL、Redis、MongoDB 和常见 ORM。
+- 从 `CREATE TABLE` 提取表名及来源文件，生成 `data.entities`。
+- 识别 FastAPI/Flask 风格装饰器、Express 路由和 Spring Mapping，生成带方法、路径、文件和行号的 `interfaces.catalog`。
+- 识别 Python `*Status` / `*State` Enum 及其显式字符串状态，生成 `data.lifecycle`。
+- 识别 Dockerfile、Docker Compose、Tauri、Vercel、Netlify、Fly.io 描述文件，生成 `deployment.method`。
+- 数据库、接口、状态和部署证据只保存命中摘要、定位信息与原文件 SHA-256，不复制整份配置。
+- 排除 test、fixture、mock、demo、example 和 sample 路径，避免把测试夹具当成产品能力。
+
+真实验证与纠偏：
+
+- 初版全文关键词扫描在真实仓库中误报 MongoDB、MySQL 等，并把测试路由 `/orders` 当成真实接口。
+- 将规则收紧为“配置依赖声明＋源码 import/调用模式＋测试路径排除”，重新扫描后只识别真实 SQLite、15 个 SQLite 表、TaskStatus/StageStatus，无虚假 HTTP 接口和外部数据库。
+- 真实说明书 plan v1 的缺失信息由 27 项降至 24 项，数据设计章节首次从 `needs_evidence` 自动变为 `ready`；其余 8 章仍保持待证据状态。
+
+验证：
+
+- 47 项完整测试全部通过。
+- 新增正向结构提取测试和关键词/测试夹具误报回归测试。
+- 正向样例覆盖 SQLite、Redis、SQL 表、POST 路由、状态枚举和 Dockerfile，全部事实均关联证据引用及文件哈希。
+
+已知限制：
+
+- 当前接口识别不覆盖动态路径、集中式路由表、RPC、GraphQL Schema 和自定义框架。
+- SQL 实体只提取显式 `CREATE TABLE`，尚未解析 ORM 模型字段和表关系。
+- 状态事实能证明枚举集合，不能仅凭枚举证明允许的状态转换边。
+- Dockerfile 等文件只能证明存在部署描述，不能证明当前环境已成功部署。
+
+下一步：
+
+1. 提取模块职责候选、接口请求响应 Schema 和显式错误处理证据。
+2. 提取配置项、启动入口、安装升级与测试策略，继续降低说明书缺口。
+3. 定义图表节点、边、容器和 Evidence ID 的确定性契约，状态转换边必须来自代码证据。
