@@ -400,8 +400,11 @@ class GenericDrawioDocumentBuilder:
     }
 
     def build(self, figure: dict, output_path: Path) -> dict:
-        nodes = figure.get("nodes", [])
-        edges = figure.get("edges", [])
+        nodes = [node for node in figure.get("nodes", [])
+                 if not node.get("visual_override", {}).get("hidden")]
+        visible_keys = {node["key"] for node in nodes}
+        edges = [edge for edge in figure.get("edges", [])
+                 if edge.get("source") in visible_keys and edge.get("target") in visible_keys]
         if len(nodes) < 2:
             raise DrawioDocumentError("Manual figure requires at least two nodes")
         keys = {node["key"] for node in nodes}
@@ -410,26 +413,36 @@ class GenericDrawioDocumentBuilder:
         if any(edge.get("source") not in keys or edge.get("target") not in keys
                for edge in edges):
             raise DrawioDocumentError("Manual figure edge endpoint is missing")
-        positions, canvas = self._layout(figure)
+        layout_figure = {**figure, "nodes": nodes, "edges": edges}
+        positions, canvas = self._layout(layout_figure)
+        positions = DrawioDocumentBuilder._apply_position_overrides(positions, nodes)
         mxfile, root = self._document(figure, canvas)
         for node in nodes:
             x, y, width, height = positions[node["key"]]
             cell = ET.SubElement(root, "mxCell", {
-                "id": node["key"], "value": html.escape(node["label"]),
+                "id": node["key"], "value": html.escape(
+                    node.get("display_label") or node["label"]),
                 "vertex": "1", "parent": "1",
-                "style": self.NODE_STYLES.get(node.get("kind"), NODE_STYLE),
+                "style": DrawioDocumentBuilder._merge_style(
+                    self.NODE_STYLES.get(node.get("kind"), NODE_STYLE),
+                    node.get("visual_override", {}).get("style", {})),
             })
             ET.SubElement(cell, "mxGeometry", {
                 "x": str(x), "y": str(y), "width": str(width),
                 "height": str(height), "as": "geometry",
             })
         for index, edge in enumerate(edges):
-            points = self._route(edge, positions, index)
+            points = edge.get("visual_override", {}).get("route", {}).get("points")
+            if not isinstance(points, list) or not points:
+                points = self._route(edge, positions, index)
             cell = ET.SubElement(root, "mxCell", {
                 "id": edge.get("key") or "edge-{0}".format(index + 1),
-                "value": html.escape(edge.get("label", "")), "edge": "1",
+                "value": html.escape(edge.get("display_label", edge.get("label", ""))),
+                "edge": "1",
                 "parent": "1", "source": edge["source"], "target": edge["target"],
-                "style": EDGE_STYLE + "labelBackgroundColor=#ffffff;",
+                "style": DrawioDocumentBuilder._merge_style(
+                    EDGE_STYLE + "labelBackgroundColor=#ffffff;",
+                    edge.get("visual_override", {}).get("style", {})),
             })
             geometry = ET.SubElement(cell, "mxGeometry", {
                 "relative": "1", "as": "geometry", "x": "0", "y": "0",

@@ -107,6 +107,7 @@ export type FormalManualDocument = {
   project_name: string; project_version: string; filename: string;
   docx_relative_path: string; sha256: string; created_at: string;
   integrity: { status: "verified" | "missing" | "mismatch"; size_bytes: number | null };
+  freshness: { status: "current" | "outdated"; latest_asset_update: string | null };
   qa: { section_count: number; figure_count: number; screenshot_count: number;
     warning_count: number; warnings: string[]; design_preset: string; named_override: string;
     quality?: FormalManualQa["summary"] };
@@ -151,6 +152,25 @@ export type FormalManualGenerationResult = {
   draft: { status: string; section_count: number; errors: unknown[] };
   figures: { status: string; count: number; errors: unknown[] };
   screenshots: { status: string; count: number; assessment: { status: string; reason: string } };
+};
+
+export type FormalManualFigure = {
+  id: string; figure_key: string; section_key: string; figure_type: string;
+  title: string; status: string; version: number; updated_at: string;
+  semantic: { figure_key: string; title: string; figure_type: string; layout: string;
+    nodes: Array<{ key: string; label: string; display_label?: string; kind: string;
+      layer: number; visual_override?: Record<string, Record<string, unknown>> }>;
+    edges: Array<{ key: string; source: string; target: string; label: string;
+      display_label?: string; visual_override?: Record<string, Record<string, unknown>> }> };
+  drawio_relative_path: string; svg_relative_path: string; png_relative_path: string;
+  qa: Record<string, unknown>;
+};
+
+export type FormalFigureRevision = {
+  revision_id: string; version: number; edit_source: "ai_generation" | "manual" | "ai";
+  parent_revision_id: string | null; operations: OverlayOperation[]; operation_count: number;
+  semantic_fingerprint: string; status: "clean" | "conflicted";
+  model_name: string; elapsed_ms: number; created_at: string;
 };
 
 export type OverlayOperation = {
@@ -570,6 +590,65 @@ export async function generateFormalManualFigures(connection: SidecarConnection,
     });
   return requireJson<{ status: string; figures: unknown[]; errors: unknown[] }>(
     response, "章节图表同步失败");
+}
+
+export async function listFormalManualFigures(connection: SidecarConnection, jobId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return (await requireJson<{ items: FormalManualFigure[] }>(response,
+    "正式图表读取失败")).items;
+}
+
+export async function loadFormalFigureAsset(connection: SidecarConnection, jobId: string,
+  figureKey: string, format: "drawio" | "svg" | "png"): Promise<string> {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}.${format}`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  if (!response.ok) throw new Error(`图表 ${format.toUpperCase()} 读取失败 (${response.status})`);
+  return format === "png" ? URL.createObjectURL(await response.blob()) : response.text();
+}
+
+export async function listFormalFigureRevisions(connection: SidecarConnection, jobId: string,
+  figureKey: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}/revisions`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return (await requireJson<{ items: FormalFigureRevision[] }>(response,
+    "图表修订历史读取失败")).items;
+}
+
+export async function createFormalFigureRevision(connection: SidecarConnection, jobId: string,
+  figureKey: string, operations: OverlayOperation[], editSource: "manual" | "ai" = "manual") {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}/revisions`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" },
+      body: JSON.stringify({ edit_source: editSource, operations }),
+    });
+  return requireJson<{ revision_id: string; version: number; status: string }>(
+    response, "图表修改保存失败");
+}
+
+export async function previewFormalFigureAiEdit(connection: SidecarConnection, jobId: string,
+  figureKey: string, instruction: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}/ai-preview`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ instruction }),
+    });
+  return requireJson<{ figure_key: string; edit_source: "ai"; operations: OverlayOperation[];
+    preview_svg: string; elapsed_ms: number; model_name: string }>(response, "AI 图表修改预览失败");
+}
+
+export async function rollbackFormalFigure(connection: SidecarConnection, jobId: string,
+  figureKey: string, version: number) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}/rollback`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ version }),
+    });
+  return requireJson<{ revision_id: string; version: number }>(response, "图表版本恢复失败");
 }
 
 export async function loadFormalManualQa(connection: SidecarConnection, jobId: string,

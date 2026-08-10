@@ -1,13 +1,15 @@
 import json
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Callable, Optional
 from uuid import uuid4
 
 from .credential_vault import CredentialVault
+from .diagram_asset import DiagramAssetError, DiagramOverlayEngine
 from .drawio_document import (
-    DrawioDocumentInspector, GenericDrawioDocumentBuilder,
+    DrawioDocumentError, DrawioDocumentInspector, GenericDrawioDocumentBuilder,
     InternalPngRenderer, InternalSvgRenderer,
 )
 from .manual_generation import ManualGenerationService
@@ -32,6 +34,7 @@ class ManualFigureService:
         self._inspector = DrawioDocumentInspector()
         self._svg = InternalSvgRenderer()
         self._png = InternalPngRenderer(scale=2)
+        self._overlay = DiagramOverlayEngine()
 
     def generate_all(self, job_id: str) -> dict:
         self._database.initialize()
@@ -62,6 +65,103 @@ class ManualFigureService:
             raise ManualFigureError("图表请求不存在")
         return self._generate(context, request)
 
+    def create_revision(self, job_id: str, figure_key: str, operations: list,
+                        edit_source: str = "manual") -> dict:
+        if edit_source not in {"manual", "ai"}:
+            raise ManualFigureError("图表修改来源无效")
+        context = self._context(job_id)
+        current = self._current(job_id, figure_key)
+        try:
+            result = self._overlay.prepare(current["semantic"], operations)
+        except DiagramAssetError as error:
+            raise ManualFigureError(str(error)) from error
+        if result.conflicts:
+            raise ManualFigureError("图表已经变化，请刷新后重新执行修改")
+        return self._persist_revision(
+            context, current, result.diagram, edit_source, 0,
+            list(result.operations), list(result.conflicts),
+        )
+
+    def ai_preview(self, job_id: str, figure_key: str, instruction: str) -> dict:
+        if not instruction.strip():
+            raise ManualFigureError("请输入具体的图表修改要求")
+        context = self._context(job_id)
+        current = self._current(job_id, figure_key)
+        targets = [{"key": item["key"], "label": item.get("label", ""),
+                    "kind": item.get("kind", "node")}
+                   for kind in ("nodes", "edges") for item in current["semantic"].get(kind, [])]
+        prompt = """你是 Draw.io 图表局部修改助手。只返回 JSON：
+{{"operations":[{{"action":"白名单动作","target":"现有 key","payload":{{}}}}]}}。
+白名单动作仅限 node.move、node.resize、node.style、node.label、node.hide、edge.route、edge.style、edge.label。
+颜色使用 #RRGGBB；移动 payload 使用 x/y；改名使用 value；不得新增或删除语义节点；最多 12 项。
+现有目标：{0}
+用户要求：{1}""".format(json.dumps(targets, ensure_ascii=False), instruction.strip())
+        api_key = None if context["protocol_id"] == "ollama" else self._vault.read(
+            context["credential_ref"] or context["model_id"]
+        )
+        started = time.monotonic()
+        raw = self._model_call(context["model"], context["endpoint_mode"], api_key, prompt)
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        payload = self._parse(raw)
+        operations = payload.get("operations", [])
+        if not isinstance(operations, list) or not operations:
+            raise ManualFigureError("模型没有返回可应用的图表修改")
+        try:
+            result = self._overlay.prepare(current["semantic"], operations[:12])
+        except DiagramAssetError as error:
+            raise ManualFigureError("模型返回了不安全的图表操作：{0}".format(error)) from error
+        if result.conflicts:
+            raise ManualFigureError("模型修改引用了已经变化的图表目标")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            drawio, svg = root / "preview.drawio", root / "preview.svg"
+            try:
+                self._builder.build(result.diagram, drawio)
+                self._inspector.require_valid(drawio)
+                self._svg.render(drawio, svg)
+            except (DrawioDocumentError, TypeError, ValueError) as error:
+                raise ManualFigureError("模型返回的图表操作参数无效") from error
+            preview_svg = svg.read_text(encoding="utf-8")
+        return {"figure_key": figure_key, "edit_source": "ai",
+                "operations": list(result.operations), "preview_svg": preview_svg,
+                "elapsed_ms": elapsed_ms, "model_name": context["model_name"]}
+
+    def revisions(self, job_id: str, figure_key: str) -> list:
+        self._database.initialize()
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """SELECT id, version, edit_source, parent_revision_id, operations_json,
+                semantic_fingerprint, revision_status, model_name, elapsed_ms, created_at
+                FROM manual_figure_revisions WHERE job_id=? AND figure_key=?
+                ORDER BY version DESC""", (job_id, figure_key),
+            ).fetchall()
+        return [{"revision_id": row["id"], "version": row["version"],
+                 "edit_source": row["edit_source"],
+                 "parent_revision_id": row["parent_revision_id"],
+                 "operations": json.loads(row["operations_json"]),
+                 "operation_count": len(json.loads(row["operations_json"])),
+                 "semantic_fingerprint": row["semantic_fingerprint"],
+                 "status": row["revision_status"], "model_name": row["model_name"],
+                 "elapsed_ms": row["elapsed_ms"], "created_at": row["created_at"]}
+                for row in rows]
+
+    def rollback(self, job_id: str, figure_key: str, version: int) -> dict:
+        context = self._context(job_id)
+        with self._database.connect() as connection:
+            row = connection.execute(
+                """SELECT section_key, title, figure_type, semantic_json,
+                evidence_refs_json FROM manual_figure_revisions
+                WHERE job_id=? AND figure_key=? AND version=?""",
+                (job_id, figure_key, version),
+            ).fetchone()
+        if row is None:
+            raise ManualFigureError("指定的图表历史版本不存在")
+        source = {"figure_key": figure_key, "section_key": row["section_key"],
+                  "title": row["title"], "figure_type": row["figure_type"],
+                  "semantic": json.loads(row["semantic_json"]),
+                  "evidence_refs": json.loads(row["evidence_refs_json"])}
+        return self._persist_revision(context, source, source["semantic"], "manual", 0, [], [])
+
     def list(self, job_id: str) -> list:
         self._database.initialize()
         with self._database.connect() as connection:
@@ -83,6 +183,25 @@ class ManualFigureService:
                  "png_relative_path": row["png_relative_path"],
                  "qa": json.loads(row["qa_json"]), "updated_at": row["updated_at"]}
                 for row in rows]
+
+    def _current(self, job_id: str, figure_key: str) -> dict:
+        with self._database.connect() as connection:
+            row = connection.execute(
+                """SELECT mfa.figure_key, mfa.section_key, mfa.title, mfa.figure_type,
+                mfa.semantic_json, mfr.id revision_id, mfr.version,
+                mfr.evidence_refs_json FROM manual_figure_artifacts mfa
+                JOIN manual_figure_revisions mfr ON mfr.job_id=mfa.job_id
+                    AND mfr.figure_key=mfa.figure_key
+                WHERE mfa.job_id=? AND mfa.figure_key=?
+                ORDER BY mfr.version DESC LIMIT 1""", (job_id, figure_key),
+            ).fetchone()
+        if row is None:
+            raise ManualFigureError("正式说明书图表尚未生成")
+        return {"figure_key": row["figure_key"], "section_key": row["section_key"],
+                "title": row["title"], "figure_type": row["figure_type"],
+                "semantic": json.loads(row["semantic_json"]),
+                "revision_id": row["revision_id"], "version": row["version"],
+                "evidence_refs": json.loads(row["evidence_refs_json"])}
 
     def read_asset(self, job_id: str, figure_key: str, asset_format: str) -> tuple:
         if asset_format not in {"drawio", "svg", "png"}:
@@ -213,22 +332,36 @@ class ManualFigureService:
         raw = self._model_call(context["model"], context["endpoint_mode"], api_key, prompt)
         elapsed_ms = round((time.monotonic() - started) * 1000)
         semantic = self._normalize(self._parse(raw), request)
+        source = {**request, "semantic": semantic,
+                  "evidence_refs": semantic["evidence_refs"]}
+        return self._persist_revision(
+            context, source, semantic, "ai_generation", elapsed_ms, [], [],
+        )
+
+    def _persist_revision(self, context: dict, source: dict, semantic: dict,
+                          edit_source: str, elapsed_ms: int, operations: list,
+                          conflicts: list) -> dict:
         with self._database.connect() as connection:
-            version = connection.execute(
-                """SELECT COALESCE(MAX(version),0)+1 value FROM manual_figure_revisions
-                WHERE job_id=? AND figure_key=?""",
-                (context["job_id"], request["figure_key"]),
-            ).fetchone()["value"]
-        relative_root = Path("artifacts") / "manual" / "diagrams" / request["figure_key"]
+            current = connection.execute(
+                """SELECT id, version FROM manual_figure_revisions
+                WHERE job_id=? AND figure_key=? ORDER BY version DESC LIMIT 1""",
+                (context["job_id"], source["figure_key"]),
+            ).fetchone()
+        version = (current["version"] if current else 0) + 1
+        parent_revision_id = current["id"] if current else None
+        relative_root = Path("artifacts") / "manual" / "diagrams" / source["figure_key"]
         stem = "v{0}".format(version)
         drawio_rel, svg_rel, png_rel = (relative_root / (stem + suffix)
                                         for suffix in (".drawio", ".svg", ".png"))
         task_root = self._data_root / "tasks" / context["task_id"]
         drawio, svg, png = (task_root / item for item in (drawio_rel, svg_rel, png_rel))
-        build = self._builder.build(semantic, drawio)
-        validation = self._inspector.require_valid(drawio)
-        self._svg.render(drawio, svg)
-        png_report = self._png.render(drawio, png)
+        try:
+            build = self._builder.build(semantic, drawio)
+            validation = self._inspector.require_valid(drawio)
+            self._svg.render(drawio, svg)
+            png_report = self._png.render(drawio, png)
+        except (DrawioDocumentError, TypeError, ValueError) as error:
+            raise ManualFigureError("图表修改参数无效，未创建新版本") from error
         qa = {"structure": validation, "build": build, "png": png_report,
               "visual_review": "pending_final_document_qa"}
         now = utc_now()
@@ -236,17 +369,24 @@ class ManualFigureService:
         qa_json = json.dumps(qa, ensure_ascii=False, separators=(",", ":"))
         refs_json = json.dumps(semantic["evidence_refs"], ensure_ascii=False,
                                separators=(",", ":"))
+        operations_json = json.dumps(operations, ensure_ascii=False, separators=(",", ":"))
+        fingerprint = self._overlay.semantic_fingerprint(semantic)
+        revision_status = "conflicted" if conflicts else "clean"
+        revision_id = str(uuid4())
         with self._database.connect() as connection:
             connection.execute(
                 """INSERT INTO manual_figure_revisions(id, job_id, figure_key, version,
                 section_key, title, figure_type, semantic_json, evidence_refs_json,
                 drawio_relative_path, svg_relative_path, png_relative_path, qa_json,
-                model_name, elapsed_ms, created_at) VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (str(uuid4()), context["job_id"], request["figure_key"], version,
-                 request["section_key"], request["title"], request["figure_type"],
+                model_name, elapsed_ms, created_at, edit_source, parent_revision_id,
+                operations_json, semantic_fingerprint, revision_status) VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (revision_id, context["job_id"], source["figure_key"], version,
+                 source["section_key"], source["title"], source["figure_type"],
                  semantic_json, refs_json, drawio_rel.as_posix(), svg_rel.as_posix(),
-                 png_rel.as_posix(), qa_json, context["model_name"], elapsed_ms, now),
+                 png_rel.as_posix(), qa_json, context["model_name"], elapsed_ms, now,
+                 edit_source, parent_revision_id, operations_json, fingerprint,
+                 revision_status),
             )
             connection.execute(
                 """INSERT INTO manual_figure_artifacts(id, job_id, figure_key, section_key,
@@ -260,12 +400,15 @@ class ManualFigureService:
                 svg_relative_path=excluded.svg_relative_path,
                 png_relative_path=excluded.png_relative_path, qa_json=excluded.qa_json,
                 updated_at=excluded.updated_at""",
-                (str(uuid4()), context["job_id"], request["figure_key"], request["section_key"],
-                 request["figure_type"], request["title"], semantic_json,
+                (str(uuid4()), context["job_id"], source["figure_key"], source["section_key"],
+                 source["figure_type"], source["title"], semantic_json,
                  drawio_rel.as_posix(), svg_rel.as_posix(), png_rel.as_posix(), qa_json, now),
             )
-        return {"figure_key": request["figure_key"], "section_key": request["section_key"],
-                "version": version, "title": request["title"], "status": "rendered",
+        return {"revision_id": revision_id, "figure_key": source["figure_key"],
+                "section_key": source["section_key"], "version": version,
+                "title": source["title"], "status": revision_status,
+                "edit_source": edit_source, "operations": operations,
+                "conflicts": conflicts,
                 "drawio_relative_path": drawio_rel.as_posix(),
                 "svg_relative_path": svg_rel.as_posix(),
                 "png_relative_path": png_rel.as_posix(), "qa": qa, "elapsed_ms": elapsed_ms}

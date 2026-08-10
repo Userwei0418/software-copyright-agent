@@ -147,6 +147,13 @@ class ManualDocumentServiceTests(unittest.TestCase):
             self.assertIn("relationships/font", font_relationships_xml)
             self.assertGreater(len(embedded_font), 1_000_000)
             self.assertEqual(service.read(job["id"], 1), artifact.read_bytes())
+            self.assertEqual(result["freshness"]["status"], "current")
+            with database.connect() as connection:
+                connection.execute(
+                    "UPDATE manual_figure_artifacts SET updated_at='2099-01-01T00:00:00Z' WHERE job_id=?",
+                    (job["id"],),
+                )
+            self.assertEqual(service.list(job["id"])[0]["freshness"]["status"], "outdated")
             pipeline = ManualPipelineService(database).get(job["id"])
             self.assertEqual(pipeline["current_step"], "render_qa")
             self.assertEqual(pipeline["progress"]["completed"], 5)

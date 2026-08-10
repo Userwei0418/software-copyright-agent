@@ -66,6 +66,11 @@ class ManualFigureServiceTests(unittest.TestCase):
                 )
 
             def fake_call(config, mode, api_key, prompt):
+                if "白名单动作" in prompt:
+                    return json.dumps({"operations": [{
+                        "action": "node.label", "target": "service",
+                        "payload": {"value": "核心业务服务"},
+                    }]}, ensure_ascii=False)
                 return json.dumps({
                     "layout": "layered-vertical",
                     "nodes": [
@@ -101,6 +106,31 @@ class ManualFigureServiceTests(unittest.TestCase):
                 self.assertGreater(png.width, 1500)
             regenerated = service.regenerate(job["id"], "system_architecture")
             self.assertEqual(regenerated["version"], 2)
+            edited = service.create_revision(job["id"], "system_architecture", [{
+                "action": "node.move", "target": "entry", "payload": {"x": 88, "y": 144},
+            }])
+            self.assertEqual(edited["version"], 3)
+            self.assertEqual(edited["edit_source"], "manual")
+            current = next(item for item in service.list(job["id"])
+                           if item["figure_key"] == "system_architecture")
+            entry = next(item for item in current["semantic"]["nodes"]
+                         if item["key"] == "entry")
+            self.assertEqual(entry["visual_override"]["move"], {"x": 88, "y": 144})
+            revisions = service.revisions(job["id"], "system_architecture")
+            self.assertEqual([item["version"] for item in revisions], [3, 2, 1])
+            self.assertEqual(revisions[0]["operation_count"], 1)
+            restored = service.rollback(job["id"], "system_architecture", 1)
+            self.assertEqual(restored["version"], 4)
+            self.assertNotIn("visual_override", next(
+                item for item in service.list(job["id"])[0]["semantic"]["nodes"]
+                if item["key"] == "entry"))
+            preview = service.ai_preview(job["id"], "system_architecture", "突出核心服务")
+            self.assertIn("<svg", preview["preview_svg"])
+            self.assertEqual(preview["operations"][0]["action"], "node.label")
+            applied = service.create_revision(job["id"], "system_architecture",
+                                              preview["operations"], "ai")
+            self.assertEqual(applied["version"], 5)
+            self.assertEqual(applied["edit_source"], "ai")
             refreshed = ManualPipelineService(database).get(job["id"])
             self.assertEqual(refreshed["current_step"], "screenshots")
             self.assertEqual(refreshed["progress"]["completed"], 3)

@@ -89,6 +89,10 @@ class RollbackRequest(StrictModel):
     version: int = Field(ge=1)
 
 
+class ManualFigureAiPreviewRequest(StrictModel):
+    instruction: str = Field(min_length=3, max_length=2000)
+
+
 class ConflictResolutionRequest(StrictModel):
     operation_index: int = Field(ge=0)
     resolution: Literal["drop", "accept_current", "retarget"]
@@ -846,6 +850,75 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 "error": {"code": "manual_figure_error", "message": str(error)}
             })
 
+    @app.get("/api/v1/manual-jobs/{job_id}/figures/{figure_key}/revisions")
+    def list_manual_figure_revisions(
+        job_id: str,
+        figure_key: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        return {"items": manual_figure_service.revisions(job_id, figure_key)}
+
+    @app.post("/api/v1/manual-jobs/{job_id}/figures/{figure_key}/revisions")
+    def create_manual_figure_revision(
+        job_id: str,
+        figure_key: str,
+        payload: SaveRevisionRequest,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_figure_service.create_revision(
+                job_id, figure_key, [item.model_dump() for item in payload.operations],
+                payload.edit_source,
+            )
+        except ManualFigureError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_figure_error", "message": str(error)}
+            })
+
+    @app.post("/api/v1/manual-jobs/{job_id}/figures/{figure_key}/ai-preview")
+    def preview_manual_figure_ai_edit(
+        job_id: str,
+        figure_key: str,
+        payload: ManualFigureAiPreviewRequest,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_figure_service.ai_preview(job_id, figure_key, payload.instruction)
+        except ManualFigureError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_figure_error", "message": str(error)}
+            })
+
+    @app.post("/api/v1/manual-jobs/{job_id}/figures/{figure_key}/rollback")
+    def rollback_manual_figure(
+        job_id: str,
+        figure_key: str,
+        payload: RollbackRequest,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_figure_service.rollback(job_id, figure_key, payload.version)
+        except ManualFigureError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_figure_error", "message": str(error)}
+            })
+
     @app.get("/api/v1/manual-jobs/{job_id}/figures/{figure_key}.{asset_format}")
     def get_manual_figure_asset(
         job_id: str,
@@ -1047,6 +1120,11 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 return JSONResponse(status_code=409, content={
                     "error": {"code": "manual_document_not_deliverable",
                               "message": "说明书尚未通过逐页质量检查，暂不能导出"}
+                })
+            if item["freshness"]["status"] != "current":
+                return JSONResponse(status_code=409, content={
+                    "error": {"code": "manual_document_outdated",
+                              "message": "正文、图表或截图已有更新，请重新装配并质检后导出"}
                 })
             return Response(
                 content=manual_document_service.read(job_id, version),

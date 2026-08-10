@@ -56,7 +56,10 @@ export function AssetLibrary({ connection, onOpen, onPreview, onPreviewManual }:
   </div></header><section className="assets-content">
     {message && <div className="source-notice">{message}</div>}
     <div className="asset-library-list">{rows.map((row) => {
-      const manual = row.manuals.find((item) => item.status === "qa_passed");
+      const manual = row.manuals.find((item) => item.status === "qa_passed" &&
+        item.freshness.status === "current");
+      const staleManual = row.manuals.find((item) => item.status === "qa_passed" &&
+        item.freshness.status === "outdated");
       return <article key={row.task.task_id}>
       <div className="asset-project"><span>项目</span><div><strong>{row.task.display_name}</strong>
         <small>{row.task.updated_at.replace("T", " ").slice(0, 16)} · {row.task.task_id.slice(0, 8)}</small></div>
@@ -69,12 +72,15 @@ export function AssetLibrary({ connection, onOpen, onPreview, onPreviewManual }:
             {exported[row.task.task_id] ? "在文件夹中显示" : "导出…"}</button></div>}
       </div>
       <div className={`asset-file ${manual ? "ready" : "pending"}`}><b>DOCX</b><div>
-        <strong>软件说明书</strong><small>{manual ? `v${manual.version} · ${manual.qa.section_count} 章 · 质量检查通过` :
+        <strong>软件说明书</strong><small>{manual ? `v${manual.version} · ${manual.qa.section_count} 章 · 质量检查通过` : staleManual ?
+          `v${staleManual.version} 后内容已有更新，请重新装配` :
           row.manuals.length ? `${row.manuals.length} 个版本，暂无通过质量检查的交付件` : "尚未生成"}</small></div>
         {manual && <div className="asset-file-actions"><button onClick={() => onPreviewManual?.(row.task.task_id)}>程序内查看</button>
           <button onClick={() => exported[`manual:${manual.id}`]
             ? revealExportedDocument(exported[`manual:${manual.id}`]) : exportManual(manual)}>
             {exported[`manual:${manual.id}`] ? "在文件夹中显示" : "导出…"}</button></div>}
+        {!manual && staleManual && <div className="asset-file-actions"><button
+          onClick={() => onPreviewManual?.(row.task.task_id)}>前往重新装配</button></div>}
       </div>
     </article>;})}</div>
   </section></main>;

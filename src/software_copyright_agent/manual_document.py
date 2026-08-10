@@ -269,6 +269,17 @@ class ManualDocumentService:
             digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
             status = "verified" if digest == row["sha256"] else "mismatch"
             size = artifact.stat().st_size
+        with self._database.connect() as connection:
+            latest = connection.execute(
+                """SELECT MAX(changed_at) changed_at FROM (
+                    SELECT MAX(updated_at) changed_at FROM manual_section_artifacts WHERE job_id=?
+                    UNION ALL
+                    SELECT MAX(updated_at) changed_at FROM manual_figure_artifacts WHERE job_id=?
+                    UNION ALL
+                    SELECT MAX(created_at) changed_at FROM manual_screenshot_artifacts WHERE job_id=?
+                )""", (row["job_id"], row["job_id"], row["job_id"]),
+            ).fetchone()["changed_at"]
+        freshness = "outdated" if latest and latest > row["created_at"] else "current"
         return {
             "id": row["id"], "job_id": row["job_id"], "task_id": context["task_id"],
             "version": row["version"], "status": row["status"],
@@ -278,6 +289,7 @@ class ManualDocumentService:
             "docx_relative_path": relative, "preview_pdf_relative_path": row["preview_pdf_relative_path"],
             "qa": json.loads(row["qa_json"]), "sha256": row["sha256"],
             "integrity": {"status": status, "size_bytes": size},
+            "freshness": {"status": freshness, "latest_asset_update": latest},
             "created_at": row["created_at"],
         }
 

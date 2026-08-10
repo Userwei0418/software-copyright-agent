@@ -115,7 +115,8 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   }
 
   async function exportDocument() {
-    if (!selectedDocument || selectedDocument.status !== "qa_passed") return;
+    if (!selectedDocument || selectedDocument.status !== "qa_passed" ||
+        selectedDocument.freshness.status === "outdated") return;
     const destination = await save({ title: "导出软件说明书",
       defaultPath: selectedDocument.filename,
       filters: [{ name: "Word 文档", extensions: ["docx"] }] });
@@ -218,6 +219,22 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
     finally { setEditorBusy(false); }
   }
 
+  async function reassembleLatestAssets() {
+    if (!connection || !selectedDocument) return;
+    setChecking(true); setMessage("正在把最新正文、图表和截图重新装配为新的 Word 版本…");
+    try {
+      const document = await assembleFormalManualDocument(connection, selectedDocument.job_id);
+      const result = await runFormalManualQa(connection, document.job_id, document.version);
+      const versions = await loadVersions(connection, taskId);
+      setJobs(versions.jobItems); setDocuments(versions.documentItems);
+      setSelectedDocument(result.document); setExportedPath(null);
+      setMessage(result.qa_run.passed ? `最新资产已装配为 v${document.version}，并通过逐页质检。` :
+        `最新资产已装配为 v${document.version}，但逐页质检未通过。`);
+      await openPreview(result.document);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "最新资产装配失败"); }
+    finally { setChecking(false); }
+  }
+
   return <main className="manual-page"><header className="topbar"><div>
     <p className="eyebrow">TECHNICAL MANUAL</p><h1>说明书</h1>
     <p>AI 基于项目证据生成结构化正文与图表，并装配为可预览、可导出的正式 Word 文档。</p></div>
@@ -234,26 +251,33 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
           <button disabled={!modelId || generating} onClick={generate}>{generating ? "正在生成正式文档…" :
             !modelId ? "请先验证可用模型" : documents.length ? "生成新版本" : "生成正式说明书"}</button></div>
 
-        {selectedDocument && <section className="manual-result"><div><span>DOCX</span><div>
+        {selectedDocument && <><section className={`manual-result ${
+          selectedDocument.freshness.status === "outdated" ? "outdated" : ""}`}><div><span>DOCX</span><div>
           <strong>{selectedDocument.filename}</strong><small>文档 v{selectedDocument.version} · {
             selectedDocument.qa.section_count} 章 · {selectedDocument.qa.figure_count} 张图表 · {
             selectedDocument.qa.screenshot_count} 张截图 · {(selectedDocument.integrity.size_bytes || 0) / 1024 / 1024 < 0.1
               ? `${Math.round((selectedDocument.integrity.size_bytes || 0) / 1024)} KiB`
               : `${((selectedDocument.integrity.size_bytes || 0) / 1024 / 1024).toFixed(2)} MiB`}</small></div></div>
-          <div><button onClick={openEditor}>编辑内容</button><button disabled={checking} onClick={selectedDocument.status === "assembled"
+          <div>{selectedDocument.freshness.status === "outdated" && <button className="refresh-document"
+            disabled={checking} onClick={reassembleLatestAssets}>{checking ? "正在重新装配…" : "重新装配最新内容"}</button>}
+            <button onClick={openEditor}>编辑内容</button><button disabled={checking} onClick={selectedDocument.status === "assembled"
             ? runQualityCheck : () => openPreview()}>{checking ? "正在质检…" :
               selectedDocument.status === "assembled" ? "执行逐页质检" : "逐页预览"}</button><button className="primary"
-            disabled={selectedDocument.status !== "qa_passed"}
+            disabled={selectedDocument.status !== "qa_passed" || selectedDocument.freshness.status === "outdated"}
             onClick={exportedPath ? showExport : exportDocument}>{exportedPath ? "在文件夹中显示" :
+              selectedDocument.freshness.status === "outdated" ? "重新装配后导出" :
               selectedDocument.status === "qa_passed" ? "导出…" : "质检通过后可导出"}</button></div>
-        </section>}
+        </section>{selectedDocument.freshness.status === "outdated" && <div className="manual-stale-notice">
+          正文、图表或截图在此文档生成后发生了变化。当前 v{selectedDocument.version} 仍保留为历史版本，
+          请重新装配生成新版本后再导出。</div>}</>}
 
         {documents.length > 0 && <section className="manual-versions"><header><strong>文档版本</strong>
           <small>{documents.length} 个可用版本</small></header><div>{documents.map((item) => <button
             className={selectedDocument?.id === item.id ? "active" : ""} key={item.id}
             onClick={() => { setSelectedDocument(item); setQuality(null); setExportedPath(null); }}>
             <b>v{item.version}</b><span>{item.created_at.replace("T", " ").slice(0, 16)}</span>
-            <em>{item.integrity.status !== "verified" ? "文件异常" : item.status === "qa_passed" ?
+            <em>{item.integrity.status !== "verified" ? "文件异常" : item.freshness.status === "outdated" ?
+              "内容已更新，待重新装配" : item.status === "qa_passed" ?
               "质量检查通过" : item.status === "qa_failed" ? "质量检查未通过" : "待质量检查"}</em></button>)}</div></section>}
 
         {jobs.length > 0 && <details className="manual-advanced"><summary>高级：查看生成阶段留痕</summary>
@@ -270,7 +294,8 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
       <div className="document-viewer-panel"><header><div><strong>{selectedDocument.project_name} 软件说明书</strong>
         <small>{selectedDocument.project_version} · 文档 v{selectedDocument.version} · {
           quality.passed ? "质量检查通过" : "质量检查未通过"}</small></div><div>
-        <button disabled={selectedDocument.status !== "qa_passed"}
+        <button disabled={selectedDocument.status !== "qa_passed" ||
+          selectedDocument.freshness.status === "outdated"}
           onClick={exportedPath ? showExport : exportDocument}>{exportedPath ? "在文件夹中显示" : "导出 DOCX…"}</button>
         <button onClick={() => setQuality(null)}>关闭</button></div></header>
         <div className="manual-page-toolbar"><button disabled={previewPage <= 1}

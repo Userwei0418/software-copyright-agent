@@ -579,6 +579,21 @@ CREATE INDEX idx_manual_document_qa_latest
 ON manual_document_qa_runs(document_artifact_id, qa_version DESC);
 """
 
+MIGRATION_021 = """
+ALTER TABLE manual_figure_revisions
+ADD COLUMN edit_source TEXT NOT NULL DEFAULT 'ai_generation'
+CHECK (edit_source IN ('ai_generation', 'manual', 'ai'));
+ALTER TABLE manual_figure_revisions
+ADD COLUMN parent_revision_id TEXT;
+ALTER TABLE manual_figure_revisions
+ADD COLUMN operations_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE manual_figure_revisions
+ADD COLUMN semantic_fingerprint TEXT NOT NULL DEFAULT '';
+ALTER TABLE manual_figure_revisions
+ADD COLUMN revision_status TEXT NOT NULL DEFAULT 'clean'
+CHECK (revision_status IN ('clean', 'conflicted'));
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -792,6 +807,16 @@ class Database:
                     """INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (20, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
                     ("migration-020",),
+                )
+            applied_v21 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 21"
+            ).fetchone()
+            if applied_v21 is None:
+                connection.executescript(MIGRATION_021)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (21, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-021",),
                 )
 
     @contextmanager
