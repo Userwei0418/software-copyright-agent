@@ -33,6 +33,10 @@ class DiagramAssetService:
         self._inspector = DrawioDocumentInspector()
         self._renderer = InternalSvgRenderer()
 
+    @property
+    def data_root(self) -> Path:
+        return self._data_root
+
     def create_revision(self, task_id: str, diagram_key: str,
                         operations: Iterable[dict], edit_source: str) -> PersistedDiagramRevision:
         if edit_source not in {"manual", "ai"}:

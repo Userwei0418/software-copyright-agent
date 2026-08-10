@@ -152,4 +152,4 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
 - 当前内置字体覆盖常用简体中文；遇到字体 cmap 不包含的扩展字符时会阻断出件，而不是静默显示方框。
 - 结构事实提取只覆盖高置信度静态模式；动态路由、运行时拼接 SQL、厂商自定义 ORM 和业务语义仍需后续模型候选与人工确认。
 
-开发计划和每轮进度分别见 `DEVELOPMENT_PLAN.md` 与 `PROGRESS.md`。
+开发计划、每轮进度和本地资产 API 分别见 `DEVELOPMENT_PLAN.md`、`PROGRESS.md` 与 `LOCAL_API.md`。
