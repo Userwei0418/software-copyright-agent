@@ -136,6 +136,11 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 - `GET /api/v1/manual-jobs/{job_id}`：读取任务和各阶段状态。
 - `POST /api/v1/manual-jobs/{job_id}/research`：执行或重试项目研究阶段。
 - `GET /api/v1/manual-jobs/{job_id}/research`：读取最新结构化研究成果。
+- `POST /api/v1/manual-jobs/{job_id}/draft`：从研究成果生成全部适用章节。
+- `GET /api/v1/manual-jobs/{job_id}/sections`：读取当前章节内容块。
+- `POST /api/v1/manual-jobs/{job_id}/sections/{section_key}/regenerate`：独立重新生成一章。
+- `PUT /api/v1/manual-jobs/{job_id}/sections/{section_key}`：保存人工修改为新版本。
+- `GET /api/v1/manual-jobs/{job_id}/sections/{section_key}/revisions`：读取章节版本历史。
 
 创建请求：
 
@@ -146,3 +151,5 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 任务包含 `research`、`draft`、`diagrams`、`screenshots`、`assemble_docx`、`render_qa` 六个可独立重试的阶段。正文、图表、截图和 DOCX 使用独立结构化产物表持久化，部分失败不会删除已完成阶段。
 
 研究阶段只读取扫描快照中已通过安全筛选的代表性源码，不会把整个仓库无差别发送给模型。输出包含项目事实、带文件哈希和行号的源码引用、研究结论及分章建议。每条研究结论必须分类为 `verified`、`inference` 或 `pending_confirmation`；模型引用未知证据时，服务会删除无效引用并将伪“已验证”结论降级为待确认。
+
+正文阶段不生成 Markdown 文件，而是保存 `paragraph`、`list`、`table`、`figure_request` 四类结构化内容块。事实性内容的证据引用仍须来自研究输入；无证据内容会标记为 `needs_review`。一次批量生成中的单章失败不会删除其他成功章节，用户可以只重试失败章节。人工编辑不会覆盖 AI 版本，而是新增 `origin=user` 的确认版本。

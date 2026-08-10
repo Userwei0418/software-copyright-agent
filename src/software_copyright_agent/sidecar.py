@@ -32,6 +32,7 @@ from .manual_plan_service import ManualPlanError
 from .manual_generation import ManualGenerationError
 from .manual_pipeline import ManualPipelineError, ManualPipelineService
 from .manual_research import ManualResearchError, ManualResearchService
+from .manual_drafting import ManualDraftingError, ManualDraftingService
 from .diagram_plan_service import DiagramPlanError
 from .drawio_service import DrawioGenerationError
 from .storage import Database
@@ -121,6 +122,11 @@ class ManualGenerationRequest(StrictModel):
     model_config_id: str = Field(min_length=8, max_length=64)
 
 
+class ManualSectionEditRequest(StrictModel):
+    title: str = Field(min_length=1, max_length=200)
+    blocks: List[Dict[str, Any]] = Field(min_length=3, max_length=100)
+
+
 class AppSettingsRequest(StrictModel):
     manual_model_id: Optional[str] = Field(default=None, max_length=64)
     diagram_model_id: Optional[str] = Field(default=None, max_length=64)
@@ -166,6 +172,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     manual_workspace_service = ManualWorkspaceService(database, data_dir)
     manual_pipeline_service = ManualPipelineService(database)
     manual_research_service = ManualResearchService(database, data_dir)
+    manual_drafting_service = ManualDraftingService(database, data_dir)
     model_config_service = ModelConfigService(database)
     credential_vault = CredentialVault(database, data_dir)
     app_settings_service = AppSettingsService(database)
@@ -670,6 +677,82 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                           "message": "该说明书任务尚无项目研究结果"}
             })
         return result
+
+    @app.post("/api/v1/manual-jobs/{job_id}/draft")
+    def generate_manual_draft(
+        job_id: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_drafting_service.generate_all(job_id)
+        except ManualDraftingError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_drafting_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/sections")
+    def list_manual_sections(
+        job_id: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        return {"items": manual_drafting_service.list_sections(job_id)}
+
+    @app.post("/api/v1/manual-jobs/{job_id}/sections/{section_key}/regenerate")
+    def regenerate_manual_section(
+        job_id: str,
+        section_key: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_drafting_service.regenerate(job_id, section_key)
+        except ManualDraftingError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_drafting_error", "message": str(error)}
+            })
+
+    @app.put("/api/v1/manual-jobs/{job_id}/sections/{section_key}")
+    def edit_manual_section(
+        job_id: str,
+        section_key: str,
+        payload: ManualSectionEditRequest,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_drafting_service.save_edit(
+                job_id, section_key, payload.title, payload.blocks
+            )
+        except ManualDraftingError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_drafting_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/sections/{section_key}/revisions")
+    def list_manual_section_revisions(
+        job_id: str,
+        section_key: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        return {"items": manual_drafting_service.revisions(job_id, section_key)}
 
     @app.get("/api/v1/tasks/{task_id}/diagram-assets")
     def workspace(task_id: str, request: Request,
