@@ -14,6 +14,7 @@ from .repositories import (
     CodePreviewRepository,
     SourceDocumentRepository,
     SourceDocumentQaRepository,
+    ManualPlanRepository,
 )
 from .storage import Database
 
@@ -42,6 +43,7 @@ class UnitOfWork:
         self.code_previews = CodePreviewRepository(connection)
         self.source_documents = SourceDocumentRepository(connection)
         self.source_document_qa = SourceDocumentQaRepository(connection)
+        self.manual_plans = ManualPlanRepository(connection)
         return self
 
     def __exit__(

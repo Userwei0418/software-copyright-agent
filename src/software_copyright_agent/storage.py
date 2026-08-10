@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -227,6 +227,24 @@ CREATE INDEX idx_source_document_qa_task_version
 ON source_document_qa_runs(task_id, version DESC);
 """
 
+MIGRATION_007 = """
+CREATE TABLE manual_plan_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    stage_run_id TEXT NOT NULL REFERENCES task_stages(id),
+    version INTEGER NOT NULL,
+    rules_version TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    artifact_relative_path TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(task_id, version)
+);
+
+CREATE INDEX idx_manual_plan_runs_task_version
+ON manual_plan_runs(task_id, version DESC);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -300,6 +318,16 @@ class Database:
                     """INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
                     ("migration-006",),
+                )
+            applied_v7 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 7"
+            ).fetchone()
+            if applied_v7 is None:
+                connection.executescript(MIGRATION_007)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (7, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-007",),
                 )
 
     @contextmanager

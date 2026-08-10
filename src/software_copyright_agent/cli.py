@@ -9,6 +9,7 @@ from .code_preview import CodePreviewError
 from .code_preview_service import CodePreviewService
 from .ingestion import IngestionError
 from .inspection import InspectionError, InspectionService
+from .manual_plan_service import ManualPlanError, ManualPlanService
 from .scanner import ScanError
 from .service import ScanProjectService
 from .source_plan_service import SourcePlanError, SourcePlanService
@@ -72,6 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     qa_parser.add_argument("task_id", help="Task ID with a generated source DOCX")
     qa_parser.add_argument("--json", action="store_true", help="Print JSON output")
+    manual_plan_parser = subparsers.add_parser(
+        "manual-plan", help="Build an evidence-linked software manual chapter plan"
+    )
+    manual_plan_parser.add_argument("task_id", help="Completed task ID")
+    manual_plan_parser.add_argument("--json", action="store_true", help="Print JSON output")
     return parser
 
 
@@ -223,6 +229,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print("Source DOCX QA: {0}".format("PASSED" if qa.passed else "BLOCKED"))
             print("Report: {0}".format(qa.report_path))
         return 0 if qa.passed else 3
+
+    if args.command == "manual-plan":
+        try:
+            persisted = ManualPlanService(database, data_dir).execute(args.task_id)
+        except ManualPlanError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        payload = {
+            "task_id": persisted.task_id,
+            "run_id": persisted.run_id,
+            "version": persisted.version,
+            "artifact_path": str(persisted.artifact_path),
+            "section_count": len(persisted.plan.sections),
+            "ready_sections": persisted.plan.ready_sections,
+            "needs_evidence_sections": persisted.plan.needs_evidence_sections,
+            "missing_information_count": len(persisted.plan.missing_information),
+            "diagram_count": len(persisted.plan.diagram_requirements),
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            print("Manual plan: v{0}".format(persisted.version))
+            print("Sections: {0}".format(len(persisted.plan.sections)))
+            print("Needs evidence: {0}".format(persisted.plan.needs_evidence_sections))
+            print("Artifact: {0}".format(persisted.artifact_path))
+        return 0
 
     if args.command != "scan":
         return 2

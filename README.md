@@ -25,6 +25,7 @@
 - 将确定性分页预览生成 A4 DOCX：1 页封面 + 59 页源代码正文。
 - 对 DOCX 运行版本化记录和 SHA-256 留痕；代码不足时阻断出件。
 - 内置并嵌入 Noto Sans CJK SC 字体，中文名称、页眉页脚和中文源码不依赖系统字体。
+- 从已确认 Fact/Evidence 生成版本化的软件说明书章节计划、缺失信息清单和图表需求。
 
 ## 运行
 
@@ -95,6 +96,16 @@ PYTHONPATH=src python3 -m software_copyright_agent \
 ```
 
 门禁会验证产物哈希、A4 分节、显式分页、页码字段、内嵌字体结构、字体与许可证哈希、所需 Unicode 字形、实际 60 页、页面尺寸一致性、空白页和源码正文纵向覆盖率。可用 `COPYRIGHT_AGENT_SOFFICE=/path/to/soffice` 指定应用自带或外部 LibreOffice；未通过时命令返回退出码 3，渲染器故障返回退出码 2。
+
+生成证据关联的软件说明书章节计划：
+
+```bash
+PYTHONPATH=src python3 -m software_copyright_agent \
+  --data-dir .software-copyright-agent \
+  manual-plan TASK_ID --json
+```
+
+计划包含 9 个标准章节、Fact/Evidence 引用、缺失信息及系统架构图和核心业务流程图需求。本阶段只规划内容，不生成未经证据支持的正文。
 
 运行测试：
 
