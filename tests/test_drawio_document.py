@@ -9,7 +9,8 @@ from pathlib import Path
 
 from software_copyright_agent.cli import main
 from software_copyright_agent.drawio_document import (
-    DrawioDocumentBuilder, DrawioDocumentInspector, InternalSvgRenderer,
+    DrawioDocumentBuilder, DrawioDocumentInspector, GenericDrawioDocumentBuilder,
+    InternalPngRenderer, InternalSvgRenderer,
 )
 from software_copyright_agent.drawio_service import DrawioGenerationService
 from software_copyright_agent.diagram_asset_service import DiagramAssetService
@@ -23,6 +24,32 @@ class FakeRenderer:
 
 
 class DrawioDocumentTests(unittest.TestCase):
+    def test_generic_builder_exports_editable_svg_and_high_resolution_png(self) -> None:
+        figure = {
+            "figure_key": "module_collaboration", "title": "模块协作图",
+            "layout": "layered-vertical",
+            "nodes": [
+                {"key": "entry", "label": "任务入口", "kind": "actor", "layer": 0},
+                {"key": "service", "label": "业务服务", "kind": "service", "layer": 1},
+                {"key": "store", "label": "本地数据库", "kind": "datastore", "layer": 2},
+            ],
+            "edges": [
+                {"key": "submit", "source": "entry", "target": "service", "label": "提交"},
+                {"key": "persist", "source": "service", "target": "store", "label": "持久化"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            drawio, svg, png = root / "figure.drawio", root / "figure.svg", root / "figure.png"
+            result = GenericDrawioDocumentBuilder().build(figure, drawio)
+            report = DrawioDocumentInspector().require_valid(drawio)
+            InternalSvgRenderer().render(drawio, svg)
+            png_result = InternalPngRenderer().render(drawio, png)
+            self.assertEqual((result["node_count"], report["edge_count"]), (3, 2))
+            self.assertGreater(png_result["width"], 1500)
+            self.assertGreater(png.stat().st_size, 1000)
+            self.assertIn("任务入口", svg.read_text(encoding="utf-8"))
+
     def test_builder_creates_editable_uncompressed_xml_with_waypoints(self) -> None:
         diagram = {
             "key": "system_architecture", "title": "系统总体架构图", "status": "ready",

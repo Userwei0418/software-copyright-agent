@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -501,6 +501,30 @@ CREATE INDEX idx_manual_section_revisions_latest
 ON manual_section_revisions(job_id, section_key, version DESC);
 """
 
+MIGRATION_018 = """
+CREATE TABLE manual_figure_revisions (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    figure_key TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    section_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    figure_type TEXT NOT NULL,
+    semantic_json TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    drawio_relative_path TEXT NOT NULL,
+    svg_relative_path TEXT NOT NULL,
+    png_relative_path TEXT NOT NULL,
+    qa_json TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    elapsed_ms INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(job_id, figure_key, version)
+);
+CREATE INDEX idx_manual_figure_revisions_latest
+ON manual_figure_revisions(job_id, figure_key, version DESC);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -684,6 +708,16 @@ class Database:
                     """INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (17, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
                     ("migration-017",),
+                )
+            applied_v18 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 18"
+            ).fetchone()
+            if applied_v18 is None:
+                connection.executescript(MIGRATION_018)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (18, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-018",),
                 )
 
     @contextmanager

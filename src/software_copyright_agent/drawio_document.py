@@ -9,6 +9,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from PIL import Image, ImageDraw, ImageFont
+
 
 DRAWIO_GENERATOR_VERSION = "drawio-generator-v3"
 
@@ -126,6 +128,10 @@ class DrawioDocumentBuilder:
             geometry = ET.SubElement(cell, "mxGeometry", {
                 "relative": "1", "as": "geometry", "x": "0", "y": "0",
             })
+            if edge.get("label"):
+                ET.SubElement(geometry, "mxPoint", {
+                    "x": "0", "y": "-14", "as": "offset",
+                })
             array = ET.SubElement(geometry, "Array", {"as": "points"})
             for x, y in points:
                 ET.SubElement(array, "mxPoint", {"x": str(x), "y": str(y)})
@@ -379,6 +385,214 @@ class DrawioDocumentInspector:
         return report
 
 
+class GenericDrawioDocumentBuilder:
+    """Builds evidence-derived manual figures with stable semantic IDs."""
+
+    NODE_STYLES = {
+        "component": NODE_STYLE,
+        "service": NODE_STYLE,
+        "module": DOMAIN_STYLE,
+        "actor": DOCUMENT_STYLE,
+        "external": CONTEXT_STYLE,
+        "datastore": PERSISTENCE_STYLE,
+        "decision": WARNING_STATE_STYLE,
+        "process": NODE_STYLE,
+    }
+
+    def build(self, figure: dict, output_path: Path) -> dict:
+        nodes = figure.get("nodes", [])
+        edges = figure.get("edges", [])
+        if len(nodes) < 2:
+            raise DrawioDocumentError("Manual figure requires at least two nodes")
+        keys = {node["key"] for node in nodes}
+        if len(keys) != len(nodes):
+            raise DrawioDocumentError("Manual figure node keys must be unique")
+        if any(edge.get("source") not in keys or edge.get("target") not in keys
+               for edge in edges):
+            raise DrawioDocumentError("Manual figure edge endpoint is missing")
+        positions, canvas = self._layout(figure)
+        mxfile, root = self._document(figure, canvas)
+        for node in nodes:
+            x, y, width, height = positions[node["key"]]
+            cell = ET.SubElement(root, "mxCell", {
+                "id": node["key"], "value": html.escape(node["label"]),
+                "vertex": "1", "parent": "1",
+                "style": self.NODE_STYLES.get(node.get("kind"), NODE_STYLE),
+            })
+            ET.SubElement(cell, "mxGeometry", {
+                "x": str(x), "y": str(y), "width": str(width),
+                "height": str(height), "as": "geometry",
+            })
+        for index, edge in enumerate(edges):
+            points = self._route(edge, positions, index)
+            cell = ET.SubElement(root, "mxCell", {
+                "id": edge.get("key") or "edge-{0}".format(index + 1),
+                "value": html.escape(edge.get("label", "")), "edge": "1",
+                "parent": "1", "source": edge["source"], "target": edge["target"],
+                "style": EDGE_STYLE + "labelBackgroundColor=#ffffff;",
+            })
+            geometry = ET.SubElement(cell, "mxGeometry", {
+                "relative": "1", "as": "geometry", "x": "0", "y": "0",
+            })
+            if edge.get("label"):
+                ET.SubElement(geometry, "mxPoint", {
+                    "x": "0", "y": "-14", "as": "offset",
+                })
+            array = ET.SubElement(geometry, "Array", {"as": "points"})
+            for x, y in points:
+                ET.SubElement(array, "mxPoint", {"x": str(x), "y": str(y)})
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        ET.ElementTree(mxfile).write(output_path, encoding="utf-8", xml_declaration=True)
+        return {"node_count": len(nodes), "edge_count": len(edges),
+                "canvas": list(canvas),
+                "sha256": hashlib.sha256(output_path.read_bytes()).hexdigest()}
+
+    @staticmethod
+    def _document(figure: dict, canvas: tuple) -> tuple:
+        mxfile = ET.Element("mxfile", {
+            "host": "app.diagrams.net", "agent": "software-copyright-agent",
+            "version": "24.7.17", "type": "device", "compressed": "false",
+        })
+        page = ET.SubElement(mxfile, "diagram", {
+            "id": figure["figure_key"], "name": figure["title"],
+        })
+        model = ET.SubElement(page, "mxGraphModel", {
+            "dx": "1200", "dy": "800", "grid": "1", "gridSize": "10",
+            "guides": "1", "tooltips": "1", "connect": "1", "arrows": "1",
+            "fold": "1", "page": "1", "pageScale": "1",
+            "pageWidth": str(canvas[0]), "pageHeight": str(canvas[1]),
+            "math": "0", "shadow": "0",
+        })
+        root = ET.SubElement(model, "root")
+        ET.SubElement(root, "mxCell", {"id": "0"})
+        ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
+        title = ET.SubElement(root, "mxCell", {
+            "id": "diagram-title", "value": html.escape(figure["title"]),
+            "vertex": "1", "parent": "1",
+            "style": "text;html=1;strokeColor=none;fillColor=none;align=left;"
+                     "verticalAlign=middle;whiteSpace=wrap;fontSize=22;fontStyle=1;"
+                     "fontColor=#0f172a;",
+        })
+        ET.SubElement(title, "mxGeometry", {
+            "x": "48", "y": "24", "width": str(canvas[0] - 96),
+            "height": "40", "as": "geometry",
+        })
+        return mxfile, root
+
+    def _layout(self, figure: dict) -> tuple:
+        nodes = figure["nodes"]
+        layout = figure.get("layout", "layered-vertical")
+        layers = {}
+        for index, node in enumerate(nodes):
+            layer = max(0, int(node.get("layer", index if "flow" in layout else 0)))
+            layers.setdefault(layer, []).append(node)
+        positions = {}
+        if layout in {"flow-left-right", "collaboration-horizontal"}:
+            max_rows = max(len(items) for items in layers.values())
+            for column, layer in enumerate(sorted(layers)):
+                items = layers[layer]
+                for row, node in enumerate(items):
+                    positions[node["key"]] = (60 + column * 250, 110 + row * 110, 190, 62)
+            canvas = (max(900, 120 + len(layers) * 250), max(300, 180 + max_rows * 110))
+        else:
+            max_columns = max(len(items) for items in layers.values())
+            for row, layer in enumerate(sorted(layers)):
+                items = layers[layer]
+                total_width = len(items) * 190 + max(0, len(items) - 1) * 40
+                left = max(60, (max(1000, max_columns * 230 + 120) - total_width) / 2)
+                for column, node in enumerate(items):
+                    positions[node["key"]] = (left + column * 230, 110 + row * 130, 190, 62)
+            canvas = (max(1000, max_columns * 230 + 120), max(560, len(layers) * 130 + 170))
+        return positions, canvas
+
+    @staticmethod
+    def _route(edge: dict, positions: dict, index: int) -> list:
+        sx, sy, sw, sh = positions[edge["source"]]
+        tx, ty, tw, th = positions[edge["target"]]
+        sc, tc = (sx + sw / 2, sy + sh / 2), (tx + tw / 2, ty + th / 2)
+        if abs(sc[1] - tc[1]) < 10:
+            middle_x = (sc[0] + tc[0]) / 2
+            return [(middle_x, sc[1]), (middle_x, tc[1])]
+        middle_y = (sc[1] + tc[1]) / 2 + (index % 3 - 1) * 14
+        return [(sc[0], middle_y), (tc[0], middle_y)]
+
+
+class InternalPngRenderer:
+    """High-resolution Word-compatible renderer for deterministic Draw.io XML."""
+
+    def __init__(self, scale: int = 2) -> None:
+        self.scale = max(1, scale)
+
+    def render(self, drawio_path: Path, png_path: Path) -> dict:
+        source = ET.parse(drawio_path).getroot()
+        model = source.find(".//mxGraphModel")
+        width, height = int(float(model.get("pageWidth"))), int(float(model.get("pageHeight")))
+        image = Image.new("RGB", (width * self.scale, height * self.scale), "white")
+        draw = ImageDraw.Draw(image)
+        cells = source.findall(".//mxCell")
+        vertices = {cell.get("id"): cell for cell in cells if cell.get("vertex") == "1"}
+        for edge in (cell for cell in cells if cell.get("edge") == "1"):
+            self._edge(draw, edge, vertices)
+        for cell in vertices.values():
+            self._vertex(draw, cell)
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(png_path, format="PNG", optimize=True)
+        return {"width": image.width, "height": image.height,
+                "size_bytes": png_path.stat().st_size,
+                "sha256": hashlib.sha256(png_path.read_bytes()).hexdigest()}
+
+    def _vertex(self, draw: ImageDraw.ImageDraw, cell: ET.Element) -> None:
+        x, y, width, height = InternalSvgRenderer._rect(cell)
+        style = InternalSvgRenderer._style(cell.get("style", ""))
+        box = tuple(int(value * self.scale) for value in (x, y, x + width, y + height))
+        if cell.get("id") != "diagram-title":
+            draw.rounded_rectangle(box, radius=10 * self.scale,
+                                   fill=style.get("fillColor", "#ffffff"),
+                                   outline=style.get("strokeColor", "#64748b"),
+                                   width=max(2, int(float(style.get("strokeWidth", "1.5")) * self.scale)))
+        label = "\n".join(InternalSvgRenderer._text_lines(cell.get("value", "")))
+        if not label:
+            return
+        size = int(float(style.get("fontSize", "12")) * self.scale)
+        font = self._font(size)
+        anchor = "la" if cell.get("id") == "diagram-title" else "mm"
+        point = (int(x * self.scale), int((y + height / 2) * self.scale)) if anchor == "la" else (
+            int((x + width / 2) * self.scale), int((y + height / 2) * self.scale))
+        draw.multiline_text(point, label, font=font, fill=style.get("fontColor", "#0f172a"),
+                            anchor=anchor, align="center", spacing=4 * self.scale)
+
+    def _edge(self, draw: ImageDraw.ImageDraw, cell: ET.Element, vertices: dict) -> None:
+        source_rect = InternalSvgRenderer._rect(vertices[cell.get("source")])
+        target_rect = InternalSvgRenderer._rect(vertices[cell.get("target")])
+        geometry = cell.find("mxGeometry")
+        points = [(float(item.get("x")), float(item.get("y")))
+                  for item in geometry.findall("./Array[@as='points']/mxPoint")]
+        route = InternalSvgRenderer._orthogonal_route(source_rect, target_rect, points)
+        scaled = [(int(x * self.scale), int(y * self.scale)) for x, y in route]
+        draw.line(scaled, fill="#64748b", width=3 * self.scale, joint="curve")
+        if len(scaled) >= 2:
+            x, y = scaled[-1]
+            draw.polygon([(x, y), (x - 8 * self.scale, y - 5 * self.scale),
+                          (x - 8 * self.scale, y + 5 * self.scale)], fill="#64748b")
+        label = html.unescape(re.sub(r"<[^>]+>", "", cell.get("value", ""))).strip()
+        if label and scaled:
+            x, y = scaled[len(scaled) // 2]
+            font = self._font(11 * self.scale)
+            box = draw.textbbox((x, y), label, font=font, anchor="ms")
+            draw.rounded_rectangle((box[0] - 6, box[1] - 3, box[2] + 6, box[3] + 3),
+                                   radius=4, fill="white")
+            draw.text((x, y - 8 * self.scale), label, font=font,
+                      fill="#475569", anchor="ms")
+
+    @staticmethod
+    def _font(size: int):
+        bundled = Path(__file__).parent / "assets" / "fonts" / "noto-cjk" / "NotoSansCJKsc-Regular.otf"
+        try:
+            return ImageFont.truetype(str(bundled), size=size)
+        except OSError:
+            return ImageFont.load_default()
+
+
 class DrawioSvgRenderer:
     def render(self, drawio_path: Path, svg_path: Path) -> None:
         configured = os.environ.get("COPYRIGHT_AGENT_DRAWIO")
@@ -470,6 +684,22 @@ class InternalSvgRenderer:
         if style.get("dashed") == "1":
             attributes["stroke-dasharray"] = "7 5"
         ET.SubElement(svg, "polyline", attributes)
+        label = html.unescape(re.sub(r"<[^>]+>", "", cell.get("value", ""))).strip()
+        if label and route:
+            middle = route[len(route) // 2]
+            width = max(42, len(label) * 12)
+            ET.SubElement(svg, "rect", {
+                "x": self._number(middle[0] - width / 2),
+                "y": self._number(middle[1] - 22), "width": self._number(width),
+                "height": "20", "rx": "4", "fill": "#ffffff",
+            })
+            text = ET.SubElement(svg, "text", {
+                "x": self._number(middle[0]), "y": self._number(middle[1] - 8),
+                "text-anchor": "middle",
+                "font-family": "Noto Sans CJK SC, PingFang SC, Microsoft YaHei, sans-serif",
+                "font-size": "11", "fill": "#475569",
+            })
+            text.text = label
 
     def _draw_vertex(self, svg: ET.Element, cell: ET.Element) -> None:
         x, y, width, height = self._rect(cell)

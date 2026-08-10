@@ -33,6 +33,7 @@ from .manual_generation import ManualGenerationError
 from .manual_pipeline import ManualPipelineError, ManualPipelineService
 from .manual_research import ManualResearchError, ManualResearchService
 from .manual_drafting import ManualDraftingError, ManualDraftingService
+from .manual_figures import ManualFigureError, ManualFigureService
 from .diagram_plan_service import DiagramPlanError
 from .drawio_service import DrawioGenerationError
 from .storage import Database
@@ -173,6 +174,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     manual_pipeline_service = ManualPipelineService(database)
     manual_research_service = ManualResearchService(database, data_dir)
     manual_drafting_service = ManualDraftingService(database, data_dir)
+    manual_figure_service = ManualFigureService(database, data_dir)
     model_config_service = ModelConfigService(database)
     credential_vault = CredentialVault(database, data_dir)
     app_settings_service = AppSettingsService(database)
@@ -753,6 +755,71 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 "error": {"code": "unauthorized", "message": "Invalid session token"}
             })
         return {"items": manual_drafting_service.revisions(job_id, section_key)}
+
+    @app.post("/api/v1/manual-jobs/{job_id}/figures")
+    def generate_manual_figures(
+        job_id: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_figure_service.generate_all(job_id)
+        except ManualFigureError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_figure_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/figures")
+    def list_manual_figures(
+        job_id: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        return {"items": manual_figure_service.list(job_id)}
+
+    @app.post("/api/v1/manual-jobs/{job_id}/figures/{figure_key}/regenerate")
+    def regenerate_manual_figure(
+        job_id: str,
+        figure_key: str,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return manual_figure_service.regenerate(job_id, figure_key)
+        except ManualFigureError as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "manual_figure_error", "message": str(error)}
+            })
+
+    @app.get("/api/v1/manual-jobs/{job_id}/figures/{figure_key}.{asset_format}")
+    def get_manual_figure_asset(
+        job_id: str,
+        figure_key: str,
+        asset_format: Literal["drawio", "svg", "png"],
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            body, media_type = manual_figure_service.read_asset(
+                job_id, figure_key, asset_format
+            )
+            return Response(content=body, media_type=media_type)
+        except ManualFigureError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "manual_figure_not_found", "message": str(error)}
+            })
 
     @app.get("/api/v1/tasks/{task_id}/diagram-assets")
     def workspace(task_id: str, request: Request,

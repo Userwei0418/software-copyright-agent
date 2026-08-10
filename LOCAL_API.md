@@ -141,6 +141,10 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 - `POST /api/v1/manual-jobs/{job_id}/sections/{section_key}/regenerate`：独立重新生成一章。
 - `PUT /api/v1/manual-jobs/{job_id}/sections/{section_key}`：保存人工修改为新版本。
 - `GET /api/v1/manual-jobs/{job_id}/sections/{section_key}/revisions`：读取章节版本历史。
+- `POST /api/v1/manual-jobs/{job_id}/figures`：从章节图表请求生成全部图表资产。
+- `GET /api/v1/manual-jobs/{job_id}/figures`：读取当前图表资产及质量报告。
+- `POST /api/v1/manual-jobs/{job_id}/figures/{figure_key}/regenerate`：独立重新生成一张图。
+- `GET /api/v1/manual-jobs/{job_id}/figures/{figure_key}.drawio|svg|png`：安全读取当前图表资产。
 
 创建请求：
 
@@ -153,3 +157,5 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 研究阶段只读取扫描快照中已通过安全筛选的代表性源码，不会把整个仓库无差别发送给模型。输出包含项目事实、带文件哈希和行号的源码引用、研究结论及分章建议。每条研究结论必须分类为 `verified`、`inference` 或 `pending_confirmation`；模型引用未知证据时，服务会删除无效引用并将伪“已验证”结论降级为待确认。
 
 正文阶段不生成 Markdown 文件，而是保存 `paragraph`、`list`、`table`、`figure_request` 四类结构化内容块。事实性内容的证据引用仍须来自研究输入；无证据内容会标记为 `needs_review`。一次批量生成中的单章失败不会删除其他成功章节，用户可以只重试失败章节。人工编辑不会覆盖 AI 版本，而是新增 `origin=user` 的确认版本。
+
+图表阶段以正文 `figure_request` 和章节证据为输入，模型只生成节点、关系、布局和证据引用等语义；Draw.io XML、SVG 与 2 倍分辨率 PNG 由本地确定性渲染器生成。服务端校验节点唯一性、关系端点、显式正交路由、无节点重叠和文件完整性，并为每次重新生成保留独立版本。PNG 供 Word 插入，`.drawio` 始终是可编辑源文件。
