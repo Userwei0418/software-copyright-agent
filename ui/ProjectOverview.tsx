@@ -7,6 +7,7 @@ import {
 
 type Props = {
   connection: SidecarConnection | null;
+  ensureConnection: () => Promise<SidecarConnection>;
   onTaskCreated: (taskId: string) => void;
 };
 
@@ -21,7 +22,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export function ProjectOverview({ connection, onTaskCreated }: Props) {
+export function ProjectOverview({ connection, ensureConnection, onTaskCreated }: Props) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [result, setResult] = useState<ProjectScanResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -53,13 +54,16 @@ export function ProjectOverview({ connection, onTaskCreated }: Props) {
   }
 
   async function scan() {
-    if (!connection || !selectedPath) return;
+    if (!selectedPath) return;
     setBusy(true);
-    setMessage("正在扫描项目、过滤依赖并提取确定性事实…");
+    setMessage(connection ? "正在扫描项目、过滤依赖并提取确定性事实…" :
+      "正在重新连接本地服务…");
     try {
-      const value = await scanProject(connection, selectedPath);
+      const activeConnection = connection ?? await ensureConnection();
+      setMessage("正在扫描项目、过滤依赖并提取确定性事实…");
+      const value = await scanProject(activeConnection, selectedPath);
       setResult(value);
-      setRecent(await listRecentTasks(connection));
+      setRecent(await listRecentTasks(activeConnection));
       onTaskCreated(value.task_id);
       setMessage(`扫描完成 · 任务 ${value.task_id.slice(0, 8)}…`);
     } catch (error) {
@@ -125,8 +129,9 @@ export function ProjectOverview({ connection, onTaskCreated }: Props) {
           <button onClick={() => choose("zip")}>选择 ZIP</button></div>
         <div className="selected-path"><small>已授权路径</small>
           <strong>{selectedPath ?? "尚未选择"}</strong></div>
-        <button className="scan-button" disabled={!connection || !selectedPath || busy} onClick={scan}>
-          {busy ? "正在扫描…" : "开始本地扫描"}
+        <button className="scan-button" disabled={!selectedPath || busy} onClick={scan}>
+          {busy ? (connection ? "正在扫描…" : "正在连接…") :
+            connection ? "开始本地扫描" : "连接本地服务并扫描"}
         </button>
         <p className="intake-message">{message}</p>
         {recent.length > 0 && <div className="recent-projects"><div className="section-title">

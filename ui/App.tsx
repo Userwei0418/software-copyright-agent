@@ -32,11 +32,23 @@ export function App() {
   const [redoVersion, setRedoVersion] = useState<number | null>(null);
   const [page, setPage] = useState<"overview" | "source" | "diagrams" | "manual">("overview");
 
-  useEffect(() => {
-    connectSidecar().then((value) => {
+  async function ensureConnection(): Promise<SidecarConnection> {
+    if (connection) return connection;
+    setMessage("正在连接本地服务…");
+    try {
+      const value = await connectSidecar();
       setConnection(value);
       setMessage(`本地服务已连接 · v${value.version}`);
-    }).catch(() => setMessage("浏览器预览模式 · 桌面服务未启动"));
+      return value;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setMessage(`本地服务连接失败 · ${detail}`);
+      throw new Error(`本地服务连接失败：${detail}`);
+    }
+  }
+
+  useEffect(() => {
+    ensureConnection().catch(() => undefined);
   }, []);
 
   const assets = workspace?.assets ?? fallbackAssets;
@@ -169,7 +181,7 @@ export function App() {
     </aside>
 
     {page === "overview" ? <ProjectOverview connection={connection}
-      onTaskCreated={(value) => setTaskId(value)} /> : page === "source" ?
+      ensureConnection={ensureConnection} onTaskCreated={(value) => setTaskId(value)} /> : page === "source" ?
       <SourceMaterials connection={connection} taskId={taskId} /> : page === "manual" ?
       <ManualWorkspace connection={connection} taskId={taskId} /> : <main>
       <header className="topbar">
