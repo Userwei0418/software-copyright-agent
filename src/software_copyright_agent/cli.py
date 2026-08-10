@@ -12,6 +12,8 @@ from .inspection import InspectionError, InspectionService
 from .scanner import ScanError
 from .service import ScanProjectService
 from .source_plan_service import SourcePlanError, SourcePlanService
+from .source_document import SourceDocumentError
+from .source_document_service import SourceDocumentService
 from .storage import Database
 
 
@@ -56,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     code_preview_parser.add_argument("task_id", help="Task ID with a source plan")
     code_preview_parser.add_argument("--json", action="store_true", help="Print JSON output")
+
+    source_docx_parser = subparsers.add_parser(
+        "source-docx", help="Generate the 60-page source code DOCX"
+    )
+    source_docx_parser.add_argument("task_id", help="Task ID with a sufficient code preview")
+    source_docx_parser.add_argument("--json", action="store_true", help="Print JSON output")
     return parser
 
 
@@ -166,6 +174,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print("Pages: {0}/{1}".format(preview.generated_pages, preview.target_pages))
             print("Sufficient: {0}".format(preview.sufficient))
             print("Artifact: {0}".format(persisted_preview.artifact_path))
+        return 0
+
+    if args.command == "source-docx":
+        try:
+            document = SourceDocumentService(database, data_dir).execute(args.task_id)
+        except SourceDocumentError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        payload = {
+            "task_id": document.task_id,
+            "run_id": document.run_id,
+            "version": document.version,
+            "artifact_path": str(document.artifact_path),
+            "sha256": document.sha256,
+            **document.summary,
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        else:
+            print("Source DOCX: v{0}".format(document.version))
+            print("Expected pages: {0}".format(document.summary["total_pages_expected"]))
+            print("Artifact: {0}".format(document.artifact_path))
         return 0
 
     if args.command != "scan":

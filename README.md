@@ -1,6 +1,6 @@
 # Software Copyright Agent
 
-一个完全独立于 Codex、本地优先的软件著作权材料辅助生成工具。目前处于 M1 领域内核开发阶段。
+一个完全独立于 Codex、本地优先的软件著作权材料辅助生成工具。目前正在推进 M3 源代码文档纵向切片。
 
 ## 当前可运行能力
 
@@ -22,10 +22,12 @@
 - 根据语言、依赖清单和源码目录生成技术栈及模块候选。
 - 将 Fact、Evidence 和待确认项持久化到 SQLite。
 - 使用 `inspect` CLI 查看事实值、置信度和证据关联。
+- 将确定性分页预览生成 A4 DOCX：1 页封面 + 59 页源代码正文。
+- 对 DOCX 运行版本化记录和 SHA-256 留痕；代码不足时阻断出件。
 
 ## 运行
 
-当前内核没有第三方 Python 依赖，要求 Python 3.9 或更高版本。
+要求 Python 3.9 或更高版本，并安装项目依赖（当前 DOCX 生成使用 `python-docx`）。
 
 ```bash
 PYTHONPATH=src python3 -m software_copyright_agent \
@@ -73,6 +75,16 @@ PYTHONPATH=src python3 -m software_copyright_agent \
 
 预览会重新校验源码哈希，按视觉宽度硬换行，并报告代码是否足够。代码不足时只生成实际页数，不补空行、不重复代码。
 
+生成 60 页源代码 DOCX：
+
+```bash
+PYTHONPATH=src python3 -m software_copyright_agent \
+  --data-dir .software-copyright-agent \
+  source-docx TASK_ID --json
+```
+
+DOCX 使用最新的完整分页预览；每次执行创建新版本，并在 SQLite 保存模板参数、摘要、路径和文件哈希。
+
 运行测试：
 
 ```bash
@@ -82,10 +94,10 @@ PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 \
 
 ## 当前限制
 
-- 尚未接入模型协议、代码筛选、DOCX、Draw.io 和桌面 UI。
+- 尚未接入模型协议、Draw.io、说明书生成和桌面 UI。
 - 当前 CLI 是验证领域内核的纵向切片，不是最终用户界面。
 - `.gitignore` 当前实现常用 glob、目录、锚定和否定规则，不承诺覆盖 Git 的全部边缘语义。
 - A/B/C 当前是确定性初筛；后续模型只对未排除候选做语义重排，不能恢复安全规则排除项。
-- 当前已生成分页 JSON 数据，但尚未生成最终 DOCX；字体、字号和页边距需要在 DOCX 渲染阶段与预览参数共同校准。
+- macOS LibreOffice 无法可靠使用受系统保护的 CJK 字体；跨平台发布前必须内置开源 CJK 字体并加入字体探测门禁。
 
 开发计划和每轮进度分别见 `DEVELOPMENT_PLAN.md` 与 `PROGRESS.md`。
