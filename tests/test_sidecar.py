@@ -60,6 +60,30 @@ class SidecarFastApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
         self.assertEqual(response.json()["error"]["code"], "request_too_large")
 
+    def test_scan_project_returns_summary_facts_and_confirmations(self) -> None:
+        project = self.data_dir / "project"
+        (project / "src").mkdir(parents=True)
+        (project / "package.json").write_text(
+            '{"name":"desktop-demo","version":"1.2.3"}', encoding="utf-8"
+        )
+        (project / "src" / "main.ts").write_text(
+            "export const ready = true;\n", encoding="utf-8"
+        )
+        response = self.client.post(
+            "/api/v1/projects/scan", headers=self.headers, json={"path": str(project)}
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["summary"]["file_count"], 2)
+        self.assertIn("TypeScript", payload["summary"]["languages"])
+        self.assertEqual(payload["inspection"]["task"]["id"], payload["task_id"])
+        self.assertTrue(any(item["key"] == "project.name"
+                            for item in payload["inspection"]["facts"]))
+        inspection = self.client.get(
+            f"/api/v1/tasks/{payload['task_id']}/inspection", headers=self.headers
+        )
+        self.assertEqual(inspection.status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()

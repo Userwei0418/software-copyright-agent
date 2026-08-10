@@ -5,6 +5,7 @@ import {
   WorkspaceSnapshot,
 } from "./api";
 import { InteractiveDiagram } from "./InteractiveDiagram";
+import { ProjectOverview } from "./ProjectOverview";
 
 const fallbackAssets: DiagramAsset[] = [
   { diagram_key: "system_architecture", title: "系统总体架构图", revision_count: 0,
@@ -27,6 +28,7 @@ export function App() {
   const [previewRevision, setPreviewRevision] = useState<AssetRevision | null>(null);
   const [undoVersion, setUndoVersion] = useState<number | null>(null);
   const [redoVersion, setRedoVersion] = useState<number | null>(null);
+  const [page, setPage] = useState<"overview" | "diagrams">("overview");
 
   useEffect(() => {
     connectSidecar().then((value) => {
@@ -150,9 +152,11 @@ export function App() {
         <strong>软著材料助手</strong><small>本地证据化工作台</small>
       </div></div>
       <nav>
-        <button className="nav-item" disabled>项目概览 <small>待开发</small></button>
+        <button className={`nav-item ${page === "overview" ? "active" : ""}`}
+          onClick={() => setPage("overview")}>项目概览</button>
         <button className="nav-item" disabled>源码材料 <small>待开发</small></button>
-        <button className="nav-item active">图表资产</button>
+        <button className={`nav-item ${page === "diagrams" ? "active" : ""}`}
+          onClick={() => setPage("diagrams")}>图表资产</button>
         <button className="nav-item" disabled>说明书 <small>待开发</small></button>
         <button className="nav-item" disabled>质量检查 <small>待开发</small></button>
       </nav>
@@ -160,7 +164,8 @@ export function App() {
         <span>{message}</span></div>
     </aside>
 
-    <main>
+    {page === "overview" ? <ProjectOverview connection={connection}
+      onTaskCreated={(value) => setTaskId(value)} /> : <main>
       <header className="topbar">
         <div><p className="eyebrow">DOCUMENT ASSETS</p><h1>图表资产</h1>
           <p>自动生成后仍可修改，所有调整均保留版本与证据关联。</p></div>
@@ -249,6 +254,6 @@ export function App() {
           <p className="hint">AI 只生成白名单修改操作，应用前会展示差异并等待确认。</p>
         </aside>
       </section>
-    </main>
+    </main>}
   </div>;
 }

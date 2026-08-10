@@ -27,6 +27,24 @@ export type DiagramAsset = {
 
 export type WorkspaceSnapshot = { task_id: string; assets: DiagramAsset[] };
 
+export type FactItem = { key: string; value: unknown; status: string; confidence: number };
+export type ConfirmationItem = {
+  field_key: string; question: string; candidates: unknown[]; required: boolean; status: string;
+};
+export type ProjectScanResult = {
+  task_id: string;
+  snapshot_id: string;
+  summary: {
+    file_count: number; ignored_count: number; total_bytes: number;
+    secret_finding_count: number; languages: string[];
+  };
+  inspection: {
+    task: { id: string; status: string; current_stage_key: string };
+    facts: FactItem[];
+    confirmations: ConfirmationItem[];
+  };
+};
+
 export type OverlayOperation = {
   action: "node.move" | "node.resize" | "node.style" | "node.label" | "node.hide" |
     "edge.route" | "edge.style" | "edge.label";
@@ -137,4 +155,19 @@ export async function rollbackRevision(
     },
   );
   return requireJson<AssetRevision>(response, "版本恢复失败");
+}
+
+export async function scanProject(
+  connection: SidecarConnection,
+  path: string,
+): Promise<ProjectScanResult> {
+  const response = await fetch(`${connection.baseUrl}/api/v1/projects/scan`, {
+    method: "POST",
+    headers: {
+      "X-Session-Token": connection.sessionToken,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ path }),
+  });
+  return requireJson<ProjectScanResult>(response, "项目扫描失败");
 }

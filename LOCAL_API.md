@@ -32,6 +32,8 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
+| POST | `/api/v1/projects/scan` | 扫描系统选择器授权的目录或 ZIP，并返回事实摘要 |
+| GET | `/api/v1/tasks/{task_id}/inspection` | 读取任务状态、事实、证据和待确认项 |
 | GET | `/api/v1/tasks/{task_id}/diagram-assets` | 读取资产工作台快照 |
 | GET | `/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions` | 列出版本 |
 | POST | `/api/v1/tasks/{task_id}/diagram-assets/{diagram_key}/revisions` | 保存人工或 AI 覆盖 |
@@ -42,6 +44,8 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | GET | `/api/v1/diagram-revisions/{revision_id}/preview.svg` | 获取内置 SVG 预览 |
 
 `diagram_key` 首版只允许 `system_architecture` 和 `core_business_flow`。
+
+扫描请求为 `{"path":"/user-approved/project-or.zip"}`。目录采用原地只读扫描，ZIP 隔离解压到应用数据目录；桌面页面不提供自由路径文本框，只接受系统文件选择器返回值。
 
 ## 保存请求
 

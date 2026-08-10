@@ -16,7 +16,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from .diagram_asset_service import DiagramAssetService
+from .ingestion import IngestionError
+from .inspection import InspectionError, InspectionService
 from .local_api import ApiResponse, DiagramAssetApi
+from .scanner import ScanError
+from .service import ScanProjectService
 from .storage import Database
 
 
@@ -67,6 +71,10 @@ class ResolveRevisionRequest(StrictModel):
     resolutions: List[ConflictResolutionRequest] = Field(max_length=500)
 
 
+class ScanProjectRequest(StrictModel):
+    path: str = Field(min_length=1, max_length=4096)
+
+
 class RequestSizeLimitMiddleware:
     def __init__(self, app, maximum_bytes: int = MAX_REQUEST_BYTES) -> None:
         self.app = app
@@ -94,6 +102,9 @@ class RequestSizeLimitMiddleware:
 
 def create_app(data_dir: Path, session_token: str) -> FastAPI:
     service = DiagramAssetService(Database(data_dir / "app.db"), data_dir)
+    database = Database(data_dir / "app.db")
+    scan_service = ScanProjectService(database, data_dir)
+    inspection_service = InspectionService(database)
     api = DiagramAssetApi(service, session_token)
     app = FastAPI(title="Software Copyright Agent Sidecar", version=SIDECAR_VERSION,
                   docs_url=None, redoc_url=None)
@@ -118,10 +129,12 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
     def bridge(method: str, path: str, body: object, token: Optional[str]):
         return _to_fastapi(api.handle(method, path, body, token))
 
+    def authorized(token: Optional[str]) -> bool:
+        return isinstance(token, str) and hmac.compare_digest(token, session_token)
+
     @app.get("/api/v1/health")
     def health(x_session_token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
-        if not isinstance(x_session_token, str) or not hmac.compare_digest(
-                x_session_token, session_token):
+        if not authorized(x_session_token):
             return JSONResponse(
                 status_code=401,
                 content={"error": {"code": "unauthorized",
@@ -129,6 +142,48 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
             )
         return {"status": "ok", "version": SIDECAR_VERSION,
                 "protocol_version": SIDECAR_PROTOCOL_VERSION}
+
+    @app.post("/api/v1/projects/scan")
+    def scan_project(payload: ScanProjectRequest,
+                     token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            persisted = scan_service.execute(Path(payload.path))
+            inspection = inspection_service.inspect(persisted.task_id)
+        except (IngestionError, ScanError) as error:
+            return JSONResponse(status_code=400, content={
+                "error": {"code": "project_scan_error", "message": str(error)}
+            })
+        return {
+            "task_id": persisted.task_id,
+            "snapshot_id": persisted.snapshot_id,
+            "summary": {
+                "file_count": len(persisted.result.files),
+                "ignored_count": persisted.result.ignored_count,
+                "total_bytes": persisted.result.total_bytes,
+                "secret_finding_count": len(persisted.result.secret_findings),
+                "languages": sorted({item.language for item in persisted.result.files
+                                     if item.language}),
+            },
+            "inspection": inspection,
+        }
+
+    @app.get("/api/v1/tasks/{task_id}/inspection")
+    def inspection(task_id: str,
+                   token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        try:
+            return inspection_service.inspect(task_id)
+        except InspectionError as error:
+            return JSONResponse(status_code=404, content={
+                "error": {"code": "task_not_found", "message": str(error)}
+            })
 
     @app.get("/api/v1/tasks/{task_id}/diagram-assets")
     def workspace(task_id: str, request: Request,
