@@ -94,8 +94,7 @@ class ManualWorkspaceService:
             "actions": {
                 "manual_plan": allowed,
                 "diagram_plan": allowed and manual_payload is not None,
-                "diagram_artifacts": allowed and diagram is not None
-                and json.loads(diagram["summary_json"]).get("ready_diagrams") == 2,
+                "diagram_artifacts": allowed and diagram is not None,
                 "manual_generate": allowed,
             },
         }

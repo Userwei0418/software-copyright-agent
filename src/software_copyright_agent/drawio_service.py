@@ -80,8 +80,8 @@ class DrawioGenerationService:
                 "conflicts": list(applied.conflicts),
             }
         required = ("system_architecture", "core_business_flow")
-        if any(key not in diagrams or diagrams[key].get("status") != "ready" for key in required):
-            raise DrawioGenerationError("Both required diagrams must be ready")
+        if any(key not in diagrams for key in required):
+            raise DrawioGenerationError("Both required diagram plans must exist")
 
         now = utc_now()
         stage_id = new_id()
@@ -115,7 +115,10 @@ class DrawioGenerationService:
 
         finished = utc_now()
         summary = {"architecture": architecture, "workflow": workflow,
-                   "overlays": overlay_summary, "svg_renderer": "internal-v1"}
+                   "overlays": overlay_summary, "svg_renderer": "internal-v1",
+                   "evidence_warnings": {key: diagrams[key].get("missing_information", [])
+                                         for key in required
+                                         if diagrams[key].get("status") != "ready"}}
         fingerprint = hashlib.sha256("".join(
             hashlib.sha256(paths[key].read_bytes()).hexdigest() for key in sorted(paths)
         ).encode("ascii")).hexdigest()
