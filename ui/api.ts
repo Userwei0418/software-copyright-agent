@@ -129,10 +129,12 @@ export type FormalManualJob = {
   steps: Array<{ key: string; status: string; attempt: number; summary: Record<string, unknown> }>;
 };
 
-export type ManualSectionBlock = { type: "paragraph"; text: string } |
+type ManualBlockTrace = { evidence_refs?: string[]; inference?: boolean };
+export type ManualSectionBlock = ({ type: "paragraph"; text: string } |
   { type: "list"; lead: string; items: string[] } |
   { type: "table"; title: string; headers: string[]; rows: string[][] } |
-  { type: "figure_request"; figure_key: string; title: string; purpose: string };
+  { type: "figure_request"; figure_key: string; figure_type?: string;
+    title: string; purpose: string }) & ManualBlockTrace;
 
 export type FormalManualPreview = {
   document: FormalManualDocument;
@@ -530,6 +532,44 @@ export async function loadFormalManualPreview(connection: SidecarConnection, job
     `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents/${version}/preview`,
     { headers: { "X-Session-Token": connection.sessionToken } });
   return requireJson<FormalManualPreview>(response, "说明书预览读取失败");
+}
+
+export async function editFormalManualSection(connection: SidecarConnection, jobId: string,
+  sectionKey: string, title: string, blocks: ManualSectionBlock[]) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/sections/${encodeURIComponent(sectionKey)}`, {
+      method: "PUT", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ title, blocks }),
+    });
+  return requireJson<{ section_key: string; title: string; version: number; origin: "user";
+    status: string; blocks: ManualSectionBlock[] }>(response, "章节修改保存失败");
+}
+
+export async function regenerateFormalManualSection(connection: SidecarConnection, jobId: string,
+  sectionKey: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/sections/${encodeURIComponent(sectionKey)}/regenerate`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken },
+    });
+  return requireJson<{ section_key: string; title: string; version: number; origin: "ai";
+    status: string; blocks: ManualSectionBlock[] }>(response, "AI 章节重新生成失败");
+}
+
+export async function assembleFormalManualDocument(connection: SidecarConnection, jobId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken },
+    });
+  return requireJson<FormalManualDocument>(response, "修订版 Word 装配失败");
+}
+
+export async function generateFormalManualFigures(connection: SidecarConnection, jobId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken },
+    });
+  return requireJson<{ status: string; figures: unknown[]; errors: unknown[] }>(
+    response, "章节图表同步失败");
 }
 
 export async function loadFormalManualQa(connection: SidecarConnection, jobId: string,

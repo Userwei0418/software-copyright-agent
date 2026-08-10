@@ -125,6 +125,29 @@ class ManualQaServiceTests(unittest.TestCase):
             self.assertEqual(pipeline["progress"]["percent"], 100)
             self.assertEqual(pipeline["steps"][-1]["status"], "completed")
 
+            with database.connect() as connection:
+                row = connection.execute(
+                    """SELECT content_json FROM manual_section_artifacts
+                    WHERE job_id=? AND section_key='introduction'""", (job["id"],),
+                ).fetchone()
+                revised = json.loads(row["content_json"])
+                revised[0]["text"] += "人工修订后会装配为新版本，原始交付件继续保留。"
+                connection.execute(
+                    """UPDATE manual_section_artifacts SET content_json=?
+                    WHERE job_id=? AND section_key='introduction'""",
+                    (json.dumps(revised, ensure_ascii=False), job["id"]),
+                )
+            assembled_v2 = documents.assemble(job["id"])
+            checked_v2 = ManualQaService(database, root, documents=documents).execute(
+                job["id"], assembled_v2["version"]
+            )
+            self.assertEqual(checked_v2["document"]["version"], 2)
+            self.assertEqual(checked_v2["document"]["status"], "qa_passed")
+            versions = documents.list(job["id"])
+            self.assertEqual([item["version"] for item in versions], [2, 1])
+            self.assertTrue(all(item["status"] == "qa_passed" for item in versions))
+            self.assertNotEqual(versions[0]["sha256"], versions[1]["sha256"])
+
 
 if __name__ == "__main__":
     unittest.main()
