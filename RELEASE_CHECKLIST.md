@@ -33,7 +33,7 @@ Tauri 的正式前端钩子直接运行 `node scripts/build_frontend.mjs`，只�
 - DMG 包含 Applications 快捷方式、正式 `.app`、ICNS 图标、arm64 桌面壳和 arm64 Sidecar。
 - Sidecar SHA-256：`7c6b8ad5831dd4e67f28aace1d8c9291b3585712e392b4c70d84da8a3bf70877`。
 - 从只读 DMG 启动成功；Sidecar 使用 `app_data_dir` 对应的应用数据目录，而不是 DMG 临时目录。
-- 启动前后 SQLite 均为 schema v22、3 个任务、6 个模型配置、1 份加密凭据。
+- 该历史 DMG 启动前后 SQLite 均为 schema v22、3 个任务、6 个模型配置、1 份加密凭据；当前代码为 schema v31，必须重新构建候选安装包并验证 v22→v31 原地迁移。
 - 强制结束 DMG 中的桌面壳后，内嵌 PyInstaller Sidecar 无残留。
 
 ## Windows 必验项目
@@ -49,6 +49,14 @@ Tauri 的正式前端钩子直接运行 `node scripts/build_frontend.mjs`，只�
 - 桌面壳正常退出、崩溃或被任务管理器终止后没有 Sidecar 残留。
 
 ## 发布门禁
+
+### 当前定稿候选基线（2026-08-13）
+
+- 分支：`codex/finalize-automation-workflow`。
+- 功能基线提交：`142655f`；后续文档提交只更新项目说明与发布事实。
+- 本地回归：Python 183 项通过、前端 production build 通过、Rust 12 项通过、`git diff --check` 通过。
+- 用户已确认当前功能版本可定稿；这不等同于两平台签名安装包已经通过公开发布门禁。
+- GitHub Actions 必须对该分支执行 `.github/workflows/desktop-build.yml`；若任何原生构建失败，不得把本地验收结果写成跨平台发布成功。
 
 - 当前本地 macOS 包为 ad-hoc 签名，尚未配置 Apple Developer ID、公证和 stapling；只能用于本机开发验收，不能宣称已通过公开分发 Gatekeeper。
 - Windows 代码签名证书尚未配置；CI 构建用于兼容性验证，不代表 SmartScreen 发布信誉已建立。

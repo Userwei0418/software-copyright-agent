@@ -38,6 +38,11 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | DELETE | `/api/v1/tasks/{task_id}` | 删除任务、SQLite 关联记录与应用内产物，不删除原项目 |
 | GET | `/api/v1/tasks/{task_id}/inspection` | 读取任务状态、事实、证据和待确认项 |
 | POST | `/api/v1/tasks/{task_id}/confirmations/{field_key}` | 回答待确认项并返回刷新后的任务检查结果 |
+| POST | `/api/v1/quick-start` | 创建持久化快速任务；一次提交项目、截图、三类模型、并发与重试配置 |
+| GET | `/api/v1/quick-start?limit=20` | 列出最近快速任务，只读状态，不触发执行 |
+| GET | `/api/v1/quick-start/{run_id}` | 读取九阶段、实节点、事件、绑定任务和双文档输出 |
+| POST | `/api/v1/quick-start/{run_id}/retry` | 从失败处恢复同一任务；不创建新的整单说明书版本 |
+| DELETE | `/api/v1/quick-start/{run_id}` | 清除已停止的编排记录，不删除项目和生成资产 |
 | GET | `/api/v1/tasks/{task_id}/source-materials` | 读取源码筛选、分页预检、DOCX 状态和阻塞原因 |
 | POST | `/api/v1/tasks/{task_id}/source-materials/source-plan` | 人工触发 A/B/C 源码筛选计划 |
 | POST | `/api/v1/tasks/{task_id}/source-materials/code-preview` | 人工触发 59 页代码分页预检 |
@@ -46,6 +51,7 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | GET | `/api/v1/model-configs` | 列出不含密钥的本地模型配置与验证状态 |
 | POST | `/api/v1/model-configs` | 新增或更新模型连接元数据；API Key 不进入此接口 |
 | POST | `/api/v1/model-configs/{config_id}/verified` | 连通性验证通过后记录验证时间 |
+| POST | `/api/v1/model-configs/{config_id}/vision-capability` | 发送真实测试图片；成功后才允许模型作为默认截图解读模型 |
 | DELETE | `/api/v1/model-configs/{config_id}` | 删除模型配置元数据 |
 | GET | `/api/v1/settings` | 读取默认模型、生成参数与文档行为设置 |
 | POST | `/api/v1/settings` | 保存并校验应用通用设置 |
@@ -63,6 +69,10 @@ sidecar 只绑定 `127.0.0.1:0`，随后向标准输出写入一行 JSON：
 | GET | `/api/v1/diagram-revisions/{revision_id}/preview.svg` | 获取内置 SVG 预览 |
 
 `diagram_key` 首版只允许 `system_architecture` 和 `core_business_flow`。
+
+快速任务的创建请求由系统选择器提供路径，核心字段包括 `project_path`、`software_name`、`version`、`screenshot_folder`、`manual_model_id`、`diagram_model_id`、`vision_model_id`、`concurrency`、`retry_limit`、`source_strategy`、`sensitive_confirmed` 和 `auto_adopt_confirmed`。服务端要求截图模型已经通过真实图片能力测试，并把规范化配置快照写入 `quick_start_runs`。
+
+快速任务在共享扫描与确认后以两个后台分支推进源代码文档和软件说明书。`GET` 轮询只读取 SQLite checkpoint；页面切换、滚动和重新打开快速开始均不得发起新的生成请求。应用异常退出后，遗留运行节点会转为可恢复失败状态，由用户显式重试。
 
 扫描请求为 `{"path":"/user-approved/project-or.zip"}`。目录采用原地只读扫描，ZIP 隔离解压到应用数据目录；桌面页面不提供自由路径文本框，只接受系统文件选择器返回值。
 重新扫描端点不接受新路径，只从 task ID 反查已授权的持久化项目来源；它创建新任务和快照，不覆盖旧材料，并继承原任务中与新待确认项匹配的标量 confirmed Fact。

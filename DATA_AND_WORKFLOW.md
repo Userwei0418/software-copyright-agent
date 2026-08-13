@@ -243,35 +243,37 @@ canceled -> running       仅从可恢复阶段重启
 
 ## 5. MVP 工作流
 
+当前桌面主流程使用持久化快速任务，数据库 Schema 为 v31。`quick_start_runs` 保存配置快照、九个大阶段、事件、固定的 `task_id`/`manual_job_id` 和最终输出；页面轮询只读该记录，不触发生成。早期线性阶段仍是底层领域语义，桌面编排按以下两条支线执行：
+
 ```text
-01_ingest
-02_scan
-03_extract_facts
-04_confirm_metadata
-05_select_source
-06_generate_source_doc
-07_plan_manual
-08_generate_diagrams
-09_generate_manual_doc
-10_render
-11_quality_gate
-12_finalize
+扫描项目 → 确认项目信息
+              ├─ 源码文档线：规划源码材料 → 代码分页预检 → 生成并质检源码文档 ─┐
+              └─ 软件说明书线：项目证据研究 → 处理真实截图 ─┬─ 撰写结构化正文 ─┤
+                                                          └─ 生成专业图表 ────┤
+                                                                               ▼
+                                                            装配双文档 → 交付完成
+```
+
+快速任务的九个持久化阶段与 `QuickStartService.QUICK_STAGES` 一致：
+
+```text
+scan → confirm
+         ├─ source_plan → code_preview → source_docx ─┐
+         └─ screenshots → manual ────────────────────┤
+                                                     └─ finalize → delivery
 ```
 
 阶段说明：
 
-- `ingest`：校验目录或安全解压 ZIP，建立输入指纹。
 - `scan`：生成清单、技术栈和候选文件分类。
-- `extract_facts`：确定性提取优先，模型补充语义候选。
-- `confirm_metadata`：缺少关键事实时等待用户确认。
-- `select_source`：规则过滤、去重、语义排序和页数可行性分析。
-- `generate_source_doc`：确定性换行、分页和 Word 出件。
-- `plan_manual`：依据事实和证据生成说明书结构与内容计划。
-- `generate_diagrams`：生成 Draw.io XML、SVG 和 PNG。
-- `generate_manual_doc`：生成说明书 Word，允许使用手动导入截图。
-- `render`：DOCX 转 PDF 并渲染页面。
-- `quality_gate`：汇总确定性检查，必要时回到具体生成阶段。
-- `finalize`：登记最终产物、报告和导出清单。
+- `confirm`：写入用户预先确认的软件名称和版本，其他必要确认优先采用可靠候选。
+- `source_plan`：规则过滤、去重、语义排序和页数可行性分析。
+- `code_preview`：生成确定性 59 页正文分页预检。
+- `source_docx`：生成源代码 Word 并执行逐页质量检查。
+- `screenshots`：导入用户授权文件夹中的真实截图，调用已实测视觉模型解读并按授权采用；已审核资产在输入指纹未变化时复用。
+- `manual`：在固定 `manual_job_id` 中完成项目研究、结构化正文和专业图表；实节点独立持久化并可单项查看。
+- `finalize`：等待两条文档线达到可装配状态，检查正式候选稿；快速开始根据启动前授权创建终稿并再次执行逐页 QA。专业工作台中的终稿仍由人显式触发。
+- `delivery`：把两个 Word 文档及关联资产登记到“我的资产”，不自动替用户提交登记申请。
 
 ## 6. 输入指纹与缓存
 
