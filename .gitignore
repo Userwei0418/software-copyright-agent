@@ -18,3 +18,4 @@ src-tauri/binaries/*
 *.db-shm
 *.db-wal
 .software-copyright-agent/
+public/landing/demo.mov
