@@ -21,6 +21,11 @@ def create_project(root: Path) -> None:
         "api/routes.py": "def route():\n    return True\n",
         "tests/test_order.py": "def test_order():\n    assert True\n",
         "migrations/001_init.py": "def upgrade():\n    pass\n",
+        "legacy/old_pipeline.py": "def old_pipeline():\n    return True\n",
+        "agent-templates/skills/deck/project/src/theme.jsx": "export const theme = {};\n",
+        "src/generated-metadata.js": "export const metadata = {};\n",
+        "src/assets/lottie/data.js": "export default { layers: [0, 1, 2] };\n",
+        "src/api/typings.d.ts": "export type GeneratedRecord = { id: string };\n",
     }
     for relative_path, content in files.items():
         path = root / relative_path
@@ -35,7 +40,10 @@ class SourceSelectorTests(unittest.TestCase):
             create_project(root)
             data = root / "manifest.jsonl"
             rows = []
-            for path in sorted(root.rglob("*.py")):
+            for path in sorted(
+                item for item in root.rglob("*")
+                if item.suffix in {".py", ".js", ".jsx", ".ts"}
+            ):
                 rows.append(
                     {
                         "path": path.relative_to(root).as_posix(),
@@ -60,6 +68,23 @@ class SourceSelectorTests(unittest.TestCase):
             self.assertEqual(candidates["src/utils/helper.py"].grade, "C")
             self.assertEqual(candidates["tests/test_order.py"].exclusion_code, "test_code")
             self.assertEqual(candidates["migrations/001_init.py"].exclusion_code, "migration_code")
+            self.assertEqual(candidates["legacy/old_pipeline.py"].exclusion_code, "legacy_code")
+            self.assertEqual(
+                candidates["agent-templates/skills/deck/project/src/theme.jsx"].exclusion_code,
+                "template_code",
+            )
+            self.assertEqual(
+                candidates["src/generated-metadata.js"].exclusion_code,
+                "generated_code",
+            )
+            self.assertEqual(
+                candidates["src/assets/lottie/data.js"].exclusion_code,
+                "generated_animation_data",
+            )
+            self.assertFalse(candidates["src/api/typings.d.ts"].selected)
+            self.assertIn(
+                "declaration_only_types", candidates["src/api/typings.d.ts"].reasons
+            )
 
             relaxed = SourceSelector().build(root, data, strategy="relaxed")
             maximum = SourceSelector().build(root, data, strategy="maximum")
@@ -69,6 +94,11 @@ class SourceSelectorTests(unittest.TestCase):
             self.assertFalse(relaxed_by_path["tests/test_order.py"].selected)
             self.assertTrue(maximum_by_path["tests/test_order.py"].selected)
             self.assertTrue(maximum_by_path["migrations/001_init.py"].selected)
+            self.assertFalse(maximum_by_path["legacy/old_pipeline.py"].selected)
+            self.assertFalse(
+                maximum_by_path["agent-templates/skills/deck/project/src/theme.jsx"].selected
+            )
+            self.assertFalse(maximum_by_path["src/generated-metadata.js"].selected)
 
     def test_service_filename_is_ranked_as_business_code(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -15,6 +15,12 @@ class ManualGenerationError(ValueError):
     pass
 
 
+# Large, structured Chinese chapters from slower 20B+ providers frequently need
+# more than three minutes.  Five minutes avoids turning a healthy long response
+# into a needless second/third request while still bounding a stalled call.
+MODEL_READ_TIMEOUT_SECONDS = 300
+
+
 class ManualGenerationService:
     def __init__(self, database: Database, data_root: Path) -> None:
         self._database = database
@@ -129,13 +135,115 @@ class ManualGenerationService:
         request = urllib.request.Request(url, data=json.dumps(payload, ensure_ascii=False).encode(),
                                          headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=180) as response:
+            with urllib.request.urlopen(
+                    request, timeout=MODEL_READ_TIMEOUT_SECONDS) as response:
                 result = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")[:500]
             raise ManualGenerationError(f"模型调用失败（HTTP {error.code}）：{detail}") from error
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
             raise ManualGenerationError(f"模型调用失败：{error}") from error
+        return self._extract_model_content(mode, result)
+
+    def _call_model_stream(self, config: dict, mode: str, api_key: str,
+                           prompt: str, on_delta) -> str:
+        """Read provider-native streaming responses and expose actual text deltas.
+
+        OpenAI-compatible chat, Responses, Anthropic Messages and Ollama NDJSON
+        are normalized here so the desktop UI never has to understand vendor
+        wire formats.  Providers that ignore the stream flag and return one JSON
+        object still work, but naturally produce a single delta.
+        """
+        base = config["base_url"].rstrip("/")
+        model = config["model_name"]
+        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if mode == "messages":
+            url = base + "/messages"
+            payload = {"model": model, "max_tokens": 8192, "stream": True,
+                       "messages": [{"role": "user", "content": prompt}]}
+            if config["protocol_id"] == "anthropic":
+                headers.update({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
+            else:
+                headers["Authorization"] = "Bearer " + api_key
+        elif mode == "responses":
+            url = base + "/responses"; headers["Authorization"] = "Bearer " + api_key
+            payload = {"model": model, "input": prompt, "max_output_tokens": 8192,
+                       "stream": True}
+        elif mode == "ollama_chat":
+            url = base + "/api/chat"
+            payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
+                       "stream": True, "options": {"temperature": 0.3}}
+            headers["Accept"] = "application/x-ndjson"
+        else:
+            url = base + "/chat/completions"; headers["Authorization"] = "Bearer " + api_key
+            payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
+                       "max_tokens": 8192, "temperature": 0.3, "stream": True}
+        request = urllib.request.Request(
+            url, data=json.dumps(payload, ensure_ascii=False).encode(),
+            headers=headers, method="POST",
+        )
+        chunks, final_payload = [], None
+        try:
+            with urllib.request.urlopen(
+                    request, timeout=MODEL_READ_TIMEOUT_SECONDS) as response:
+                content_type = response.headers.get("Content-Type", "").lower()
+                if "application/json" in content_type and mode != "ollama_chat":
+                    final_payload = json.loads(response.read().decode("utf-8"))
+                    content = self._extract_model_content(mode, final_payload)
+                    if content:
+                        on_delta(content)
+                    return content
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line or line.startswith(("event:", "id:", "retry:")):
+                        continue
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if not line or line == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    final_payload = event
+                    delta = self._stream_text_delta(mode, event)
+                    if delta:
+                        chunks.append(delta)
+                        on_delta(delta)
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")[:500]
+            raise ManualGenerationError(
+                f"模型调用失败（HTTP {error.code}）：{detail}"
+            ) from error
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+            raise ManualGenerationError(f"模型调用失败：{error}") from error
+        if chunks:
+            return "".join(chunks)
+        content = self._extract_model_content(mode, final_payload or {})
+        if content:
+            on_delta(content)
+        return content
+
+    @staticmethod
+    def _stream_text_delta(mode: str, event: dict) -> str:
+        if mode == "chat_completions":
+            choices = event.get("choices") or [{}]
+            delta = choices[0].get("delta", {}).get("content", "")
+            return delta if isinstance(delta, str) else ""
+        if mode == "ollama_chat":
+            delta = event.get("message", {}).get("content", "")
+            return delta if isinstance(delta, str) else ""
+        if mode == "responses":
+            if event.get("type") in {"response.output_text.delta", "output_text.delta"}:
+                delta = event.get("delta", "")
+                return delta if isinstance(delta, str) else ""
+            return ""
+        delta = event.get("delta", {})
+        text = delta.get("text", "") if isinstance(delta, dict) else ""
+        return text if isinstance(text, str) else ""
+
+    @staticmethod
+    def _extract_model_content(mode: str, result: dict) -> str:
         if mode == "chat_completions":
             return result.get("choices", [{}])[0].get("message", {}).get("content", "")
         if mode == "ollama_chat":
@@ -144,7 +252,8 @@ class ManualGenerationService:
             if result.get("output_text"):
                 return result["output_text"]
             return "".join(part.get("text", "") for item in result.get("output", [])
-                           for part in item.get("content", []) if part.get("type") in {"output_text", "text"})
+                           for part in item.get("content", [])
+                           if part.get("type") in {"output_text", "text"})
         return "".join(item.get("text", "") for item in result.get("content", [])
                        if item.get("type") == "text")
 

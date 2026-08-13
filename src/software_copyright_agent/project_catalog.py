@@ -53,6 +53,11 @@ class ProjectCatalogService:
             ).fetchone()
             if task is None:
                 raise ValueError("Task not found: {0}".format(task_id))
+            # Newer manual workflows reference the task directly. Their child
+            # assets cascade from the generation job, but both direct children
+            # must be removed before deleting the parent task.
+            connection.execute("DELETE FROM manual_draft_runs WHERE task_id = ?", (task_id,))
+            connection.execute("DELETE FROM manual_generation_jobs WHERE task_id = ?", (task_id,))
             for table in (
                 "diagram_asset_revisions", "diagram_artifact_runs", "diagram_plan_runs",
                 "manual_plan_runs", "source_document_qa_runs", "source_document_runs",

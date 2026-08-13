@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 from typing import Optional
 from uuid import uuid4
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageChops, ImageStat, UnidentifiedImageError
 
 from .service import utc_now
 from .storage import Database
@@ -40,13 +40,16 @@ class ManualScreenshotService:
         manifest = task_root / PurePosixPath(context["manifest_relative_path"])
         paths = self._manifest_paths(manifest)
         has_ui_section = self._has_ui_section(job_id)
-        static_entries = [path for path in paths if path.lower() in {
-            "index.html", "public/index.html", "dist/index.html", "build/index.html"
-        }]
+        has_ui_evidence = has_ui_section or self._has_ui_evidence(paths)
+        static_entries = [path for path in paths if any(
+            path.lower() == candidate or path.lower().endswith("/" + candidate)
+            for candidate in ("index.html", "public/index.html", "dist/index.html",
+                              "build/index.html")
+        )]
         unsafe_markers = [path for path in paths if PurePosixPath(path).name.lower() in {
             ".env", ".env.local", "docker-compose.yml", "docker-compose.yaml"
         }]
-        if not has_ui_section:
+        if not has_ui_evidence:
             status = "not_applicable"
             reason = "结构化正文未识别出适用的用户界面章节"
         elif static_entries and self._capture_adapter_available and not unsafe_markers:
@@ -63,6 +66,7 @@ class ManualScreenshotService:
         assessment = {
             "job_id": job_id, "status": status, "reason": reason,
             "has_ui_section": has_ui_section, "static_entries": static_entries,
+            "has_ui_evidence": has_ui_evidence,
             "capture_adapter_available": self._capture_adapter_available,
             "automatic_capture_policy": {
                 "runs_project_commands": False, "allows_external_network": False,
@@ -103,16 +107,27 @@ class ManualScreenshotService:
         return result
 
     def import_image(self, job_id: str, source_path: Path, section_key: str,
-                     title: str, description: dict) -> dict:
+                     title: str, description: dict, capture_source: str = "user") -> dict:
         self._database.initialize()
+        if capture_source not in {"user", "automated"}:
+            raise ManualScreenshotError("截图来源无效")
         context = self._context(job_id)
         self._validate_section(job_id, section_key)
         clean_description = self._validate_description(description)
         source = source_path.expanduser().resolve()
         sanitized, width, height = self._sanitize_source(source)
+        duplicate = self._near_duplicate(job_id, context["task_id"], sanitized)
+        if duplicate:
+            raise ManualScreenshotError(
+                "该页面与已有截图“{0}”高度重复；请切换到不同业务页面或等待数据加载后再采集".format(
+                    duplicate
+                )
+            )
         key_base = re.sub(r"[^a-z0-9_-]", "-", source.stem.lower()).strip("-") or "screen"
         screenshot_key = self._unique_key(job_id, key_base)
-        relative = Path("artifacts") / "manual" / "screenshots" / (screenshot_key + ".png")
+        relative = (Path("artifacts") / "manual" / "jobs" /
+                    "job-v{0}".format(context["job_version"]) / "screenshots" /
+                    (screenshot_key + ".png"))
         target = self._data_root / "tasks" / context["task_id"] / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         sanitized.save(target, format="PNG", optimize=True)
@@ -124,9 +139,9 @@ class ManualScreenshotService:
                 version, section_key, title, source, image_relative_path, description_json,
                 width, height, sha256, created_at, edit_source, parent_revision_id,
                 change_summary_json, archived) VALUES
-                (?, ?, ?, 1, ?, ?, 'user', ?, ?, ?, ?, ?, ?, 'import', NULL, ?, 0)""",
+                (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'import', NULL, ?, 0)""",
                 (str(uuid4()), job_id, screenshot_key, section_key, title.strip(),
-                 relative.as_posix(),
+                 capture_source, relative.as_posix(),
                  json.dumps(clean_description, ensure_ascii=False, separators=(",", ":")),
                  width, height, sha256, now,
                  json.dumps({"fields": ["image", "section_key", "title", "description"]},
@@ -135,18 +150,64 @@ class ManualScreenshotService:
             connection.execute(
                 """INSERT INTO manual_screenshot_artifacts(id, job_id, screenshot_key,
                 section_key, title, source, image_relative_path, description_json, created_at,
-                updated_at, archived_at) VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, NULL)""",
+                updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)""",
                 (str(uuid4()), job_id, screenshot_key, section_key, title.strip(),
-                 relative.as_posix(),
+                 capture_source, relative.as_posix(),
                  json.dumps(clean_description, ensure_ascii=False, separators=(",", ":")),
                  now, now),
             )
+        self._mark_capture_available(job_id)
         return {"screenshot_key": screenshot_key, "section_key": section_key,
-                "title": title.strip(), "source": "user",
+                "title": title.strip(), "source": capture_source,
                 "image_relative_path": relative.as_posix(),
                 "description": clean_description, "width": width, "height": height,
                 "sha256": sha256, "version": 1, "archived": False,
                 "created_at": now, "updated_at": now}
+
+    def _near_duplicate(self, job_id: str, task_id: str, candidate: Image.Image):
+        sample = candidate.convert("L").resize((64, 64))
+        with self._database.connect() as connection:
+            rows = connection.execute(
+                """SELECT title,image_relative_path FROM manual_screenshot_artifacts
+                WHERE job_id=? AND archived_at IS NULL""", (job_id,),
+            ).fetchall()
+        for row in rows:
+            path = (self._data_root / "tasks" / task_id /
+                    Path(row["image_relative_path"])).resolve()
+            try:
+                existing = Image.open(path).convert("L").resize((64, 64))
+                delta = ImageStat.Stat(ImageChops.difference(sample, existing)).mean[0]
+            except (OSError, ValueError):
+                continue
+            if delta < 2.2:
+                return row["title"]
+        return None
+
+    def _mark_capture_available(self, job_id: str) -> None:
+        now = utc_now()
+        with self._database.connect() as connection:
+            count = connection.execute(
+                """SELECT COUNT(*) value FROM manual_screenshot_artifacts
+                WHERE job_id=? AND archived_at IS NULL""", (job_id,),
+            ).fetchone()["value"]
+            summary = json.dumps({"screenshot_count": count, "assessment_status": "captured"},
+                                 ensure_ascii=False, separators=(",", ":"))
+            step = connection.execute(
+                """SELECT id FROM manual_generation_steps WHERE job_id=?
+                AND step_key='screenshots' ORDER BY attempt DESC LIMIT 1""", (job_id,),
+            ).fetchone()
+            if step is not None:
+                connection.execute(
+                    """UPDATE manual_generation_steps SET status='completed',summary_json=?,
+                    started_at=COALESCE(started_at,?),finished_at=?,safe_error_message=NULL
+                    WHERE id=?""", (summary, now, now, step["id"]),
+                )
+            connection.execute(
+                """UPDATE manual_execution_nodes SET status='completed',output_json=?,
+                heartbeat_at=?,finished_at=?,updated_at=?,error_category=NULL,
+                safe_error_message=NULL WHERE job_id=? AND node_key='screenshots'""",
+                (summary, now, now, now, job_id),
+            )
 
     def update_metadata(self, job_id: str, screenshot_key: str, section_key: str,
                         title: str, description: dict) -> dict:
@@ -174,7 +235,9 @@ class ManualScreenshotService:
         source = source_path.expanduser().resolve()
         sanitized, width, height = self._sanitize_source(source)
         version = snapshot["version"] + 1
-        relative = (Path("artifacts") / "manual" / "screenshots" / screenshot_key /
+        relative = (Path("artifacts") / "manual" / "jobs" /
+                    "job-v{0}".format(context["job_version"]) / "screenshots" /
+                    screenshot_key /
                     "v{0}.png".format(version))
         target = self._data_root / "tasks" / context["task_id"] / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -320,7 +383,8 @@ class ManualScreenshotService:
     def _context(self, job_id: str) -> dict:
         with self._database.connect() as connection:
             row = connection.execute(
-                """SELECT j.task_id, psn.manifest_relative_path, psn.scan_root_mode,
+                """SELECT j.task_id, j.version job_version,
+                psn.manifest_relative_path, psn.scan_root_mode,
                 psn.scan_root_path FROM manual_generation_jobs j
                 JOIN tasks t ON t.id=j.task_id
                 JOIN project_snapshots psn ON psn.id=t.snapshot_id WHERE j.id=?""", (job_id,),
@@ -335,6 +399,20 @@ class ManualScreenshotService:
                 """SELECT 1 FROM manual_section_artifacts WHERE job_id=?
                 AND section_key='ui_operations'""", (job_id,),
             ).fetchone() is not None
+
+    @staticmethod
+    def _has_ui_evidence(paths: list) -> bool:
+        markers = ("/src/views/", "/src/pages/", "/src/components/", "/frontend/",
+                   "/fronted/", "/web/", "/client/")
+        for value in paths:
+            path = "/" + str(value).replace("\\", "/").lower().lstrip("/")
+            name = PurePosixPath(path).name
+            if name in {"index.html", "vite.config.ts", "vite.config.js",
+                        "vue.config.js", "next.config.js", "next.config.mjs"}:
+                return True
+            if path.endswith((".vue", ".tsx", ".jsx")) or any(marker in path for marker in markers):
+                return True
+        return False
 
     def _validate_section(self, job_id: str, section_key: str) -> None:
         with self._database.connect() as connection:

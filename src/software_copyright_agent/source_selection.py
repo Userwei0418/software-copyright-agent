@@ -4,7 +4,7 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable, List, Optional, Set
 
 
-SOURCE_SELECTION_RULES_VERSION = "source-selection-v1"
+SOURCE_SELECTION_RULES_VERSION = "source-selection-v4"
 SOURCE_SELECTION_STRATEGIES = {
     "standard": {"minimum_score": 50, "relax_path_exclusions": False},
     "relaxed": {"minimum_score": 25, "relax_path_exclusions": False},
@@ -29,6 +29,11 @@ EXCLUDED_SEGMENTS = {
     "example": "example_code",
     "examples": "example_code",
     "generated": "generated_code",
+    "legacy": "legacy_code",
+    "template": "template_code",
+    "templates": "template_code",
+    "agent-template": "template_code",
+    "agent-templates": "template_code",
 }
 
 BUSINESS_SEGMENTS = {
@@ -153,10 +158,19 @@ class SourceSelector:
                     continue
                 return EXCLUDED_SEGMENTS[part]
         lowered_name = path.name.lower()
+        if "lottie" in lowered_parts[:-1] or (
+            "assets" in lowered_parts[:-1]
+            and lowered_name in {"data.js", "animation-data.js", "animation_data.js"}
+        ):
+            return "generated_animation_data"
         if any(marker in lowered_name for marker in (".test.", ".spec.", ".generated.")):
             if relax_path_exclusions and ".generated." not in lowered_name:
                 return None
             return "generated_or_test_file"
+        if lowered_name.startswith(("generated-", "generated_")):
+            return "generated_code"
+        if lowered_name.endswith((".generated.js", ".generated.ts", ".generated.jsx", ".generated.tsx")):
+            return "generated_code"
         if path.stem.lower().endswith(("_test", "_spec", ".min")):
             if relax_path_exclusions and not path.stem.lower().endswith(".min"):
                 return None
@@ -195,6 +209,9 @@ class SourceSelector:
         if segments & GENERIC_SEGMENTS:
             score -= 10
             reasons.append("generic_support_code")
+        if path.name.lower().endswith(".d.ts"):
+            score -= 20
+            reasons.append("declaration_only_types")
         return max(0, min(100, score)), tuple(reasons)
 
     @staticmethod

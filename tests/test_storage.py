@@ -36,7 +36,7 @@ class DatabaseMigrationTests(unittest.TestCase):
             finally:
                 connection.close()
 
-            self.assertEqual(versions, [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,), (10,), (11,), (12,), (13,), (14,), (15,), (16,), (17,), (18,), (19,), (20,), (21,), (22,)])
+            self.assertEqual(versions, [(index,) for index in range(1, 32)])
             self.assertTrue(
                 {
                     "facts", "evidence", "confirmation_requests",
@@ -53,5 +53,16 @@ class DatabaseMigrationTests(unittest.TestCase):
                     "manual_figure_revisions",
                     "manual_capture_assessments", "manual_screenshot_revisions",
                     "manual_document_qa_runs",
+                    "manual_export_records",
+                    "manual_execution_nodes",
+                    "manual_project_profile_revisions",
+                    "manual_screenshot_import_batches",
+                    "manual_project_screenshot_assets",
+                    "manual_project_screenshot_revisions",
+                    "manual_screenshot_interpretation_revisions",
+                    "manual_job_screenshot_refs", "manual_ui_section_sources",
+                    "manual_ui_evidence_decisions",
+                    "manual_qa_decisions",
+                    "quick_start_runs",
                 }.issubset(tables)
             )

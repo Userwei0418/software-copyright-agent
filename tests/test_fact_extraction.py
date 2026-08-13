@@ -39,6 +39,9 @@ class DeterministicFactExtractorTests(unittest.TestCase):
 
             self.assertEqual(facts["project.name"].value, "中文软件名称")
             self.assertNotIn("project.version", facts)
+            version_confirmation = next(item for item in extraction.confirmations
+                                        if item.field_key == "project.version")
+            self.assertEqual(version_confirmation.candidates, ("V1.0",))
             self.assertEqual(
                 [item.field_key for item in extraction.confirmations],
                 ["project.name", "project.version"],

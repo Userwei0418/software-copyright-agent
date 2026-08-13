@@ -6,17 +6,38 @@ from pathlib import Path
 from PIL import Image
 
 from software_copyright_agent.manual_pipeline import ManualPipelineService
-from software_copyright_agent.manual_screenshots import ManualScreenshotService
+from software_copyright_agent.manual_screenshots import (
+    ManualScreenshotError, ManualScreenshotService,
+)
 from software_copyright_agent.storage import Database
 
 
 class ManualScreenshotServiceTests(unittest.TestCase):
-    def _fixture(self, root: Path, with_ui: bool = True):
+    def test_rejects_near_duplicate_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_root, database, job = self._fixture(root)
+            first = root / "first.png"
+            second = root / "second.png"
+            Image.new("RGB", (1280, 720), "#eef2f5").save(first)
+            Image.new("RGB", (1280, 720), "#eef2f5").save(second)
+            description = {key: "这是一段足够长且真实的页面操作说明。" for key in (
+                "page_purpose", "entry_conditions", "visible_regions", "typical_workflow",
+                "backend_interactions", "result_validation_recovery",
+            )}
+            service = ManualScreenshotService(database, data_root)
+            service.import_image(job["id"], first, "ui_operations", "首页", description)
+            with self.assertRaisesRegex(ManualScreenshotError, "高度重复"):
+                service.import_image(job["id"], second, "ui_operations", "重复首页", description)
+
+    def _fixture(self, root: Path, with_ui: bool = True, with_ui_evidence: bool = True):
         data_root = root / "data"
         task_root = data_root / "tasks" / "task"
         manifest = task_root / "input" / "manifest.jsonl"
         manifest.parent.mkdir(parents=True)
-        manifest.write_text(json.dumps({"path": "index.html"}) + "\n", encoding="utf-8")
+        manifest.write_text(json.dumps({
+            "path": "index.html" if with_ui_evidence else "src/service.py"
+        }) + "\n", encoding="utf-8")
         database = Database(data_root / "app.db")
         database.initialize()
         now = "2026-08-10T00:00:00Z"
@@ -82,6 +103,8 @@ class ManualScreenshotServiceTests(unittest.TestCase):
             )
             target = data_root / "tasks" / "task" / imported["image_relative_path"]
             self.assertEqual(target.suffix, ".png")
+            self.assertIn("artifacts/manual/jobs/job-v1/screenshots/",
+                          imported["image_relative_path"])
             self.assertTrue(service.read_image(job["id"], imported["screenshot_key"])
                             .startswith(b"\x89PNG"))
             revised_description = dict(description)
@@ -120,7 +143,9 @@ class ManualScreenshotServiceTests(unittest.TestCase):
 
     def test_not_applicable_screenshot_stage_is_skipped_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            data_root, database, job = self._fixture(Path(temporary), with_ui=False)
+            data_root, database, job = self._fixture(
+                Path(temporary), with_ui=False, with_ui_evidence=False
+            )
             service = ManualScreenshotService(database, data_root)
             result = service.finalize(job["id"])
             self.assertEqual(result["status"], "skipped")
@@ -129,6 +154,15 @@ class ManualScreenshotServiceTests(unittest.TestCase):
             step = next(item for item in refreshed["steps"] if item["key"] == "screenshots")
             self.assertEqual(step["status"], "skipped")
             self.assertEqual(refreshed["current_step"], "assemble_docx")
+
+    def test_ui_evidence_waits_for_capture_even_when_ui_chapter_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_root, database, job = self._fixture(Path(temporary), with_ui=False)
+            service = ManualScreenshotService(database, data_root)
+            assessment = service.assess(job["id"])
+            self.assertTrue(assessment["has_ui_evidence"])
+            self.assertFalse(assessment["has_ui_section"])
+            self.assertEqual(assessment["status"], "manual_import")
 
 
 if __name__ == "__main__":

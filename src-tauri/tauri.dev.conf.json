@@ -1,0 +1,14 @@
+{
+  "productName": "软著材料助手开发版",
+  "identifier": "com.local.software-copyright-agent.dev",
+  "app": {
+    "windows": [{
+      "title": "软著材料助手 · 开发版",
+      "width": 1440,
+      "height": 900,
+      "minWidth": 1080,
+      "minHeight": 720,
+      "resizable": true
+    }]
+  }
+}

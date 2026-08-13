@@ -2,17 +2,20 @@ import hashlib
 import struct
 import os
 import tempfile
+import unicodedata
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Iterable, Sequence, Tuple
 
 
 NOTO_CJK_SC_SHA256 = "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b"
+NOTO_SYMBOLS_2_SHA256 = "630846d528dbe4c4981370a4d0a9475a1fd1491a129bb411f8e157cdb5de13c6"
 NOTO_CJK_LICENSE_SHA256 = "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2"
 DEFAULT_CJK_FAMILY = "Noto Sans CJK SC"
+DEFAULT_SYMBOL_FAMILY = "Noto Sans Symbols 2"
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -36,6 +39,13 @@ class FontAsset:
         )
         return cls(DEFAULT_CJK_FAMILY, path, NOTO_CJK_SC_SHA256)
 
+    @classmethod
+    def bundled_symbols(cls) -> "FontAsset":
+        path = Path(__file__).resolve().parent / "assets" / "fonts" / "noto-cjk" / (
+            "NotoSansSymbols2-Regular.ttf"
+        )
+        return cls(DEFAULT_SYMBOL_FAMILY, path, NOTO_SYMBOLS_2_SHA256)
+
     def validate(self, required_characters: Iterable[str] = ()) -> dict:
         if not self.path.is_file():
             raise FontAssetError("Bundled CJK font is missing: {0}".format(self.path))
@@ -45,7 +55,10 @@ class FontAsset:
         license_path = self.path.with_name("OFL-1.1.txt")
         if not license_path.is_file() or hashlib.sha256(license_path.read_bytes()).hexdigest() != NOTO_CJK_LICENSE_SHA256:
             raise FontAssetError("Bundled CJK font license is missing or modified")
-        codepoints = {ord(character) for character in required_characters if ord(character) > 127}
+        codepoints = {
+            ord(character) for character in required_characters
+            if ord(character) > 127 and unicodedata.category(character) not in {"Cf", "Mn", "Me"}
+        }
         coverage = OpenTypeCmap(self.path)
         missing = sorted(codepoint for codepoint in codepoints if not coverage.contains(codepoint))
         if missing:
@@ -59,6 +72,35 @@ class FontAsset:
             "missing_codepoints": 0,
             "license": "SIL Open Font License 1.1",
         }
+
+
+def validate_font_bundle(
+    required_characters: Iterable[str], assets: Sequence[FontAsset] = ()
+) -> dict:
+    """Validate integrity and union coverage for all fonts embedded in a DOCX."""
+    selected = tuple(assets) or (FontAsset.bundled_cjk(), FontAsset.bundled_symbols())
+    summaries = [asset.validate() for asset in selected]
+    coverages = [(asset, OpenTypeCmap(asset.path)) for asset in selected]
+    codepoints = {
+        ord(character)
+        for character in required_characters
+        if ord(character) > 127
+        and unicodedata.category(character) not in {"Cf", "Mn", "Me"}
+    }
+    missing = sorted(
+        codepoint
+        for codepoint in codepoints
+        if not any(coverage.contains(codepoint) for _, coverage in coverages)
+    )
+    if missing:
+        sample = "".join(chr(codepoint) for codepoint in missing[:20])
+        raise FontAssetError("Bundled font set lacks required glyphs: {0}".format(sample))
+    return {
+        "families": [asset.family for asset in selected],
+        "fonts": summaries,
+        "required_codepoints": len(codepoints),
+        "missing_codepoints": 0,
+    }
 
 
 class OpenTypeCmap:

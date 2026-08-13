@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 31
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -611,6 +611,401 @@ ALTER TABLE manual_screenshot_revisions
 ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1));
 """
 
+MIGRATION_023 = """
+UPDATE model_configs
+SET verified_at = COALESCE(verified_at, updated_at)
+WHERE verified_at IS NULL
+  AND json_extract(settings_json, '$.endpoint_mode') IN
+      ('messages', 'chat_completions', 'responses', 'ollama_chat');
+"""
+
+MIGRATION_024 = """
+CREATE TABLE manual_document_qa_runs_v24 (
+    id TEXT PRIMARY KEY,
+    document_artifact_id TEXT NOT NULL REFERENCES manual_document_artifacts(id) ON DELETE CASCADE,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    qa_version INTEGER NOT NULL,
+    policy_version TEXT NOT NULL,
+    renderer_kind TEXT NOT NULL CHECK (renderer_kind IN ('deterministic_companion', 'libreoffice_word')),
+    passed INTEGER NOT NULL CHECK (passed IN (0, 1)),
+    checks_json TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    report_relative_path TEXT NOT NULL,
+    render_relative_path TEXT NOT NULL,
+    preview_pdf_relative_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(document_artifact_id, qa_version)
+);
+INSERT INTO manual_document_qa_runs_v24(
+    id,document_artifact_id,job_id,qa_version,policy_version,renderer_kind,passed,
+    checks_json,summary_json,report_relative_path,render_relative_path,
+    preview_pdf_relative_path,created_at
+)
+SELECT
+    id,document_artifact_id,job_id,qa_version,policy_version,
+    CASE
+        WHEN json_extract(summary_json, '$.renderer_kind') = 'libreoffice_word'
+            THEN 'libreoffice_word'
+        ELSE renderer_kind
+    END,
+    passed,checks_json,summary_json,report_relative_path,render_relative_path,
+    preview_pdf_relative_path,created_at
+FROM manual_document_qa_runs;
+DROP TABLE manual_document_qa_runs;
+ALTER TABLE manual_document_qa_runs_v24 RENAME TO manual_document_qa_runs;
+CREATE INDEX idx_manual_document_qa_latest
+ON manual_document_qa_runs(document_artifact_id, qa_version DESC);
+"""
+
+MIGRATION_025 = """
+CREATE TABLE manual_export_records (
+    id TEXT PRIMARY KEY,
+    document_artifact_id TEXT NOT NULL REFERENCES manual_document_artifacts(id) ON DELETE CASCADE,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    document_version INTEGER NOT NULL,
+    export_kind TEXT NOT NULL CHECK (export_kind IN ('review', 'formal')),
+    destination_path TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+    sha256 TEXT NOT NULL,
+    verified INTEGER NOT NULL CHECK (verified IN (0, 1)),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_manual_export_records_document
+ON manual_export_records(document_artifact_id, created_at DESC);
+CREATE INDEX idx_manual_export_records_job
+ON manual_export_records(job_id, created_at DESC);
+"""
+
+MIGRATION_026 = """
+CREATE TABLE manual_execution_nodes (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    node_key TEXT NOT NULL,
+    stage_key TEXT NOT NULL,
+    node_kind TEXT NOT NULL CHECK (node_kind IN
+        ('research', 'section', 'figure', 'screenshot', 'assemble', 'qa')),
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN
+        ('queued', 'running', 'completed', 'completed_with_warnings', 'failed', 'skipped')),
+    dependency_keys_json TEXT NOT NULL DEFAULT '[]',
+    attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    max_attempts INTEGER NOT NULL DEFAULT 1 CHECK (max_attempts >= 1),
+    model_config_id TEXT REFERENCES model_configs(id) ON DELETE SET NULL,
+    input_json TEXT NOT NULL DEFAULT '{}',
+    output_json TEXT NOT NULL DEFAULT '{}',
+    error_category TEXT,
+    safe_error_message TEXT,
+    started_at TEXT,
+    heartbeat_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(job_id, node_key)
+);
+CREATE INDEX idx_manual_execution_nodes_job_stage
+ON manual_execution_nodes(job_id, stage_key, status);
+"""
+
+MIGRATION_027 = """
+ALTER TABLE manual_execution_nodes RENAME TO manual_execution_nodes_v26;
+CREATE TABLE manual_execution_nodes (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    node_key TEXT NOT NULL,
+    stage_key TEXT NOT NULL,
+    node_kind TEXT NOT NULL CHECK (node_kind IN
+        ('research', 'section', 'figure', 'screenshot', 'assemble', 'qa')),
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN
+        ('queued', 'running', 'completed', 'completed_with_warnings', 'failed', 'skipped',
+         'waiting_for_authorization')),
+    dependency_keys_json TEXT NOT NULL DEFAULT '[]',
+    attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    max_attempts INTEGER NOT NULL DEFAULT 1 CHECK (max_attempts >= 1),
+    model_config_id TEXT REFERENCES model_configs(id) ON DELETE SET NULL,
+    input_json TEXT NOT NULL DEFAULT '{}',
+    output_json TEXT NOT NULL DEFAULT '{}',
+    error_category TEXT,
+    safe_error_message TEXT,
+    started_at TEXT,
+    heartbeat_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(job_id, node_key)
+);
+INSERT INTO manual_execution_nodes(
+    id,job_id,node_key,stage_key,node_kind,title,status,dependency_keys_json,
+    attempt,max_attempts,model_config_id,input_json,output_json,error_category,
+    safe_error_message,started_at,heartbeat_at,finished_at,created_at,updated_at
+)
+SELECT id,job_id,node_key,stage_key,node_kind,title,status,dependency_keys_json,
+    attempt,max_attempts,model_config_id,input_json,output_json,error_category,
+    safe_error_message,started_at,heartbeat_at,finished_at,created_at,updated_at
+FROM manual_execution_nodes_v26;
+DROP TABLE manual_execution_nodes_v26;
+CREATE INDEX idx_manual_execution_nodes_job_stage
+ON manual_execution_nodes(job_id, stage_key, status);
+"""
+
+MIGRATION_028 = """
+CREATE TABLE manual_qa_decisions (
+    id TEXT PRIMARY KEY,
+    qa_run_id TEXT NOT NULL REFERENCES manual_document_qa_runs(id) ON DELETE CASCADE,
+    document_artifact_id TEXT NOT NULL REFERENCES manual_document_artifacts(id) ON DELETE CASCADE,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    check_key TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('deferred')),
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(qa_run_id, check_key)
+);
+CREATE INDEX idx_manual_qa_decisions_run
+ON manual_qa_decisions(qa_run_id, created_at);
+"""
+
+MIGRATION_029 = """
+CREATE TABLE manual_project_profile_revisions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    research_artifact_id TEXT REFERENCES manual_research_artifacts(id) ON DELETE SET NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('research', 'user')),
+    profile_json TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(task_id, version)
+);
+CREATE INDEX idx_manual_project_profile_latest
+ON manual_project_profile_revisions(task_id, version DESC);
+
+CREATE TABLE manual_screenshot_import_batches (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    job_id TEXT REFERENCES manual_generation_jobs(id) ON DELETE SET NULL,
+    source TEXT NOT NULL CHECK (source IN ('user', 'clipboard', 'folder', 'automated')),
+    status TEXT NOT NULL CHECK (status IN
+        ('queued', 'running', 'completed', 'completed_with_warnings', 'failed')),
+    input_count INTEGER NOT NULL DEFAULT 0,
+    imported_count INTEGER NOT NULL DEFAULT 0,
+    warning_count INTEGER NOT NULL DEFAULT 0,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT
+);
+CREATE INDEX idx_manual_screenshot_batches_task
+ON manual_screenshot_import_batches(task_id, created_at DESC);
+
+CREATE TABLE manual_project_screenshot_assets (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    asset_key TEXT NOT NULL,
+    legacy_job_id TEXT REFERENCES manual_generation_jobs(id) ON DELETE SET NULL,
+    legacy_screenshot_key TEXT,
+    import_batch_id TEXT REFERENCES manual_screenshot_import_batches(id) ON DELETE SET NULL,
+    source TEXT NOT NULL CHECK (source IN ('user', 'clipboard', 'folder', 'automated')),
+    title TEXT NOT NULL,
+    image_relative_path TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    image_format TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    analysis_status TEXT NOT NULL CHECK (analysis_status IN
+        ('pending', 'queued', 'running', 'completed', 'failed', 'outdated')),
+    review_status TEXT NOT NULL CHECK (review_status IN
+        ('pending', 'reviewed', 'rejected')),
+    adoption_status TEXT NOT NULL CHECK (adoption_status IN
+        ('pending', 'adopted', 'excluded')),
+    group_key TEXT NOT NULL DEFAULT '',
+    group_title TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    sensitive_status TEXT NOT NULL DEFAULT 'unreviewed' CHECK (sensitive_status IN
+        ('unreviewed', 'confirmed_safe', 'contains_sensitive')),
+    failure_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    archived_at TEXT,
+    UNIQUE(task_id, asset_key),
+    UNIQUE(legacy_job_id, legacy_screenshot_key)
+);
+CREATE INDEX idx_manual_project_screenshots_task
+ON manual_project_screenshot_assets(task_id, archived_at, group_key, sort_order);
+CREATE INDEX idx_manual_project_screenshots_sha
+ON manual_project_screenshot_assets(task_id, sha256);
+
+CREATE TABLE manual_project_screenshot_revisions (
+    id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL REFERENCES manual_project_screenshot_assets(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    image_relative_path TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    image_format TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    edit_source TEXT NOT NULL CHECK (edit_source IN
+        ('import', 'manual', 'replacement', 'rollback', 'legacy_migration')),
+    parent_revision_id TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(asset_id, version)
+);
+CREATE INDEX idx_manual_project_screenshot_revision_latest
+ON manual_project_screenshot_revisions(asset_id, version DESC);
+
+CREATE TABLE manual_screenshot_interpretation_revisions (
+    id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL REFERENCES manual_project_screenshot_assets(id) ON DELETE CASCADE,
+    asset_revision_id TEXT NOT NULL REFERENCES manual_project_screenshot_revisions(id),
+    project_profile_revision_id TEXT NOT NULL REFERENCES manual_project_profile_revisions(id),
+    version INTEGER NOT NULL,
+    model_config_id TEXT REFERENCES model_configs(id) ON DELETE SET NULL,
+    model_name TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    cache_key TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+    interpretation_json TEXT NOT NULL,
+    origin TEXT NOT NULL CHECK (origin IN ('ai', 'user', 'legacy_migration')),
+    reviewed INTEGER NOT NULL DEFAULT 0 CHECK (reviewed IN (0, 1)),
+    attempt_count INTEGER NOT NULL DEFAULT 1,
+    elapsed_ms INTEGER NOT NULL DEFAULT 0,
+    failure_reason TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(asset_id, version)
+);
+CREATE INDEX idx_manual_screenshot_interpretation_cache
+ON manual_screenshot_interpretation_revisions(cache_key, status, created_at DESC);
+
+CREATE TABLE manual_job_screenshot_refs (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    asset_id TEXT NOT NULL REFERENCES manual_project_screenshot_assets(id),
+    asset_revision_id TEXT NOT NULL REFERENCES manual_project_screenshot_revisions(id),
+    interpretation_revision_id TEXT NOT NULL REFERENCES manual_screenshot_interpretation_revisions(id),
+    group_key TEXT NOT NULL,
+    group_title TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    adopted_at TEXT NOT NULL,
+    UNIQUE(job_id, asset_id)
+);
+CREATE INDEX idx_manual_job_screenshot_refs_order
+ON manual_job_screenshot_refs(job_id, group_key, sort_order);
+
+CREATE TABLE manual_ui_section_sources (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    section_revision_id TEXT NOT NULL REFERENCES manual_section_revisions(id),
+    project_profile_revision_id TEXT NOT NULL REFERENCES manual_project_profile_revisions(id),
+    adopted_set_hash TEXT NOT NULL,
+    sources_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_manual_ui_section_sources_latest
+ON manual_ui_section_sources(job_id, created_at DESC);
+
+INSERT OR IGNORE INTO manual_project_screenshot_assets(
+    id,task_id,asset_key,legacy_job_id,legacy_screenshot_key,source,title,
+    image_relative_path,width,height,image_format,sha256,analysis_status,
+    review_status,adoption_status,group_key,group_title,sort_order,sensitive_status,
+    created_at,updated_at,archived_at
+)
+SELECT
+    lower(hex(randomblob(16))),j.task_id,
+    'legacy-' || replace(msa.job_id, '-', '') || '-' || msa.screenshot_key,
+    msa.job_id,msa.screenshot_key,msa.source,msa.title,msa.image_relative_path,
+    COALESCE(msr.width,1),COALESCE(msr.height,1),'PNG',COALESCE(msr.sha256,''),
+    'completed','reviewed',CASE WHEN msa.archived_at IS NULL THEN 'adopted' ELSE 'excluded' END,
+    'legacy-ui','历史界面截图',0,'unreviewed',msa.created_at,
+    COALESCE(NULLIF(msa.updated_at,''),msa.created_at),msa.archived_at
+FROM manual_screenshot_artifacts msa
+JOIN manual_generation_jobs j ON j.id=msa.job_id
+LEFT JOIN manual_screenshot_revisions msr ON msr.job_id=msa.job_id
+    AND msr.screenshot_key=msa.screenshot_key
+    AND msr.version=(SELECT MAX(version) FROM manual_screenshot_revisions x
+        WHERE x.job_id=msa.job_id AND x.screenshot_key=msa.screenshot_key);
+
+INSERT OR IGNORE INTO manual_project_screenshot_revisions(
+    id,asset_id,version,title,image_relative_path,width,height,image_format,sha256,
+    edit_source,parent_revision_id,created_at
+)
+SELECT lower(hex(randomblob(16))),a.id,r.version,r.title,r.image_relative_path,
+    r.width,r.height,'PNG',r.sha256,'legacy_migration',r.parent_revision_id,r.created_at
+FROM manual_screenshot_revisions r
+JOIN manual_project_screenshot_assets a ON a.legacy_job_id=r.job_id
+    AND a.legacy_screenshot_key=r.screenshot_key;
+
+ALTER TABLE manual_execution_nodes RENAME TO manual_execution_nodes_v28;
+CREATE TABLE manual_execution_nodes (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES manual_generation_jobs(id) ON DELETE CASCADE,
+    node_key TEXT NOT NULL,
+    stage_key TEXT NOT NULL,
+    node_kind TEXT NOT NULL CHECK (node_kind IN
+        ('research', 'profile', 'section', 'figure', 'screenshot', 'screenshot_import',
+         'screenshot_analysis', 'screenshot_review', 'assemble', 'qa')),
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN
+        ('queued', 'running', 'completed', 'completed_with_warnings', 'failed', 'skipped',
+         'waiting_for_authorization', 'waiting_for_review', 'waiting_for_screenshots',
+         'adopted', 'outdated')),
+    dependency_keys_json TEXT NOT NULL DEFAULT '[]',
+    attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    max_attempts INTEGER NOT NULL DEFAULT 1 CHECK (max_attempts >= 1),
+    model_config_id TEXT REFERENCES model_configs(id) ON DELETE SET NULL,
+    input_json TEXT NOT NULL DEFAULT '{}',
+    output_json TEXT NOT NULL DEFAULT '{}',
+    error_category TEXT,
+    safe_error_message TEXT,
+    started_at TEXT,
+    heartbeat_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(job_id, node_key)
+);
+INSERT INTO manual_execution_nodes SELECT * FROM manual_execution_nodes_v28;
+DROP TABLE manual_execution_nodes_v28;
+CREATE INDEX idx_manual_execution_nodes_job_stage
+ON manual_execution_nodes(job_id, stage_key, status);
+"""
+
+MIGRATION_030 = """
+CREATE TABLE manual_ui_evidence_decisions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    decision TEXT NOT NULL CHECK (decision IN
+        ('waiting_for_screenshots', 'source_inferred', 'not_applicable')),
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(task_id, version)
+);
+CREATE INDEX idx_manual_ui_evidence_decisions_latest
+ON manual_ui_evidence_decisions(task_id, version DESC);
+"""
+
+MIGRATION_031 = """
+CREATE TABLE quick_start_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    manual_job_id TEXT REFERENCES manual_generation_jobs(id) ON DELETE SET NULL,
+    status TEXT NOT NULL CHECK (status IN
+        ('queued','running','waiting_for_user','failed','completed')),
+    current_stage TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    stages_json TEXT NOT NULL,
+    outputs_json TEXT NOT NULL DEFAULT '{}',
+    safe_error_message TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_quick_start_runs_recent
+ON quick_start_runs(created_at DESC);
+"""
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -844,6 +1239,96 @@ class Database:
                     """INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (22, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
                     ("migration-022",),
+                )
+            applied_v23 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 23"
+            ).fetchone()
+            if applied_v23 is None:
+                connection.executescript(MIGRATION_023)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (23, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-023",),
+                )
+            applied_v24 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 24"
+            ).fetchone()
+            if applied_v24 is None:
+                connection.executescript(MIGRATION_024)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (24, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-024",),
+                )
+            applied_v25 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 25"
+            ).fetchone()
+            if applied_v25 is None:
+                connection.executescript(MIGRATION_025)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (25, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-025",),
+                )
+            applied_v26 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 26"
+            ).fetchone()
+            if applied_v26 is None:
+                connection.executescript(MIGRATION_026)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (26, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-026",),
+                )
+            applied_v27 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 27"
+            ).fetchone()
+            if applied_v27 is None:
+                connection.executescript(MIGRATION_027)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (27, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-027",),
+                )
+            applied_v28 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 28"
+            ).fetchone()
+            if applied_v28 is None:
+                connection.executescript(MIGRATION_028)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (28, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-028",),
+                )
+            applied_v29 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 29"
+            ).fetchone()
+            if applied_v29 is None:
+                connection.executescript(MIGRATION_029)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (29, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-029",),
+                )
+            applied_v30 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 30"
+            ).fetchone()
+            if applied_v30 is None:
+                connection.executescript(MIGRATION_030)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (30, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-030",),
+                )
+            applied_v31 = connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE version = 31"
+            ).fetchone()
+            if applied_v31 is None:
+                connection.executescript(MIGRATION_031)
+                connection.execute(
+                    """INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (31, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?)""",
+                    ("migration-031",),
                 )
 
     @contextmanager

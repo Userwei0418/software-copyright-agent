@@ -5,8 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "tauri": "tauri"
+    "build": "node scripts/build_frontend.mjs",
+    "tauri": "tauri",
+    "sidecar:build": "python3 scripts/build_sidecar.py",
+    "sidecar:ensure": "python3 scripts/build_sidecar.py --if-stale",
+    "tauri:dev:stable": "python3 scripts/run_tauri.py dev --no-watch --config src-tauri/tauri.dev.conf.json",
+    "tauri:build:stable": "python3 scripts/run_tauri.py build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

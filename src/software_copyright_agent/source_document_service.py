@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
 from .domain import TaskStatus
-from .font_assets import FontAsset
+from .font_assets import validate_font_bundle
 from .service import new_id, utc_now
 from .source_document import (
     GENERATOR_VERSION,
@@ -14,6 +14,7 @@ from .source_document import (
     SourceDocumentError,
     SourceDocumentTemplate,
 )
+from .code_preview import FORMATTER_VERSION
 from .state_machine import TaskStateMachine
 from .storage import Database
 from .unit_of_work import UnitOfWork
@@ -48,7 +49,7 @@ class SourceDocumentService:
                 "SELECT status, failure_category FROM tasks WHERE id = ?", (task_id,)
             ).fetchone()
             preview = connection.execute(
-                """SELECT id, artifact_relative_path, summary_json
+                """SELECT id, formatter_version, artifact_relative_path, summary_json
                 FROM code_preview_runs WHERE task_id = ?
                 ORDER BY version DESC LIMIT 1""",
                 (task_id,),
@@ -67,9 +68,29 @@ class SourceDocumentService:
                     "Task must be completed before source document generation"
                 )
             preview_summary = json.loads(preview["summary_json"])
+            if preview["formatter_version"] != FORMATTER_VERSION:
+                raise SourceDocumentError(
+                    "代码分页规则已升级，请重新执行分页预检后再生成 DOCX"
+                )
             if not preview_summary.get("sufficient"):
                 raise SourceDocumentError(
                     "Source code is insufficient for a 60-page document"
+                )
+            selected_files = int(preview_summary.get("selected_files", 0))
+            included_files = int(preview_summary.get("included_files", 0))
+            minimum_files = min(selected_files, 12)
+            if included_files < minimum_files:
+                raise SourceDocumentError(
+                    "Source sample is too concentrated ({0}/{1} files); regenerate the "
+                    "balanced code preview".format(included_files, minimum_files)
+                )
+            available_buckets = preview_summary.get("available_buckets") or []
+            included_buckets = preview_summary.get("included_buckets") or []
+            minimum_buckets = min(len(available_buckets), 3)
+            if minimum_buckets and len(included_buckets) < minimum_buckets:
+                raise SourceDocumentError(
+                    "Source sample does not cover enough project layers; regenerate the "
+                    "balanced code preview"
                 )
             facts = self._load_facts(connection, task_id)
 
@@ -81,12 +102,10 @@ class SourceDocumentService:
         task_root = self._data_root / "tasks" / task_id
         preview_path = task_root / PurePosixPath(preview["artifact_relative_path"])
         preview_payload = json.loads(preview_path.read_text(encoding="utf-8"))
-        required_text = "".join(
-            entry.get("text", "")
-            for page in preview_payload["pages"] for entry in page["entries"]
-        ) + str(software_name) + str(version_name) + "源程序代码文档构成封面正文第页共"
-        font_summary = FontAsset.bundled_cjk().validate(required_text)
-
+        if preview_payload.get("formatter_version") != FORMATTER_VERSION:
+            raise SourceDocumentError(
+                "代码分页预检文件版本过旧，请重新执行分页预检"
+            )
         stage_id = new_id()
         now = utc_now()
         with UnitOfWork(self._database) as unit_of_work:
@@ -115,6 +134,11 @@ class SourceDocumentService:
         os.close(descriptor)
         temporary_path = Path(temporary_name)
         try:
+            required_text = "".join(
+                entry.get("text", "")
+                for page in preview_payload["pages"] for entry in page["entries"]
+            ) + str(software_name) + str(version_name) + "源程序代码文档构成封面正文第页共"
+            font_summary = validate_font_bundle(required_text)
             summary = self._builder.build(
                 temporary_path,
                 str(software_name),

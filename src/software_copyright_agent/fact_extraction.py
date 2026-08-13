@@ -147,7 +147,7 @@ class DeterministicFactExtractor:
                 ConfirmationCandidate(
                     "project.version",
                     "项目中未发现可靠版本号，请填写软件版本",
-                    (),
+                    ("V1.0",),
                     metadata_refs,
                 )
             )

@@ -13,6 +13,7 @@ class ModelConfigInput:
     base_url: str
     model_name: str
     credential_ref: str = None
+    max_concurrency: int = 3
 
 
 class ModelConfigService:
@@ -36,12 +37,19 @@ class ModelConfigService:
             raise ValueError("Unsupported model protocol")
         if not value.id or not value.name.strip() or not value.model_name.strip():
             raise ValueError("Model id, name and model name are required")
+        if not isinstance(value.max_concurrency, int) or not 1 <= value.max_concurrency <= 10:
+            raise ValueError("Model concurrency must be between 1 and 10")
         base_url = value.base_url.strip().rstrip("/")
         if not base_url.startswith(("http://", "https://")):
             raise ValueError("Model base URL must use HTTP or HTTPS")
         now = utc_now()
         self._database.initialize()
         with self._database.connect() as connection:
+            existing = connection.execute(
+                "SELECT settings_json FROM model_configs WHERE id = ?", (value.id,),
+            ).fetchone()
+            settings = json.loads(existing["settings_json"] or "{}") if existing else {}
+            settings["max_concurrency"] = value.max_concurrency
             connection.execute(
                 """INSERT INTO model_configs(id, name, protocol_id, base_url, model_name,
                 credential_ref, settings_json, enabled, created_at, updated_at)
@@ -49,10 +57,10 @@ class ModelConfigService:
                 ON CONFLICT(id) DO UPDATE SET name=excluded.name,
                 protocol_id=excluded.protocol_id, base_url=excluded.base_url,
                 model_name=excluded.model_name, credential_ref=excluded.credential_ref,
-                updated_at=excluded.updated_at""",
+                settings_json=excluded.settings_json, updated_at=excluded.updated_at""",
                 (value.id, value.name.strip(), value.protocol_id, base_url,
                  value.model_name.strip(), value.credential_ref,
-                 json.dumps({}, separators=(",", ":")), now, now),
+                 json.dumps(settings, separators=(",", ":")), now, now),
             )
             row = connection.execute(
                 """SELECT id, name, protocol_id, base_url, model_name, credential_ref,
@@ -87,7 +95,8 @@ class ModelConfigService:
                 raise ValueError("Model config not found")
             connection.execute(
                 """UPDATE app_settings SET value_json = 'null', updated_at = ?
-                WHERE key IN ('manual_model_id', 'diagram_model_id') AND value_json = ?""",
+                WHERE key IN ('manual_model_id', 'diagram_model_id', 'vision_model_id')
+                AND value_json = ?""",
                 (utc_now(), json.dumps(config_id, ensure_ascii=False, separators=(",", ":"))),
             )
 
@@ -103,9 +112,34 @@ class ModelConfigService:
                 raise ValueError("Model config not found")
             settings = json.loads(row["settings_json"])
             settings["endpoint_mode"] = endpoint_mode
+            now = utc_now()
             connection.execute(
-                "UPDATE model_configs SET settings_json = ?, updated_at = ? WHERE id = ?",
-                (json.dumps(settings, separators=(",", ":")), utc_now(), config_id),
+                """UPDATE model_configs SET settings_json = ?, verified_at = ?, updated_at = ?
+                WHERE id = ?""",
+                (json.dumps(settings, separators=(",", ":")), now, now, config_id),
+            )
+            updated = connection.execute(
+                """SELECT id, name, protocol_id, base_url, model_name, credential_ref,
+                settings_json, enabled, verified_at, created_at, updated_at
+                FROM model_configs WHERE id = ?""", (config_id,)
+            ).fetchone()
+        return self._public(updated)
+
+    def set_vision_capability(self, config_id: str, supports_vision: bool) -> dict:
+        self._database.initialize()
+        with self._database.connect() as connection:
+            row = connection.execute(
+                "SELECT settings_json FROM model_configs WHERE id = ?", (config_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("Model config not found")
+            settings = json.loads(row["settings_json"] or "{}")
+            settings["supports_vision"] = supports_vision
+            now = utc_now()
+            connection.execute(
+                """UPDATE model_configs SET settings_json = ?, updated_at = ?
+                WHERE id = ?""",
+                (json.dumps(settings, separators=(",", ":")), now, config_id),
             )
             updated = connection.execute(
                 """SELECT id, name, protocol_id, base_url, model_name, credential_ref,
@@ -117,11 +151,18 @@ class ModelConfigService:
     @staticmethod
     def _public(row) -> dict:
         settings = json.loads(row["settings_json"])
+        default_concurrency = 10 if "api.senseaudio.cn" in row["base_url"] else 3
         return {
             "id": row["id"], "name": row["name"],
             "protocol_id": row["protocol_id"], "base_url": row["base_url"],
             "model_name": row["model_name"],
             "endpoint_mode": settings.get("endpoint_mode"),
+            "supports_vision": (settings.get("supports_vision")
+                                if isinstance(settings.get("supports_vision"), bool) else None),
+            "vision_verified": bool(settings.get("supports_vision") is True and
+                (settings.get("vision_capability_verification") or {}).get("passed")
+            ),
+            "max_concurrency": settings.get("max_concurrency", default_concurrency),
             "provider_id": row["credential_ref"] or row["id"],
             "has_credential": bool(row["credential_ref"]),
             "enabled": bool(row["enabled"]), "verified_at": row["verified_at"],

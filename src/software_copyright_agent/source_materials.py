@@ -2,8 +2,12 @@ import hashlib
 import json
 from pathlib import Path
 
+from .code_preview import FORMATTER_VERSION
 from .code_preview_service import CodePreviewService
+from .source_document import GENERATOR_VERSION as SOURCE_GENERATOR_VERSION
 from .source_document_service import SourceDocumentService
+from .source_document_qa import LibreOfficeRenderer, QA_POLICY_VERSION as SOURCE_QA_POLICY_VERSION
+from .source_document_qa_service import SourceDocumentQaService
 from .source_plan_service import SourcePlanService
 from .storage import Database
 
@@ -21,6 +25,7 @@ class SourceMaterialsService:
         self._source_plan = SourcePlanService(database, data_root)
         self._code_preview = CodePreviewService(database, data_root)
         self._source_document = SourceDocumentService(database, data_root)
+        self._source_document_qa = SourceDocumentQaService(database, data_root)
 
     def snapshot(self, task_id: str) -> dict:
         self._database.initialize()
@@ -51,14 +56,23 @@ class SourceMaterialsService:
                 (task_id,),
             ).fetchone()
             preview = connection.execute(
-                """SELECT version, summary_json, created_at FROM code_preview_runs
+                """SELECT version, formatter_version, summary_json, created_at FROM code_preview_runs
                 WHERE task_id = ? ORDER BY version DESC LIMIT 1""",
                 (task_id,),
             ).fetchone()
             document = connection.execute(
-                """SELECT version, summary_json, artifact_relative_path, sha256,
-                created_at FROM source_document_runs WHERE task_id = ?
-                ORDER BY version DESC LIMIT 1""",
+                """SELECT d.version, d.generator_version, d.summary_json,
+                d.artifact_relative_path, d.sha256,
+                d.created_at, q.passed qa_passed, q.summary_json qa_summary_json,
+                q.version qa_version, q.policy_version qa_policy_version,
+                q.created_at qa_created_at
+                FROM source_document_runs d
+                LEFT JOIN source_document_qa_runs q ON q.id = (
+                    SELECT latest.id FROM source_document_qa_runs latest
+                    WHERE latest.source_document_run_id = d.id
+                    ORDER BY latest.version DESC LIMIT 1
+                )
+                WHERE d.task_id = ? ORDER BY d.version DESC LIMIT 1""",
                 (task_id,),
             ).fetchone()
             candidates = []
@@ -76,14 +90,53 @@ class SourceMaterialsService:
         if plan_payload is not None:
             plan_payload["candidates"] = candidates
         preview_payload = self._run_payload(preview)
+        preview_current = bool(
+            preview is not None and preview["formatter_version"] == FORMATTER_VERSION
+        )
+        if preview_payload is not None:
+            preview_payload["formatter_version"] = preview["formatter_version"]
+            preview_payload["current_formatter"] = preview_current
         document_payload = self._run_payload(document)
         if document_payload is not None:
             document_payload["integrity"] = self._document_integrity(
                 task_id, document_payload
             )
+            current_generator = document["generator_version"] == SOURCE_GENERATOR_VERSION
+            current_policy = bool(
+                document["qa_policy_version"] == SOURCE_QA_POLICY_VERSION
+            )
+            if document["qa_passed"] is None:
+                document_payload["quality"] = {
+                    "status": "not_checked", "passed": None, "summary": None,
+                    "checked_at": None, "qa_version": None,
+                    "policy_version": None, "current_policy": False,
+                    "generator_version": document["generator_version"],
+                    "current_generator": current_generator,
+                }
+            else:
+                quality_status = (
+                    "failed" if not document["qa_passed"] else
+                    "passed" if current_generator and current_policy else "outdated"
+                )
+                document_payload["quality"] = {
+                    "status": quality_status,
+                    "passed": bool(document["qa_passed"]),
+                    "summary": json.loads(document["qa_summary_json"]),
+                    "checked_at": document["qa_created_at"],
+                    "qa_version": document["qa_version"],
+                    "policy_version": document["qa_policy_version"],
+                    "current_policy": current_policy,
+                    "generator_version": document["generator_version"],
+                    "current_generator": current_generator,
+                }
         status = task["status"]
         preview_sufficient = bool(
             preview_payload and preview_payload["summary"].get("sufficient")
+        )
+        preview_representative = bool(
+            preview_payload and self._representative_sample(
+                preview_payload["summary"]
+            )
         )
         retryable_document = (
             status == "failed" and task["failure_category"] == "source_document_error"
@@ -92,7 +145,7 @@ class SourceMaterialsService:
             "source_plan": status in {"completed", "completed_with_warnings"},
             "code_preview": plan_payload is not None
             and status in {"completed", "completed_with_warnings"},
-            "source_docx": preview_sufficient
+            "source_docx": preview_sufficient and preview_representative and preview_current
             and (status in {"completed", "completed_with_warnings"}
                  or retryable_document),
         }
@@ -122,6 +175,13 @@ class SourceMaterialsService:
 
     def build_source_document(self, task_id: str) -> dict:
         self._source_document.execute(task_id)
+        return self.snapshot(task_id)
+
+    def source_document_qa_capability(self, _task_id: str = "") -> dict:
+        return LibreOfficeRenderer.capability()
+
+    def run_source_document_qa(self, task_id: str) -> dict:
+        self._source_document_qa.execute(task_id)
         return self.snapshot(task_id)
 
     def preview_pages(self, task_id: str, all_pages: bool = False) -> dict:
@@ -175,6 +235,78 @@ class SourceMaterialsService:
             "pages": sampled,
         }
 
+    def source_document_preview(self, task_id: str) -> dict:
+        """Describe the real pages rendered by the latest DOCX quality run."""
+        document, qa = self._latest_document_qa(task_id)
+        if qa is None:
+            raise SourceMaterialsError(
+                "该源代码文档尚无真实 Word 渲染结果，请先执行逐页质量检查"
+            )
+        render_path = self._safe_task_path(task_id, qa["render_relative_path"])
+        if not render_path.is_dir():
+            raise SourceMaterialsError("源代码文档的真实渲染目录不可用")
+        page_numbers = sorted(
+            int(path.stem.split("-")[-1])
+            for path in render_path.glob("page-*.png")
+            if path.stem.split("-")[-1].isdigit()
+        )
+        if not page_numbers:
+            raise SourceMaterialsError("源代码文档没有可显示的真实渲染页")
+        return {
+            "version": document["version"],
+            "qa_version": qa["version"],
+            "total_pages": len(page_numbers),
+            "quality_status": self._quality_status(document, qa),
+            "pages": page_numbers,
+        }
+
+    def read_source_document_preview_page(
+        self, task_id: str, page_number: int
+    ) -> bytes:
+        preview = self.source_document_preview(task_id)
+        if page_number not in preview["pages"]:
+            raise SourceMaterialsError("源代码文档预览页码超出范围")
+        _, qa = self._latest_document_qa(task_id)
+        render_path = self._safe_task_path(task_id, qa["render_relative_path"])
+        path = next((candidate for candidate in render_path.glob("page-*.png")
+                     if candidate.stem.split("-")[-1].isdigit() and
+                     int(candidate.stem.split("-")[-1]) == page_number), None)
+        if path is None or not path.is_file():
+            raise SourceMaterialsError("源代码文档预览页不存在")
+        return path.read_bytes()
+
+    def _latest_document_qa(self, task_id: str):
+        self._database.initialize()
+        with self._database.connect() as connection:
+            document = connection.execute(
+                """SELECT id, version, generator_version FROM source_document_runs
+                WHERE task_id = ? ORDER BY version DESC LIMIT 1""", (task_id,)
+            ).fetchone()
+            if document is None:
+                raise SourceMaterialsError("源代码文档不存在")
+            qa = connection.execute(
+                """SELECT version, policy_version, passed, render_relative_path
+                FROM source_document_qa_runs WHERE source_document_run_id = ?
+                ORDER BY version DESC LIMIT 1""", (document["id"],)
+            ).fetchone()
+        return document, qa
+
+    @staticmethod
+    def _quality_status(document, qa) -> str:
+        if not qa["passed"]:
+            return "failed"
+        if (document["generator_version"] != SOURCE_GENERATOR_VERSION or
+                qa["policy_version"] != SOURCE_QA_POLICY_VERSION):
+            return "outdated"
+        return "passed"
+
+    def _safe_task_path(self, task_id: str, relative_path) -> Path:
+        task_root = (self._data_root / "tasks" / task_id).resolve()
+        path = (task_root / Path(relative_path)).resolve()
+        if task_root != path and task_root not in path.parents:
+            raise SourceMaterialsError("源代码文档预览路径无效")
+        return path
+
     @staticmethod
     def _run_payload(row, include_id: bool = True):
         if row is None:
@@ -204,7 +336,21 @@ class SourceMaterialsService:
             blockers.append("尚未进行代码分页预检。")
         elif not preview["summary"].get("sufficient"):
             blockers.append("可用代码不足 59 页，请补充项目源码后重新扫描。")
+        elif not SourceMaterialsService._representative_sample(preview["summary"]):
+            blockers.append("当前 59 页取样过度集中，请重新执行分页预检，按前端、后端和数据层平衡取样。")
+        elif not preview.get("current_formatter", False):
+            blockers.append("分页规则已升级；旧预检可能在 Word 中产生额外页或稀疏页，请重新执行分页预检。")
         return blockers
+
+    @staticmethod
+    def _representative_sample(summary: dict) -> bool:
+        selected = int(summary.get("selected_files", 0))
+        included = int(summary.get("included_files", 0))
+        if included < min(selected, 12):
+            return False
+        available_buckets = summary.get("available_buckets") or []
+        included_buckets = summary.get("included_buckets") or []
+        return len(included_buckets) >= min(len(available_buckets), 3)
 
     def _document_integrity(self, task_id: str, document: dict) -> dict:
         task_root = (self._data_root / "tasks" / task_id).resolve()

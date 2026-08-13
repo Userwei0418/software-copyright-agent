@@ -2,11 +2,16 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
 from software_copyright_agent.source_document import SourceDocumentBuilder
-from software_copyright_agent.source_document_qa import RenderResult, SourceDocumentQaInspector
+from software_copyright_agent.source_document_qa import (
+    LibreOfficeRenderer,
+    RenderResult,
+    SourceDocumentQaInspector,
+)
 
 
 def pages() -> list:
@@ -24,6 +29,13 @@ def pages() -> list:
 
 
 class SourceDocumentQaInspectorTests(unittest.TestCase):
+    def test_renderer_capability_reports_missing_components_for_the_ui(self) -> None:
+        with patch.object(LibreOfficeRenderer, "_resolve_tools", return_value=(None, None)):
+            capability = LibreOfficeRenderer.capability()
+        self.assertFalse(capability["available"])
+        self.assertEqual(capability["missing"], ["LibreOffice", "PDF 逐页渲染组件"])
+        self.assertIn("暂不能生成真实 Word 预览", capability["message"])
+
     def test_complete_document_passes_automatic_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

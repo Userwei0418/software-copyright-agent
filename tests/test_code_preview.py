@@ -71,6 +71,119 @@ class VisualWrappingTests(unittest.TestCase):
                     root, [CodeInputFile("main.py", "A", 90, "Python", expected)]
                 )
 
+    def test_builder_rotates_backend_frontend_and_domain_layers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = (
+                "demo-backend/src/controller/First.java",
+                "demo-backend/src/controller/Second.java",
+                "demo-frontend/src/views/Home.vue",
+                "demo-backend/src/service/OrderService.java",
+                "demo-backend/src/entity/Order.java",
+            )
+            files = []
+            for index, relative in enumerate(paths):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("line one\nline two\nline three\n", encoding="utf-8")
+                files.append(CodeInputFile(
+                    relative, "A", 100 - index, path.suffix.lstrip("."),
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                ))
+            preview = CodePreviewBuilder(CodePreviewConfig(
+                max_visual_width=90, lines_per_page=4, target_code_pages=6,
+            )).build(root, files)
+            headers = [
+                entry["path"] for page in preview.pages for entry in page["entries"]
+                if entry["kind"] == "file_header"
+            ]
+            self.assertEqual(headers[:5], [paths[0], paths[2], paths[3], paths[1], paths[4]])
+            self.assertIn("backend_controller", preview.included_buckets)
+            self.assertIn("frontend_view", preview.included_buckets)
+            self.assertIn("backend_domain", preview.included_buckets)
+
+    def test_large_file_excerpts_do_not_monopolize_the_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = []
+            paths = (
+                "demo-backend/src/controller/LargeController.java",
+                "demo-frontend/src/views/Home.vue",
+                "demo-backend/src/service/OrderService.java",
+            )
+            for index, relative in enumerate(paths):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    "\n".join("line {0}".format(line) for line in range(20)),
+                    encoding="utf-8",
+                )
+                files.append(CodeInputFile(
+                    relative, "A", 100 - index, path.suffix.lstrip("."),
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                ))
+            preview = CodePreviewBuilder(CodePreviewConfig(
+                max_visual_width=90, lines_per_page=5, target_code_pages=8,
+                preferred_excerpt_lines_per_file=10,
+            )).build(root, files)
+            paths_by_page = [
+                {entry.get("path") for entry in page["entries"] if entry.get("path")}
+                for page in preview.pages
+            ]
+            self.assertTrue(all(
+                not (paths_by_page[index] == paths_by_page[index + 1] == paths_by_page[index + 2])
+                for index in range(len(paths_by_page) - 2)
+            ))
+            self.assertEqual(preview.included_files, 3)
+
+    def test_executable_layers_receive_more_page_budget_than_declarations(self) -> None:
+        paths = [
+            *(CodeInputFile(f"app-backend/controller/C{i}.java", "A", 90, "Java", "")
+              for i in range(6)),
+            *(CodeInputFile(f"app-backend/service/S{i}.java", "A", 90, "Java", "")
+              for i in range(6)),
+            *(CodeInputFile(f"app-frontend/pages/P{i}.vue", "B", 60, "Vue", "")
+              for i in range(6)),
+            *(CodeInputFile(f"app-backend/dto/D{i}.java", "B", 55, "Java", "")
+              for i in range(6)),
+        ]
+
+        ordered = CodePreviewBuilder._balanced_files(paths)
+        first_twenty = ordered[:20]
+        executable = sum(
+            CodePreviewBuilder._source_bucket(item.relative_path) in {
+                "backend_controller", "backend_service", "frontend_view"
+            }
+            for item in first_twenty
+        )
+        declarations = sum(
+            CodePreviewBuilder._source_bucket(item.relative_path) == "backend_domain"
+            for item in first_twenty
+        )
+
+        self.assertGreaterEqual(executable, 15)
+        self.assertLessEqual(declarations, 2)
+
+    def test_java_excerpt_starts_at_implementation_instead_of_import_block(self) -> None:
+        lines = [
+            "package demo;",
+            "",
+            "import java.util.List;",
+            "import java.util.Map;",
+            "",
+            "/** Project-specific behavior. */",
+            "@Service",
+            "public class OrderService {",
+            "    public void submit() {}",
+            "}",
+        ]
+
+        start_line = CodePreviewBuilder._preferred_start_line(
+            "backend/service/OrderService.java", lines
+        )
+
+        self.assertEqual(start_line, 6)
+
 
 class CodePreviewServiceTests(unittest.TestCase):
     def test_preview_is_versioned_and_short_source_completes_with_warning(self) -> None:

@@ -1,7 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import {
-  answerConfirmation, deleteTask, listRecentTasks, loadInspection, ProjectScanResult, RecentTask,
+  answerConfirmation, listRecentTasks, loadInspection, ProjectScanResult, RecentTask,
   scanProject, SidecarConnection,
 } from "./api";
 
@@ -13,7 +13,21 @@ type Props = {
 
 function displayValue(value: unknown): string {
   if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 0);
+  if (Array.isArray(value)) return value.length === 0 ? "暂无" :
+    `${value.length} 项 · ${value.slice(0, 3).map(shortValue).join("、")}${value.length > 3 ? "…" : ""}`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return entries.length === 0 ? "暂无" :
+      `${entries.length} 组 · ${entries.slice(0, 2).map(([key, item]) => `${key}: ${shortValue(item)}`).join("；")}${entries.length > 2 ? "…" : ""}`;
+  }
+  return String(value ?? "暂无");
+}
+
+function shortValue(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return `${value.length} 项`;
+  if (value && typeof value === "object") return `${Object.keys(value).length} 字段`;
+  return "—";
 }
 
 function formatBytes(bytes: number): string {
@@ -30,6 +44,7 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
   const [recent, setRecent] = useState<RecentTask[]>([]);
   const [recentLoaded, setRecentLoaded] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [expandedFacts, setExpandedFacts] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!connection) { setRecentLoaded(false); return; }
@@ -98,7 +113,7 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
   }
 
   async function confirm(fieldKey: string) {
-    const value = answers[fieldKey]?.trim();
+    const value = (answers[fieldKey] ?? (fieldKey === "project.version" ? "V1.0" : "")).trim();
     if (!connection || !result || !value) return;
     setBusy(true);
     setMessage(`正在确认 ${fieldKey}…`);
@@ -115,32 +130,6 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
     } finally {
       setBusy(false);
     }
-  }
-
-  async function removeTask(task: RecentTask) {
-    if (!connection || !window.confirm(`删除任务“${task.display_name}”及其应用内产物？\n原项目文件不会被删除。`)) return;
-    setBusy(true);
-    try {
-      await deleteTask(connection, task.task_id);
-      setRecent((items) => items.filter((item) => item.task_id !== task.task_id));
-      if (result?.task_id === task.task_id) { setResult(null); onTaskCreated(""); }
-      setMessage("任务及其应用内产物已删除，原项目未受影响。");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "任务删除失败"); }
-    finally { setBusy(false); }
-  }
-
-  async function clearTasks() {
-    if (!connection || !recent.length || !window.confirm(
-      `清理列表中 ${recent.length} 个任务及应用内产物？\n原项目文件不会被删除。`)) return;
-    setBusy(true);
-    try {
-      for (const task of recent) await deleteTask(connection, task.task_id);
-      setRecent([]); setResult(null); onTaskCreated("");
-      setMessage("最近任务已清理，原项目未受影响。");
-    } catch (error) {
-      setRecent(await listRecentTasks(connection));
-      setMessage(error instanceof Error ? error.message : "批量清理未完成");
-    } finally { setBusy(false); }
   }
 
   const pending = result?.inspection.confirmations.filter((item) => item.status === "pending") ?? [];
@@ -166,13 +155,12 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
         <p className="intake-message">{message}</p>
         {!recentLoaded && connection && <p className="intake-message">正在读取本地任务记录…</p>}
         {recent.length > 0 && <div className="recent-projects"><div className="section-title">
-          <span>最近任务</span><button onClick={clearTasks} disabled={busy}>清理全部</button></div>
+          <span>最近打开</span><small>项目管理请前往“我的资产”</small></div>
           {recent.slice(0, 6).map((task) => <div className="recent-row" key={task.task_id}><button
             onClick={() => openRecent(task)} disabled={busy || !task.snapshot_id}>
             <span><strong>{task.display_name}</strong><small>{task.source_kind === "zip" ? "ZIP" : "目录"}</small></span>
             <b>{task.status === "waiting_for_user" ? "待确认" : "已完成"}</b>
-          </button><button className="delete-task" disabled={busy} onClick={() => removeTask(task)}
-            aria-label={`删除 ${task.display_name}`}>×</button></div>)}
+          </button></div>)}
         </div>}
       </div>
 
@@ -188,8 +176,13 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
           <section className="fact-panel"><div className="section-title"><span>已提取事实</span>
             <em>{result.inspection.facts.length}</em></div>
             {result.inspection.facts.slice(0, 10).map((fact) => <div className="fact-row" key={fact.key}>
-              <span>{fact.key}</span><strong>{displayValue(fact.value)}</strong>
-              <small>{Math.round(fact.confidence * 100)}%</small></div>)}
+              <span>{fact.key}</span><strong title={displayValue(fact.value)}>{displayValue(fact.value)}</strong>
+              <div><small>{Math.round(fact.confidence * 100)}%</small>
+                {(Array.isArray(fact.value) || Boolean(fact.value && typeof fact.value === "object")) && <button
+                  onClick={() => setExpandedFacts((current) => { const next = new Set(current);
+                    next.has(fact.key) ? next.delete(fact.key) : next.add(fact.key); return next; })}>
+                  {expandedFacts.has(fact.key) ? "收起" : "详情"}</button>}</div>
+              {expandedFacts.has(fact.key) && <pre>{JSON.stringify(fact.value, null, 2)}</pre>}</div>)}
           </section>
           <section className="confirmation-panel"><div className="section-title"><span>待确认项</span>
             <em>{pending.length}</em></div>
@@ -199,11 +192,13 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
                 (candidate) => <button key={String(candidate)} onClick={() => setAnswers(
                   (current) => ({ ...current, [item.field_key]: String(candidate) })
                 )}>{String(candidate)}</button>)}</div>}
-              <div className="confirmation-form"><input value={answers[item.field_key] ?? ""}
+              <div className="confirmation-form"><input value={answers[item.field_key] ?? (
+                item.field_key === "project.version" ? "V1.0" : "")}
                 onChange={(event) => setAnswers((current) => ({
                   ...current, [item.field_key]: event.target.value,
-                }))} placeholder="输入确认值" />
-                <button disabled={busy || !answers[item.field_key]?.trim()}
+                }))} placeholder={item.field_key === "project.version" ? "默认 V1.0" : "输入确认值"} />
+                <button disabled={busy || !(answers[item.field_key] ?? (
+                  item.field_key === "project.version" ? "V1.0" : "")).trim()}
                   onClick={() => confirm(item.field_key)}>确认</button></div>
             </div>) : <div className="all-clear">无需人工补充，项目元数据已确定。</div>}
           </section>

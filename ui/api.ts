@@ -7,26 +7,6 @@ export type SidecarConnection = {
   version: string;
 };
 
-export type AssetRevision = {
-  revision_id: string;
-  version: number;
-  status: "clean" | "conflicted";
-  edit_source: "manual" | "ai";
-  conflict_count: number;
-  created_at: string;
-  operation_count?: number;
-};
-
-export type DiagramAsset = {
-  diagram_key: "system_architecture" | "core_business_flow";
-  title: string;
-  revision_count: number;
-  latest_revision: AssetRevision | null;
-  editable: boolean;
-};
-
-export type WorkspaceSnapshot = { task_id: string; assets: DiagramAsset[] };
-
 export type FactItem = { key: string; value: unknown; status: string; confidence: number };
 export type ConfirmationItem = {
   field_key: string; question: string; candidates: unknown[]; required: boolean; status: string;
@@ -53,10 +33,24 @@ export type ModelConfig = { id: string; name: string;
   protocol_id: "openai_compatible" | "anthropic" | "ollama"; base_url: string;
   model_name: string; provider_id: string; has_credential: boolean; enabled: boolean;
   endpoint_mode: "messages" | "chat_completions" | "responses" | "ollama_chat" | null;
+  supports_vision: boolean | null; vision_verified: boolean;
+  max_concurrency: number;
   verified_at: string | null; created_at: string; updated_at: string };
+export type FormalFigureAiPatchResult = { figure_key: string; edit_source: "ai"; xml: string;
+  operations: Array<{ action: string; target: string; payload: Record<string, unknown> }>;
+  elapsed_ms: number; model_name: string; model_config_id: string; prompt_version: string;
+  context_cache_hit: boolean };
+export type FormalFigureAiStreamEvent =
+  | { type: "phase"; phase: string; message: string }
+  | { type: "delta"; text: string }
+  | { type: "heartbeat" }
+  | { type: "result"; result: FormalFigureAiPatchResult }
+  | { type: "error"; message: string };
 export type AppSettings = { manual_model_id: string | null; diagram_model_id: string | null;
+  vision_model_id: string | null;
   temperature: number; max_output_tokens: number;
-  source_strategy: "standard" | "relaxed" | "maximum"; auto_preview: boolean };
+  source_strategy: "standard" | "relaxed" | "maximum"; auto_preview: boolean;
+  generation_concurrency: number; document_style_prompt: string; diagram_style_prompt: string };
 export type Inspection = ProjectScanResult["inspection"];
 export type SourceMaterialsSnapshot = {
   task: { id: string; status: string; current_stage_key: string; safe_error_message?: string | null };
@@ -70,11 +64,17 @@ export type SourceMaterialsSnapshot = {
   code_preview: null | { version: number; created_at: string; summary: {
     available_visual_lines: number; used_visual_lines: number; required_visual_lines: number;
     generated_pages: number; target_pages: number; sufficient: boolean; selected_files: number;
-    included_files: number; truncated: boolean;
+    included_files: number; available_buckets?: string[]; included_buckets?: string[];
+    included_languages?: string[]; truncated: boolean;
   } };
   source_document: null | { version: number; created_at: string; artifact_relative_path: string;
     sha256: string; integrity: { status: "verified" | "missing" | "mismatch" | "invalid_path";
       size_bytes: number | null };
+    quality: { status: "passed" | "failed" | "not_checked" | "outdated"; passed: boolean | null;
+      checked_at: string | null; summary: null | { rendered_pages: number;
+        minimum_body_fill_ratio: number; underfilled_pages: number[]; [key: string]: unknown };
+      qa_version: number | null; policy_version: string | null; current_policy: boolean;
+      generator_version: string | null; current_generator: boolean };
     summary: { total_pages_expected: number; code_pages: number; code_lines: number } };
   actions: { source_plan: boolean; code_preview: boolean; source_docx: boolean };
   blockers: string[];
@@ -83,6 +83,10 @@ export type CodePagePreview = { version: number; total_pages: number; pages: Arr
   page_number: number; line_count: number; entries: Array<{ kind: string; path: string | null;
     source_line: number | null; continuation: boolean; text: string }>;
 }> };
+export type SourceDocumentPreview = { version: number; qa_version: number;
+  total_pages: number; quality_status: "passed" | "failed" | "outdated"; pages: number[] };
+export type SourceDocumentQaCapability = { available: boolean; renderer: "libreoffice";
+  missing: string[]; message: string };
 export type ManualWorkspaceSnapshot = {
   task: { id: string; status: string; current_stage_key: string };
   manual_plan: null | { version: number; summary: { section_count: number; ready_sections: number;
@@ -104,10 +108,15 @@ export type ManualWorkspaceSnapshot = {
 export type FormalManualDocument = {
   id: string; job_id: string; task_id: string; version: number;
   status: "assembled" | "qa_passed" | "qa_failed";
+  document_kind: "review_checkpoint" | "formal_candidate" | "final_document";
   project_name: string; project_version: string; filename: string;
   docx_relative_path: string; sha256: string; created_at: string;
   integrity: { status: "verified" | "missing" | "mismatch"; size_bytes: number | null };
   freshness: { status: "current" | "outdated"; latest_asset_update: string | null };
+  quality: { status: "passed" | "failed" | "not_checked" | "outdated";
+    passed: boolean | null; qa_version: number | null; policy_version: string | null;
+    current_policy: boolean; generator_version: string | null; current_generator: boolean;
+    checked_at: string | null };
   qa: { section_count: number; figure_count: number; screenshot_count: number;
     warning_count: number; warnings: string[]; design_preset: string; named_override: string;
     quality?: FormalManualQa["summary"] };
@@ -115,10 +124,12 @@ export type FormalManualDocument = {
 
 export type FormalManualQa = {
   id: string; job_id: string; document_artifact_id: string; document_version: number;
-  qa_version: number; policy_version: string; renderer_kind: "deterministic_companion";
+  qa_version: number; policy_version: string;
+  renderer_kind: "deterministic_companion" | "libreoffice_word";
   passed: boolean; page_count: number; created_at: string;
   checks: Array<{ key: string; passed: boolean; severity: "blocker" | "warning";
     expected: unknown; actual: unknown; message: string }>;
+  decisions: Array<{ check_key: string; action: "deferred"; reason: string; created_at: string }>;
   summary: { passed: boolean; rendered_pages: number; warning_count: number;
     blocker_count: number; underfilled_pages: number[]; renderer_kind: string;
     renderer_disclosure: string; [key: string]: unknown };
@@ -126,12 +137,58 @@ export type FormalManualQa = {
 
 export type FormalManualJob = {
   id: string; task_id: string; model_config_id: string; version: number;
-  status: string; current_step: string; progress: { completed: number; total: number; percent: number };
-  steps: Array<{ key: string; status: string; attempt: number; summary: Record<string, unknown> }>;
+  status: string; current_step: string; progress: { completed: number; total: number; percent: number;
+    stage_completed?: number; stage_total?: number; current_title?: string;
+    running_nodes?: number; queued_nodes?: number; node_status_counts?: Record<string, number> };
+  created_at: string; started_at: string | null; finished_at: string | null;
+  updated_at: string; safe_error_message: string | null;
+  steps: Array<{ key: string; status: string; attempt: number; summary: Record<string, unknown>;
+    started_at: string | null; finished_at: string | null; safe_error_message: string | null }>;
+  nodes: Array<{ id: string; key: string; stage_key: string; kind: string; title: string;
+    status: string; dependencies: string[]; attempt: number; max_attempts: number;
+    model_config_id: string | null; input: Record<string, unknown>; output: Record<string, unknown>;
+    next_action: string | null; duration_ms: number | null;
+    error_category: string | null; safe_error_message: string | null; started_at: string | null;
+    heartbeat_at: string | null; finished_at: string | null; created_at: string; updated_at: string }>;
 };
+
+export type QuickStartStage = {
+  key: string; title: string; description: string;
+  status: "pending" | "running" | "completed" | "failed";
+  attempt: number; message: string; started_at: string | null; finished_at: string | null;
+  output?: Record<string, unknown>;
+  events?: Array<{ at: string; status: string; message: string; attempt: number }>;
+};
+
+export type QuickStartRun = {
+  id: string; task_id: string | null; manual_job_id: string | null;
+  status: "queued" | "running" | "waiting_for_user" | "failed" | "completed";
+  current_stage: string; safe_error_message: string | null;
+  created_at: string; started_at: string | null; finished_at: string | null; updated_at: string;
+  config: { software_name: string; version: string; project_path: string;
+    screenshot_folder: string; concurrency: number; retry_limit: number };
+  stages: QuickStartStage[];
+  outputs: Record<string, unknown>;
+  manual_job: FormalManualJob | null;
+};
+
+export type QuickStartConfig = {
+  project_path: string; software_name: string; version: string; screenshot_folder: string;
+  manual_model_id: string; diagram_model_id: string; vision_model_id: string;
+  source_strategy: "standard" | "relaxed" | "maximum"; concurrency: number;
+  retry_limit: number; recursive_screenshots: boolean; finalize_with_warnings: boolean;
+  sensitive_confirmed: boolean; auto_adopt_confirmed: boolean;
+};
+
+export type ManualExportResult = { destinationPath: string; sizeBytes: number; sha256: string;
+  verified: boolean; receiptRecorded: boolean };
+export type ManualExportRecord = { id: string; job_id: string; document_version: number;
+  export_kind: "review" | "formal"; destination_path: string; size_bytes: number;
+  sha256: string; verified: boolean; created_at: string };
 
 type ManualBlockTrace = { evidence_refs?: string[]; inference?: boolean };
 export type ManualSectionBlock = ({ type: "paragraph"; text: string } |
+  { type: "subheading"; title: string } |
   { type: "list"; lead: string; items: string[] } |
   { type: "table"; title: string; headers: string[]; rows: string[][] } |
   { type: "figure_request"; figure_key: string; figure_type?: string;
@@ -156,7 +213,8 @@ export type FormalManualGenerationResult = {
 
 export type FormalManualFigure = {
   id: string; figure_key: string; section_key: string; figure_type: string;
-  title: string; status: string; version: number; updated_at: string;
+  title: string; status: string; available: boolean; editor_managed?: boolean;
+  error?: string; version: number; updated_at: string;
   semantic: { figure_key: string; title: string; figure_type: string; layout: string;
     nodes: Array<{ key: string; label: string; display_label?: string; kind: string;
       layer: number; visual_override?: Record<string, Record<string, unknown>> }>;
@@ -184,134 +242,148 @@ export type FormalScreenshotRevision = FormalManualScreenshot & {
   change_summary: Record<string, unknown>;
 };
 
+export type ScreenshotInterpretation = {
+  page_title: string; page_type: string; purpose: string; target_roles: string[];
+  entry_conditions: string[]; visible_regions: string[]; key_controls: string[];
+  workflow_steps: string[]; success_state: string; failure_and_recovery: string;
+  related_backend_actions: string[]; route_guess: string; related_evidence_refs: string[];
+  suggested_group: string; suggested_order: number; suggested_caption: string;
+  confidence: number; warnings: string[];
+};
+
+export type ProjectScreenshotAsset = {
+  id: string; task_id: string; asset_key: string; source: "user" | "clipboard" | "folder" | "automated";
+  title: string; image_relative_path: string; width: number; height: number; image_format: string;
+  sha256: string; version: number; revision_id: string;
+  analysis_status: "pending" | "queued" | "running" | "completed" | "failed" | "outdated";
+  review_status: "pending" | "reviewed" | "rejected";
+  adoption_status: "pending" | "adopted" | "excluded";
+  group_key: string; group_title: string; sort_order: number;
+  sensitive_status: "unreviewed" | "confirmed_safe" | "contains_sensitive";
+  failure_reason: string | null; interpretation: ScreenshotInterpretation | null;
+  interpretation_id: string | null; interpretation_version: number | null;
+  interpretation_reviewed: boolean; interpretation_model: string | null;
+  interpretation_elapsed_ms: number | null; interpretation_attempts: number | null;
+  archived: boolean; created_at: string; updated_at: string;
+};
+
+export type ScreenshotProjectProfile = { id: string; task_id: string; version: number;
+  origin: "research" | "user"; profile: Record<string, unknown>; fingerprint: string; created_at: string };
+
+export type ScreenshotEvidenceWorkspace = {
+  profile: ScreenshotProjectProfile; assets: ProjectScreenshotAsset[];
+  vision_models: Array<{ id: string; name: string; model_name: string; status: "supported";
+    confirmed: boolean; message: string }>;
+  batches: Array<{ id: string; source: string; status: string; input_count: number;
+    imported_count: number; warning_count: number; failure_count: number; summary: Record<string, unknown> }>;
+  ui_evidence_decision: { id?: string; task_id: string; version: number;
+    decision: "waiting_for_screenshots" | "source_inferred" | "not_applicable";
+    reason: string; created_at: string | null };
+  privacy_notice: string;
+};
+
+export type ScreenshotEvidenceHistory = {
+  asset_id: string;
+  image_revisions: Array<{ id: string; version: number; title: string;
+    width: number; height: number; image_format: string; sha256: string;
+    edit_source: "import" | "manual" | "replacement" | "rollback" | "legacy_migration";
+    created_at: string }>;
+  interpretation_revisions: Array<{ id: string; version: number; asset_revision_id: string;
+    model_name: string; status: "completed" | "failed"; origin: "ai" | "user" | "legacy_migration";
+    reviewed: number; attempt_count: number; elapsed_ms: number; failure_reason: string | null;
+    interpretation: ScreenshotInterpretation; created_at: string }>;
+};
+
+export type CaptureLaunchCandidate = {
+  id: string; kind: "node_script" | "maven_spring_boot" | "service_bundle";
+  title: string; program: string; args: string[];
+  working_directory: string; command_preview: string; script_preview: string; default_url: string;
+  services: Array<{ program: string; args: string[]; working_directory: string;
+    command_preview: string }>;
+};
+
+export type CaptureLaunchPlan = {
+  job_id: string; project_root: string; candidates: CaptureLaunchCandidate[];
+  routes: Array<{ path: string; title: string; source: string; name: string; component: string;
+    requires_auth: boolean; section_key: string;
+    relevance: "document_evidence" | "document_keyword" | "route_only"; reason: string;
+    matched_evidence_refs: string[]; score: number }>;
+  policy: { requires_explicit_authorization: boolean; allows_arbitrary_commands: boolean;
+    allows_external_urls: boolean; allowed_hosts: string[]; credentials_are_injected: boolean;
+    process_tree_is_stopped_by_application: boolean; multi_service_launch_supported: boolean };
+};
+
+export type ProjectCaptureStatus = {
+  jobId: string; status: "starting" | "running" | "partial_failure" | "exited" | "stopped"; pid: number;
+  targetUrl: string; commandPreview: string; elapsedSeconds: number; logTail: string;
+  exitCode: number | null;
+};
+
+export type ProjectPageCaptureResult = {
+  path: string; url: string; width: number; height: number; browser: string;
+};
+
 export type FormalFigureRevision = {
   revision_id: string; version: number; edit_source: "ai_generation" | "manual" | "ai";
-  parent_revision_id: string | null; operations: OverlayOperation[]; operation_count: number;
+  parent_revision_id: string | null;
+  operations: Array<{ action: string; target: string; payload: Record<string, unknown> }>;
+  operation_count: number;
   semantic_fingerprint: string; status: "clean" | "conflicted";
   model_name: string; elapsed_ms: number; created_at: string;
 };
 
-export type OverlayOperation = {
-  action: "node.move" | "node.resize" | "node.style" | "node.label" | "node.hide" |
-    "edge.route" | "edge.style" | "edge.label";
-  target: string;
-  payload: Record<string, unknown>;
-  expected_target_fingerprint?: string;
-};
-
-export type RevisionDetail = {
-  revision_id: string;
-  operations: OverlayOperation[];
-};
-
 export async function connectSidecar(): Promise<SidecarConnection> {
+  const devMode = (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV;
+  if (devMode && typeof window !== "undefined") {
+    const query = new URLSearchParams(window.location.search);
+    const testBaseUrl = query.get("sidecarBaseUrl");
+    const testToken = query.get("sidecarToken");
+    if (testBaseUrl || testToken) {
+      if (!testBaseUrl || !testToken || testToken.length < 32) {
+        throw new Error("开发测试连接参数不完整");
+      }
+      const parsed = new URL(testBaseUrl);
+      if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" ||
+          parsed.username || parsed.password || parsed.pathname !== "/") {
+        throw new Error("开发测试连接仅允许 127.0.0.1 HTTP 根地址");
+      }
+      return { baseUrl: parsed.origin, sessionToken: testToken, pid: 0, version: "dev-test" };
+    }
+  }
   return invoke<SidecarConnection>("start_sidecar");
 }
 
 async function localFetch(connection: SidecarConnection, path: string, init?: RequestInit) {
-  const execute = () => fetch(`${connection.baseUrl}${path}`, init);
+  const execute = () => {
+    const headers = new Headers(init?.headers);
+    if (headers.has("X-Session-Token")) {
+      headers.set("X-Session-Token", connection.sessionToken);
+    }
+    return fetch(`${connection.baseUrl}${path}`, { ...init, headers });
+  };
   try { return await execute(); }
   catch (error) {
     if (!(error instanceof TypeError)) throw error;
-    const refreshed = await connectSidecar();
-    Object.assign(connection, refreshed);
-    return execute();
+    try {
+      const refreshed = await connectSidecar();
+      Object.assign(connection, refreshed);
+      return await execute();
+    } catch (retryError) {
+      const detail = retryError instanceof Error ? retryError.message : String(retryError);
+      throw new Error(`本地服务连接中断，自动重连失败：${detail}`);
+    }
   }
-}
-
-export async function loadWorkspace(
-  connection: SidecarConnection,
-  taskId: string,
-): Promise<WorkspaceSnapshot> {
-  const response = await fetch(
-    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/diagram-assets`,
-    { headers: { "X-Session-Token": connection.sessionToken } },
-  );
-  if (!response.ok) throw new Error(`工作台加载失败 (${response.status})`);
-  return response.json() as Promise<WorkspaceSnapshot>;
 }
 
 async function requireJson<T>(response: Response, fallback: string): Promise<T> {
   if (response.ok) return response.json() as Promise<T>;
-  const payload = await response.json().catch(() => null) as
-    { error?: { message?: string } } | null;
-  throw new Error(payload?.error?.message ?? `${fallback} (${response.status})`);
-}
-
-export async function loadPreview(
-  connection: SidecarConnection,
-  revisionId: string,
-): Promise<string> {
-  const response = await fetch(
-    `${connection.baseUrl}/api/v1/diagram-revisions/${revisionId}/preview.svg`,
-    { headers: { "X-Session-Token": connection.sessionToken } },
-  );
-  if (!response.ok) throw new Error(`预览加载失败 (${response.status})`);
-  return response.text();
-}
-
-export async function loadRevision(
-  connection: SidecarConnection,
-  revisionId: string,
-): Promise<RevisionDetail> {
-  const response = await fetch(
-    `${connection.baseUrl}/api/v1/diagram-revisions/${revisionId}`,
-    { headers: { "X-Session-Token": connection.sessionToken } },
-  );
-  return requireJson<RevisionDetail>(response, "修订读取失败");
-}
-
-export async function saveRevision(
-  connection: SidecarConnection,
-  taskId: string,
-  diagramKey: DiagramAsset["diagram_key"],
-  operations: OverlayOperation[],
-): Promise<AssetRevision> {
-  const response = await fetch(
-    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/diagram-assets/${diagramKey}/revisions`,
-    {
-      method: "POST",
-      headers: {
-        "X-Session-Token": connection.sessionToken,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ edit_source: "manual", operations }),
-    },
-  );
-  return requireJson<AssetRevision>(response, "修订保存失败");
-}
-
-export async function listRevisions(
-  connection: SidecarConnection,
-  taskId: string,
-  diagramKey: DiagramAsset["diagram_key"],
-): Promise<AssetRevision[]> {
-  const response = await fetch(
-    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/diagram-assets/${diagramKey}/revisions`,
-    { headers: { "X-Session-Token": connection.sessionToken } },
-  );
-  const payload = await requireJson<{ items: AssetRevision[] }>(response, "历史版本读取失败");
-  return payload.items;
-}
-
-export async function rollbackRevision(
-  connection: SidecarConnection,
-  taskId: string,
-  diagramKey: DiagramAsset["diagram_key"],
-  version: number,
-): Promise<AssetRevision> {
-  const response = await fetch(
-    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/diagram-assets/${diagramKey}/rollback`,
-    {
-      method: "POST",
-      headers: {
-        "X-Session-Token": connection.sessionToken,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ version }),
-    },
-  );
-  return requireJson<AssetRevision>(response, "版本恢复失败");
+  const raw = await response.text().catch(() => "");
+  type ErrorPayload = { error?: { message?: string }; detail?: string };
+  let payload: ErrorPayload | null = null;
+  try { payload = raw ? JSON.parse(raw) as ErrorPayload : null; } catch { /* plain-text response */ }
+  const detail = payload?.error?.message ?? payload?.detail ?? raw.trim();
+  throw new Error(detail && detail !== "Not Found"
+    ? `${fallback}：${detail}` : `${fallback} (${response.status})`);
 }
 
 export async function scanProject(
@@ -349,11 +421,14 @@ export async function listRecentTasks(
 }
 
 export async function deleteTask(connection: SidecarConnection, taskId: string): Promise<void> {
-  const response = await fetch(
-    `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}`,
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}`,
     { method: "DELETE", headers: { "X-Session-Token": connection.sessionToken } },
   );
-  if (!response.ok) throw new Error(`任务删除失败 (${response.status})`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+    throw new Error(payload?.error?.message || `任务删除失败 (${response.status})`);
+  }
 }
 
 export async function loadInspection(
@@ -420,6 +495,47 @@ export async function loadCodePagePreview(
   return requireJson(response, "分页内容读取失败");
 }
 
+export async function loadSourceDocumentPreview(
+  connection: SidecarConnection, taskId: string,
+): Promise<SourceDocumentPreview> {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/source-docx/preview`,
+    { headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson(response, "真实 DOCX 预览读取失败");
+}
+
+export async function loadSourceDocumentPreviewPage(
+  connection: SidecarConnection, taskId: string, pageNumber: number,
+): Promise<string> {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/source-docx/preview/pages/${pageNumber}.png`,
+    { headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  if (!response.ok) throw new Error(`真实 DOCX 预览页读取失败 (${response.status})`);
+  return URL.createObjectURL(await response.blob());
+}
+
+export async function loadSourceDocumentQaCapability(
+  connection: SidecarConnection, taskId: string,
+): Promise<SourceDocumentQaCapability> {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/source-docx/qa-capability`,
+    { headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson(response, "逐页质检能力读取失败");
+}
+
+export async function runSourceDocumentQa(
+  connection: SidecarConnection, taskId: string,
+): Promise<SourceMaterialsSnapshot> {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/source-materials/source-docx/qa`,
+    { method: "POST", headers: { "X-Session-Token": connection.sessionToken } },
+  );
+  return requireJson(response, "源代码文档逐页质检失败");
+}
+
 export async function revealSourceDocument(taskId: string): Promise<void> {
   await invoke("reveal_source_document", { taskId });
 }
@@ -441,7 +557,7 @@ export async function listModelConfigs(connection: SidecarConnection): Promise<M
 
 export async function saveModelConfig(connection: SidecarConnection, config: {
   id: string; name: string; protocol_id: ModelConfig["protocol_id"];
-  base_url: string; model_name: string; credential_ref: string | null;
+  base_url: string; model_name: string; credential_ref: string | null; max_concurrency: number;
 }): Promise<ModelConfig> {
   const response = await localFetch(connection, "/api/v1/model-configs", { method: "POST",
     headers: { "X-Session-Token": connection.sessionToken, "Content-Type": "application/json" },
@@ -454,6 +570,17 @@ export async function markModelVerified(connection: SidecarConnection, id: strin
     method: "POST", headers: { "X-Session-Token": connection.sessionToken },
   });
   return requireJson<ModelConfig>(response, "模型验证状态保存失败");
+}
+
+export async function saveModelVisionCapability(connection: SidecarConnection, id: string,
+  supportsVision: boolean) {
+  const response = await localFetch(connection,
+    `/api/v1/model-configs/${encodeURIComponent(id)}/vision-capability`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" },
+      body: JSON.stringify({ supports_vision: supportsVision }),
+    });
+  return requireJson<ModelConfig>(response, "模型图片能力保存失败");
 }
 
 export async function deleteModelConfig(connection: SidecarConnection, id: string) {
@@ -513,6 +640,47 @@ export async function saveAppSettings(connection: SidecarConnection, settings: A
   return requireJson<AppSettings>(response, "应用设置保存失败");
 }
 
+export async function listQuickStartRuns(connection: SidecarConnection): Promise<QuickStartRun[]> {
+  const response = await localFetch(connection, "/api/v1/quick-start?limit=20", {
+    headers: { "X-Session-Token": connection.sessionToken },
+  });
+  return (await requireJson<{ items: QuickStartRun[] }>(response,
+    "快速任务读取失败")).items;
+}
+
+export async function loadQuickStartRun(connection: SidecarConnection, runId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/quick-start/${encodeURIComponent(runId)}`, {
+      headers: { "X-Session-Token": connection.sessionToken },
+    });
+  return requireJson<QuickStartRun>(response, "快速任务进度读取失败");
+}
+
+export async function createQuickStartRun(connection: SidecarConnection,
+  config: QuickStartConfig) {
+  const response = await localFetch(connection, "/api/v1/quick-start", {
+    method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+      "Content-Type": "application/json" }, body: JSON.stringify(config),
+  });
+  return requireJson<QuickStartRun>(response, "快速任务启动失败");
+}
+
+export async function retryQuickStartRun(connection: SidecarConnection, runId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/quick-start/${encodeURIComponent(runId)}/retry`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken },
+    });
+  return requireJson<QuickStartRun>(response, "快速任务重试失败");
+}
+
+export async function discardQuickStartRun(connection: SidecarConnection, runId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/quick-start/${encodeURIComponent(runId)}`, {
+      method: "DELETE", headers: { "X-Session-Token": connection.sessionToken },
+    });
+  if (!response.ok) await requireJson(response, "快速任务清空失败");
+}
+
 export async function loadManualWorkspace(connection: SidecarConnection, taskId: string) {
   const response = await fetch(
     `${connection.baseUrl}/api/v1/tasks/${encodeURIComponent(taskId)}/manual-workspace`,
@@ -547,7 +715,7 @@ export async function generateFormalManual(connection: SidecarConnection, taskId
       method: "POST", headers: { "X-Session-Token": connection.sessionToken,
         "Content-Type": "application/json" }, body: JSON.stringify({ model_config_id: modelConfigId }),
     });
-  return requireJson<FormalManualGenerationResult>(response, "正式说明书生成失败");
+  return requireJson<FormalManualJob>(response, "正式说明书生成失败");
 }
 
 export async function listFormalManualJobs(connection: SidecarConnection, taskId: string) {
@@ -609,6 +777,19 @@ export async function assembleFormalManualDocument(connection: SidecarConnection
   return requireJson<FormalManualDocument>(response, "修订版 Word 装配失败");
 }
 
+export async function finalizeFormalManualDocument(connection: SidecarConnection, jobId: string,
+  version: number) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents/${version}/finalize`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken },
+    });
+  if (response.status === 404) {
+    throw new Error("终稿接口未加载：当前本地服务仍是旧版本。请完全退出并重新启动开发版后再试；审阅稿不会丢失。");
+  }
+  return requireJson<{ document: FormalManualDocument; qa_run: FormalManualQa }>(
+    response, "终稿生成失败");
+}
+
 export async function generateFormalManualFigures(connection: SidecarConnection, jobId: string) {
   const response = await localFetch(connection,
     `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures`, {
@@ -626,6 +807,15 @@ export async function listFormalManualFigures(connection: SidecarConnection, job
     "正式图表读取失败")).items;
 }
 
+export async function regenerateFormalManualFigure(connection: SidecarConnection, jobId: string,
+  figureKey: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}/regenerate`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken },
+    });
+  return requireJson<FormalManualFigure>(response, "图表重新生成失败");
+}
+
 export async function loadFormalFigureAsset(connection: SidecarConnection, jobId: string,
   figureKey: string, format: "drawio" | "svg" | "png"): Promise<string> {
   const response = await localFetch(connection,
@@ -633,6 +823,17 @@ export async function loadFormalFigureAsset(connection: SidecarConnection, jobId
     { headers: { "X-Session-Token": connection.sessionToken } });
   if (!response.ok) throw new Error(`图表 ${format.toUpperCase()} 读取失败 (${response.status})`);
   return format === "png" ? URL.createObjectURL(await response.blob()) : response.text();
+}
+
+export async function exportFormalFigureAsset(jobId: string, figureKey: string,
+  format: "drawio" | "svg" | "png", destination: string): Promise<void> {
+  await invoke("export_manual_figure_asset", {
+    jobId, figureKey, assetFormat: format, destination,
+  });
+}
+
+export async function revealExportedAsset(path: string): Promise<void> {
+  await invoke("reveal_exported_asset", { path });
 }
 
 export async function listFormalFigureRevisions(connection: SidecarConnection, jobId: string,
@@ -644,27 +845,63 @@ export async function listFormalFigureRevisions(connection: SidecarConnection, j
     "图表修订历史读取失败")).items;
 }
 
-export async function createFormalFigureRevision(connection: SidecarConnection, jobId: string,
-  figureKey: string, operations: OverlayOperation[], editSource: "manual" | "ai" = "manual") {
+export async function saveFormalFigureEditorRevision(connection: SidecarConnection, jobId: string,
+  figureKey: string, payload: { xml: string; svg: string; png: string }) {
   const response = await localFetch(connection,
-    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}/revisions`, {
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}/editor-revision`, {
       method: "POST", headers: { "X-Session-Token": connection.sessionToken,
-        "Content-Type": "application/json" },
-      body: JSON.stringify({ edit_source: editSource, operations }),
+        "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
-  return requireJson<{ revision_id: string; version: number; status: string }>(
-    response, "图表修改保存失败");
+  return requireJson<{ revision_id: string; version: number; editor_managed: true }>(
+    response, "Draw.io 完整编辑结果保存失败");
 }
 
-export async function previewFormalFigureAiEdit(connection: SidecarConnection, jobId: string,
-  figureKey: string, instruction: string) {
+export async function patchFormalFigureWithAi(connection: SidecarConnection, jobId: string,
+  figureKey: string, payload: { instruction: string; xml: string; model_config_id?: string }) {
   const response = await localFetch(connection,
-    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}/ai-preview`, {
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}/ai-patch`, {
       method: "POST", headers: { "X-Session-Token": connection.sessionToken,
-        "Content-Type": "application/json" }, body: JSON.stringify({ instruction }),
+        "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
-  return requireJson<{ figure_key: string; edit_source: "ai"; operations: OverlayOperation[];
-    preview_svg: string; elapsed_ms: number; model_name: string }>(response, "AI 图表修改预览失败");
+  return requireJson<FormalFigureAiPatchResult>(response, "AI 图表修改失败");
+}
+
+export async function streamFormalFigureAiPatch(connection: SidecarConnection, jobId: string,
+  figureKey: string, payload: { instruction: string; xml: string; model_config_id: string },
+  onEvent: (event: FormalFigureAiStreamEvent) => void): Promise<FormalFigureAiPatchResult> {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/figures/${encodeURIComponent(figureKey)}/ai-patch-stream`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+  if (!response.ok) {
+    let message = `AI 图表修改失败 (${response.status})`;
+    try { message = (await response.json()).error?.message || message; } catch { /* stable fallback */ }
+    throw new Error(message);
+  }
+  if (!response.body) throw new Error("当前运行环境不支持流式响应");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: FormalFigureAiPatchResult | null = null;
+  const consume = (line: string) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line) as FormalFigureAiStreamEvent;
+    onEvent(event);
+    if (event.type === "error") throw new Error(event.message);
+    if (event.type === "result") result = event.result;
+  };
+  while (true) {
+    const chunk = await reader.read();
+    buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) consume(line);
+    if (chunk.done) break;
+  }
+  if (buffer.trim()) consume(buffer);
+  if (!result) throw new Error("模型流已结束，但没有返回可应用的 XML 修改");
+  return result;
 }
 
 export async function rollbackFormalFigure(connection: SidecarConnection, jobId: string,
@@ -686,6 +923,199 @@ export async function listFormalScreenshots(connection: SidecarConnection, jobId
     "截图资产读取失败")).items;
 }
 
+export async function loadScreenshotEvidenceWorkspace(connection: SidecarConnection,
+  taskId: string, includeArchived = false) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/workspace?include_archived=${includeArchived}`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return requireJson<ScreenshotEvidenceWorkspace>(response, "截图证据工作台读取失败");
+}
+
+export async function saveScreenshotProjectProfile(connection: SidecarConnection,
+  taskId: string, profile: Record<string, unknown>) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/profile`, {
+      method: "PUT", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ profile }),
+    });
+  return requireJson<ScreenshotProjectProfile>(response, "项目概要保存失败");
+}
+
+export async function saveUiEvidenceDecision(connection: SidecarConnection, taskId: string,
+  decision: ScreenshotEvidenceWorkspace["ui_evidence_decision"]["decision"], reason: string) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/ui-evidence-decision`, {
+      method: "PUT", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ decision, reason }),
+    });
+  return requireJson<ScreenshotEvidenceWorkspace["ui_evidence_decision"]>(
+    response, "用户界面证据决策保存失败");
+}
+
+export async function importScreenshotEvidenceBatch(connection: SidecarConnection,
+  taskId: string, paths: string[], source: "user" | "folder" | "automated",
+  jobId?: string) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/import-batch`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ paths, source, job_id: jobId || null }),
+    });
+  return requireJson<{ id: string; status: string; input_count: number; imported_count: number;
+    warning_count: number; failure_count: number; results: unknown[] }>(response, "截图批量导入失败");
+}
+
+export async function importScreenshotEvidenceFolder(connection: SidecarConnection,
+  taskId: string, path: string, recursive: boolean, jobId?: string) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/import-folder`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ path, recursive, job_id: jobId || null }),
+    });
+  return requireJson<{ status: string; input_count: number; imported_count: number;
+    warning_count: number; failure_count: number }>(response, "截图文件夹导入失败");
+}
+
+export async function importScreenshotClipboard(connection: SidecarConnection,
+  taskId: string, dataBase64: string, filename: string, jobId?: string) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/clipboard`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ data_base64: dataBase64,
+          filename, job_id: jobId || null }),
+    });
+  return requireJson<{ status: string; imported_count: number; warning_count: number;
+    failure_count: number }>(response, "剪贴板截图导入失败");
+}
+
+export async function analyzeScreenshotEvidence(connection: SidecarConnection,
+  taskId: string, assetIds: string[], modelConfigId: string, jobId?: string) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/analyze`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ asset_ids: assetIds,
+          model_config_id: modelConfigId, job_id: jobId || null }),
+    });
+  return requireJson<{ status: "queued"; asset_ids: string[]; privacy_notice_shown: boolean }>(
+    response, "截图分析排队失败");
+}
+
+export async function retryScreenshotAnalysisNode(connection: SidecarConnection,
+  jobId: string, nodeKey: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/retry-analysis`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ node_key: nodeKey }),
+    });
+  return requireJson<{ status: "queued"; asset_id: string; model_config_id: string }>(
+    response, "截图分析重试排队失败");
+}
+
+export async function reviewScreenshotEvidence(connection: SidecarConnection,
+  taskId: string, assetId: string, interpretation: ScreenshotInterpretation, adopted: boolean,
+  groupTitle: string, sortOrder: number, sensitiveStatus: ProjectScreenshotAsset["sensitive_status"]) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/${encodeURIComponent(assetId)}/review`, {
+      method: "PUT", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ interpretation, adopted,
+          group_title: groupTitle, sort_order: sortOrder, sensitive_status: sensitiveStatus }),
+    });
+  return requireJson<ProjectScreenshotAsset>(response, "截图解读审核保存失败");
+}
+
+export async function replaceScreenshotEvidenceImage(connection: SidecarConnection,
+  taskId: string, assetId: string, path: string) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/${encodeURIComponent(assetId)}/image`, {
+      method: "PUT", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ path }),
+    });
+  return requireJson<ProjectScreenshotAsset>(response, "截图图片替换失败");
+}
+
+export async function loadScreenshotEvidenceHistory(connection: SidecarConnection,
+  taskId: string, assetId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/${encodeURIComponent(assetId)}/history`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return requireJson<ScreenshotEvidenceHistory>(response, "截图版本历史读取失败");
+}
+
+export async function rollbackScreenshotEvidence(connection: SidecarConnection,
+  taskId: string, assetId: string, imageVersion?: number, interpretationVersion?: number) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/${encodeURIComponent(assetId)}/rollback`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({
+          image_version: imageVersion ?? null, interpretation_version: interpretationVersion ?? null,
+        }),
+    });
+  return requireJson<ProjectScreenshotAsset>(response, "截图历史版本恢复失败");
+}
+
+export async function setScreenshotEvidenceAdoption(connection: SidecarConnection,
+  taskId: string, assetIds: string[], adopted: boolean) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/adoption`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ asset_ids: assetIds, adopted }),
+    });
+  return (await requireJson<{ items: ProjectScreenshotAsset[] }>(response,
+    "截图采用状态保存失败")).items;
+}
+
+export async function setScreenshotEvidenceAdoptionStatus(connection: SidecarConnection,
+  taskId: string, assetIds: string[], status: ProjectScreenshotAsset["adoption_status"]) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/adoption-status`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" }, body: JSON.stringify({ asset_ids: assetIds, status }),
+    });
+  return (await requireJson<{ items: ProjectScreenshotAsset[] }>(response,
+    "截图采用状态保存失败")).items;
+}
+
+export async function confirmScreenshotsAndUpdateManual(connection: SidecarConnection,
+  jobId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/confirm-and-update`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken },
+    });
+  return requireJson<{ status: "queued"; job_id: string; screenshot_count: number;
+    message: string }>(response, "确认采用并更新说明书失败");
+}
+
+export async function loadScreenshotEvidenceImage(connection: SidecarConnection,
+  taskId: string, assetId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/screenshots/${encodeURIComponent(assetId)}.png`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  if (!response.ok) throw new Error(`截图预览读取失败 (${response.status})`);
+  return URL.createObjectURL(await response.blob());
+}
+
+export async function loadCaptureLaunchPlan(connection: SidecarConnection, jobId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/launch-plan`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return requireJson<CaptureLaunchPlan>(response, "项目启动方案读取失败");
+}
+
+export async function launchCaptureProject(jobId: string, candidateId: string, targetUrl: string) {
+  return invoke<ProjectCaptureStatus>("launch_capture_project", { jobId, candidateId, targetUrl });
+}
+
+export async function readCaptureProjectStatus(jobId: string) {
+  return invoke<ProjectCaptureStatus>("capture_project_status", { jobId });
+}
+
+export async function stopCaptureProject(jobId: string) {
+  return invoke<ProjectCaptureStatus>("stop_capture_project", { jobId });
+}
+
+export async function captureProjectPage(jobId: string, targetUrl: string) {
+  return invoke<ProjectPageCaptureResult>("capture_project_page", { jobId, targetUrl });
+}
+
 export async function loadFormalScreenshotImage(connection: SidecarConnection, jobId: string,
   screenshotKey: string): Promise<string> {
   const response = await localFetch(connection,
@@ -696,12 +1126,13 @@ export async function loadFormalScreenshotImage(connection: SidecarConnection, j
 }
 
 export async function importFormalScreenshot(connection: SidecarConnection, jobId: string,
-  path: string, sectionKey: string, title: string, description: ScreenshotDescription) {
+  path: string, sectionKey: string, title: string, description: ScreenshotDescription,
+  source: "user" | "automated" = "user") {
   const response = await localFetch(connection,
     `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/screenshots/import`, {
       method: "POST", headers: { "X-Session-Token": connection.sessionToken,
         "Content-Type": "application/json" },
-      body: JSON.stringify({ path, section_key: sectionKey, title, description }),
+      body: JSON.stringify({ path, section_key: sectionKey, title, description, source }),
     });
   return requireJson<FormalManualScreenshot>(response, "截图导入失败");
 }
@@ -773,6 +1204,17 @@ export async function runFormalManualQa(connection: SidecarConnection, jobId: st
     response, "说明书逐页质量检查失败");
 }
 
+export async function deferFormalManualQaCheck(connection: SidecarConnection, jobId: string,
+  version: number, checkKey: string, reason: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/documents/${version}/qa/decisions`, {
+      method: "POST", headers: { "X-Session-Token": connection.sessionToken,
+        "Content-Type": "application/json" },
+      body: JSON.stringify({ check_key: checkKey, reason }),
+    });
+  return requireJson<FormalManualQa>(response, "质量问题留痕失败");
+}
+
 export async function loadFormalManualQaPage(connection: SidecarConnection, jobId: string,
   version: number, pageNumber: number): Promise<string> {
   const response = await localFetch(connection,
@@ -794,6 +1236,16 @@ export async function loadFormalManualImage(connection: SidecarConnection, jobId
 }
 
 export async function exportManualDocument(jobId: string, version: number,
-  destination: string): Promise<void> {
-  await invoke("export_manual_document", { jobId, version, destination });
+  destination: string, reviewDraft = false): Promise<ManualExportResult> {
+  return invoke<ManualExportResult>("export_manual_document", {
+    jobId, version, destination, reviewDraft,
+  });
+}
+
+export async function listManualExports(connection: SidecarConnection, jobId: string) {
+  const response = await localFetch(connection,
+    `/api/v1/manual-jobs/${encodeURIComponent(jobId)}/exports`,
+    { headers: { "X-Session-Token": connection.sessionToken } });
+  return (await requireJson<{ items: ManualExportRecord[] }>(response,
+    "说明书导出记录读取失败")).items;
 }

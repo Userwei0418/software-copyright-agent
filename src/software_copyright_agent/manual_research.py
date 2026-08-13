@@ -12,8 +12,8 @@ from .service import utc_now
 from .storage import Database
 
 
-MAX_SOURCE_FILES = 14
-MAX_SOURCE_CHARACTERS = 52_000
+MAX_SOURCE_FILES = 18
+MAX_SOURCE_CHARACTERS = 72_000
 MAX_FILE_CHARACTERS = 8_000
 ALLOWED_CLASSIFICATIONS = {"verified", "inference", "pending_confirmation"}
 
@@ -43,7 +43,9 @@ class ManualResearchService:
         context = self._start(job_id)
         started = time.monotonic()
         try:
+            self._update_progress(context, 0, 4, "正在整理已确认项目事实")
             project_profile, fact_refs = self._project_profile(context["task_id"])
+            self._update_progress(context, 1, 4, "正在读取代表性源码与证据定位")
             source_refs = self._source_refs(context)
             if not source_refs:
                 raise ManualResearchError("未找到可安全读取的代表性源码")
@@ -51,9 +53,14 @@ class ManualResearchService:
                 context["project_name"], project_profile, fact_refs, source_refs
             )
             api_key = self._api_key(context)
+            self._update_progress(
+                context, 2, 4,
+                "模型正在分析 {0} 个源码片段".format(len(source_refs)),
+            )
             raw = self._model_call(
                 context["model"], context["endpoint_mode"], api_key, prompt
             )
+            self._update_progress(context, 3, 4, "正在校验模型结论与证据引用")
             research = self._normalize_response(raw, fact_refs, source_refs)
             elapsed_ms = round((time.monotonic() - started) * 1000)
             return self._persist(
@@ -64,6 +71,33 @@ class ManualResearchService:
             if isinstance(error, ManualResearchError):
                 raise
             raise ManualResearchError(str(error)) from error
+
+    def _update_progress(self, context: dict, completed_items: int,
+                         total_items: int, current_title: str) -> None:
+        fraction = completed_items / max(total_items, 1)
+        progress = {
+            "completed": 0, "total": 6,
+            "percent": min(16, round(fraction / 6 * 100)),
+            "stage_completed": completed_items, "stage_total": total_items,
+            "current_title": current_title,
+        }
+        summary = {
+            "completed_items": completed_items, "total_items": total_items,
+            "current_title": current_title,
+        }
+        now = utc_now()
+        with self._database.connect() as connection:
+            connection.execute(
+                """UPDATE manual_generation_steps SET summary_json = ? WHERE id = ?""",
+                (json.dumps(summary, ensure_ascii=False, separators=(",", ":")),
+                 context["step_id"]),
+            )
+            connection.execute(
+                """UPDATE manual_generation_jobs SET progress_json = ?, updated_at = ?
+                WHERE id = ?""",
+                (json.dumps(progress, ensure_ascii=False, separators=(",", ":")),
+                 now, context["job_id"]),
+            )
 
     def latest(self, job_id: str) -> Optional[dict]:
         self._database.initialize()
@@ -87,7 +121,8 @@ class ManualResearchService:
         with self._database.connect() as connection:
             row = connection.execute(
                 """SELECT j.id job_id, j.task_id, j.model_config_id, j.status job_status,
-                ps.display_name project_name, psn.scan_root_mode, psn.scan_root_path,
+                j.version job_version, ps.display_name project_name,
+                psn.scan_root_mode, psn.scan_root_path,
                 psn.manifest_relative_path, mc.id model_id, mc.protocol_id, mc.base_url,
                 mc.model_name, mc.credential_ref, mc.settings_json
                 FROM manual_generation_jobs j
@@ -206,6 +241,7 @@ class ManualResearchService:
         if not candidates:
             manifest = task_root / PurePosixPath(context["manifest_relative_path"])
             candidates = self._manifest_candidates(manifest)
+        candidates = self._diversify_candidates(candidates)
         refs, total = [], 0
         for item in candidates:
             relative = item["relative_path"]
@@ -227,6 +263,67 @@ class ManualResearchService:
             })
             total += len(snippet["text"])
         return refs
+
+    @classmethod
+    def _diversify_candidates(cls, candidates: list) -> list:
+        """Keep AI research from being monopolized by one large backend layer.
+
+        Source-document ranking intentionally favours high-value implementation files.  A
+        manual needs a different view: entry points, UI, APIs, business logic, data and
+        configuration must all be represented.  Round-robin buckets retain the original
+        score order inside each layer while giving every detected layer a chance.
+        """
+        buckets = {key: [] for key in (
+            "entry", "ui", "api", "logic", "data", "config", "other"
+        )}
+        for item in candidates:
+            path = str(item.get("relative_path", ""))
+            lowered = path.lower()
+            name = PurePosixPath(lowered).name
+            suffix = PurePosixPath(lowered).suffix
+            if name in {"main.py", "main.ts", "main.js", "app.py", "app.ts", "app.vue",
+                        "server.py", "server.js", "application.java"}:
+                bucket = "entry"
+            elif (suffix in {".vue", ".svelte"} or "/pages/" in lowered or
+                  "/views/" in lowered or "/components/" in lowered or
+                  "/layouts/" in lowered):
+                bucket = "ui"
+            elif any(token in lowered for token in (
+                "/controller/", "/controllers/", "/routes/", "/router/", "/api/"
+            )):
+                bucket = "api"
+            elif any(token in lowered for token in (
+                "/service/", "/services/", "/manager/", "/usecase/", "/domain/"
+            )):
+                bucket = "logic"
+            elif any(token in lowered for token in (
+                "/entity/", "/entities/", "/model/", "/models/", "/mapper/",
+                "/repository/", "/repositories/", "/schema/", "/migration/"
+            )):
+                bucket = "data"
+            elif (name in {"package.json", "pyproject.toml", "requirements.txt",
+                           "application.yml", "application.yaml"} or
+                  "/config/" in lowered or "/configuration/" in lowered):
+                bucket = "config"
+            else:
+                bucket = "other"
+            buckets[bucket].append(item)
+
+        ordered, seen = [], set()
+        priority = ("entry", "ui", "api", "logic", "data", "config", "other")
+        while len(ordered) < len(candidates):
+            appended = False
+            for key in priority:
+                if buckets[key]:
+                    item = buckets[key].pop(0)
+                    marker = item.get("relative_path")
+                    if marker not in seen:
+                        ordered.append(item)
+                        seen.add(marker)
+                    appended = True
+            if not appended:
+                break
+        return ordered
 
     @staticmethod
     def _manifest_candidates(path: Path) -> list:
@@ -399,7 +496,9 @@ class ManualResearchService:
                 (context["job_id"],),
             ).fetchone()["value"]
         job_id = context["job_id"]
-        relative = "intermediate/manual-research/research.v{0}.json".format(version)
+        relative = (Path("intermediate") / "manual-research" /
+                    "job-v{0}".format(context["job_version"]) /
+                    "research.v{0}.json".format(version)).as_posix()
         payload = {
             "schema_version": 1, "job_id": job_id, "version": version,
             "project_profile": profile, "source_refs": source_refs,

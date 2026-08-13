@@ -113,6 +113,24 @@ class ManualResearchServiceTests(unittest.TestCase):
             self.assertEqual(refreshed["current_step"], "draft")
             self.assertEqual(refreshed["progress"]["completed"], 1)
             self.assertEqual(service.latest(job["id"])["version"], 1)
+            self.assertTrue(result["summary"]["artifact_relative_path"].startswith(
+                "intermediate/manual-research/job-v1/"))
+
+    def test_research_sampling_round_robins_project_layers(self) -> None:
+        candidates = [
+            {"relative_path": "backend/service/large.py", "score": 100},
+            {"relative_path": "backend/service/other.py", "score": 99},
+            {"relative_path": "frontend/pages/Home.vue", "score": 60},
+            {"relative_path": "backend/controller/user.py", "score": 70},
+            {"relative_path": "backend/model/user.py", "score": 50},
+            {"relative_path": "frontend/main.ts", "score": 65},
+        ]
+        ordered = ManualResearchService._diversify_candidates(candidates)
+        first = [item["relative_path"] for item in ordered[:5]]
+        self.assertIn("frontend/pages/Home.vue", first)
+        self.assertIn("backend/controller/user.py", first)
+        self.assertIn("backend/service/large.py", first)
+        self.assertIn("backend/model/user.py", first)
 
 
 if __name__ == "__main__":

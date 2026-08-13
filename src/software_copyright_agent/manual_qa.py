@@ -1,6 +1,8 @@
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,21 +11,25 @@ from uuid import uuid4
 
 from docx import Document
 from docx.oxml.ns import qn
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from .font_assets import FontAsset
 from .manual_document import ManualDocumentError, ManualDocumentService
+from .manual_drafting import UNVERIFIED_OUTCOME_PATTERNS
 from .service import utc_now
+from .source_document_qa import LibreOfficeRenderer, SourceDocumentQaError
 from .storage import Database
 
 
-QA_POLICY_VERSION = "manual-docx-qa-v1"
+QA_POLICY_VERSION = "manual-docx-qa-v15"
+# Default used by the deterministic renderer in focused unit tests. Production
+# persists the concrete runtime renderer so previews and QA evidence agree.
 RENDERER_KIND = "deterministic_companion"
 A4_PIXELS = (1191, 1684)
 INK = "#172331"
-ACCENT = "#2e74b5"
-ACCENT_DARK = "#1f4d78"
-MUTED = "#6c7a89"
+ACCENT = INK
+ACCENT_DARK = INK
+MUTED = INK
 TABLE_FILL = "#e8eef5"
 
 
@@ -80,6 +86,8 @@ class _Page:
 class ManualCompanionRenderer:
     """Renders the same structured source as the DOCX without office dependencies."""
 
+    renderer_kind = "deterministic_companion"
+
     left = 126
     right = 1065
     content_bottom = 1532
@@ -93,6 +101,7 @@ class ManualCompanionRenderer:
             "cover_subtitle": ImageFont.truetype(path, 39),
             "cover_version": ImageFont.truetype(path, 27),
             "h1": ImageFont.truetype(path, 33),
+            "h2": ImageFont.truetype(path, 27),
             "body": ImageFont.truetype(path, 22),
             "body_bold": ImageFont.truetype(path, 22),
             "small": ImageFont.truetype(path, 18),
@@ -102,7 +111,8 @@ class ManualCompanionRenderer:
         self.pages = []
         self.context = {}
 
-    def render(self, output_dir: Path, context: dict, sections: list, figures: list,
+    def render(self, document_path: Path, output_dir: Path, context: dict,
+               sections: list, figures: list,
                screenshots: list, task_root: Path) -> CompanionRenderResult:
         output_dir.mkdir(parents=True, exist_ok=True)
         self.pages = []
@@ -116,9 +126,15 @@ class ManualCompanionRenderer:
         self._new_page("content")
         for index, section in enumerate(sections, 1):
             self._heading("{0}  {1}".format(index, section["title"]))
+            subsection_index = 0
             for block in section["blocks"]:
                 kind = block.get("type")
-                if kind == "paragraph":
+                if kind == "subheading":
+                    subsection_index += 1
+                    self._subheading("{0}.{1}  {2}".format(
+                        index, subsection_index, block.get("title", "")
+                    ))
+                elif kind == "paragraph":
                     self._paragraph(str(block.get("text", "")))
                 elif kind == "list":
                     lead = str(block.get("lead", "")).strip()
@@ -214,6 +230,13 @@ class ManualCompanionRenderer:
         page, top = self.page, self.page.y
         self._draw_text(page, self.left, top, text, self.fonts["h1"], ACCENT, bold=True)
         page.y += 70
+
+    def _subheading(self, text: str) -> None:
+        self._ensure(62)
+        page, top = self.page, self.page.y
+        self._draw_text(page, self.left, top, text, self.fonts["h2"], ACCENT_DARK, bold=True)
+        page.y += 54
+        page.mark(top, page.y)
 
     def _paragraph(self, text: str) -> None:
         text = text.strip()
@@ -387,13 +410,68 @@ class ManualCompanionRenderer:
         return path if root in path.parents and path.is_file() else None
 
 
+class LibreOfficeManualRenderer:
+    """Renders the actual exported DOCX instead of simulating Word pagination."""
+
+    renderer_kind = "libreoffice_word"
+
+    def __init__(self, office_renderer=None) -> None:
+        # At 144 DPI an A4 page is exactly the existing 1191 × 1684 UI contract.
+        self._office = office_renderer or LibreOfficeRenderer(dpi=144)
+
+    @staticmethod
+    def capability() -> dict:
+        return LibreOfficeRenderer.capability()
+
+    def render(self, document_path: Path, output_dir: Path, context: dict,
+               sections: list, figures: list, screenshots: list,
+               task_root: Path) -> CompanionRenderResult:
+        try:
+            rendered = self._office.render(document_path, output_dir)
+        except SourceDocumentQaError as error:
+            raise ManualQaError(str(error)) from error
+        page_paths = tuple(rendered.page_paths)
+        page_kinds = tuple(
+            "cover" if index == 1 else "toc" if index == 2 else "content"
+            for index in range(1, len(page_paths) + 1)
+        )
+        ratios = tuple(self._body_fill_ratio(path) for path in page_paths)
+        last_page = len(page_paths)
+        underfilled = tuple(
+            index for index, (kind, ratio) in enumerate(
+                zip(page_kinds, ratios), start=1
+            ) if kind == "content" and (
+                (index != last_page and ratio < 0.50)
+                or (index == last_page and ratio < 0.25)
+            )
+        )
+        return CompanionRenderResult(
+            rendered.pdf_path, page_paths, page_kinds, ratios, underfilled
+        )
+
+    @staticmethod
+    def _body_fill_ratio(path: Path) -> float:
+        with Image.open(path) as source:
+            image = source.convert("RGB")
+        width, height = image.size
+        # Exclude header and footer: they must not make an empty body page pass.
+        body = image.crop((int(width * 0.07), int(height * 0.06),
+                           int(width * 0.93), int(height * 0.94)))
+        difference = ImageChops.difference(body, Image.new("RGB", body.size, "white"))
+        bounds = difference.getbbox()
+        if not bounds:
+            return 0.0
+        return round((bounds[3] - bounds[1]) / max(body.height, 1), 4)
+
+
 class ManualDocxInspector:
     def __init__(self, font_asset: FontAsset = None) -> None:
         self.font_asset = font_asset or FontAsset.bundled_cjk()
 
     def inspect(self, document_path: Path, expected_sha256: str, sections: list,
                 figures: list, screenshots: list,
-                render: CompanionRenderResult) -> ManualQaResult:
+                render: CompanionRenderResult, expectations: dict = None) -> ManualQaResult:
+        expectations = expectations or {}
         checks = []
         actual_sha = hashlib.sha256(document_path.read_bytes()).hexdigest()
         checks.append(self._equal("artifact.sha256", expected_sha256, actual_sha))
@@ -405,11 +483,26 @@ class ManualDocxInspector:
                             if paragraph.style.name == "Heading 1") - 1
         checks.append(self._equal("structure.chapter_headings", len(sections), heading_count))
         expected_tables = sum(1 for section_item in sections for block in section_item["blocks"]
-                              if block.get("type") == "table")
+                              if block.get("type") == "table"
+                              and section_item.get("section_key") != "ui_operations")
         checks.append(self._equal("structure.tables", expected_tables, len(document.tables)))
         expected_images = len(figures) + len(screenshots)
         checks.append(self._minimum("structure.inline_images", expected_images,
                                     len(document.inline_shapes)))
+        captions = [paragraph.text for paragraph in document.paragraphs
+                    if paragraph.style.name == "Caption"]
+        figure_numbers = [int(match.group(1)) for value in captions
+                          if (match := re.match(r"^图 (\d+)\s+", value))]
+        screenshot_numbers = figure_numbers[len(figures):]
+        checks.append(self._equal(
+            "structure.figure_caption_numbers",
+            list(range(1, len(figures) + len(screenshots) + 1)), figure_numbers,
+        ))
+        checks.append(self._equal(
+            "structure.screenshot_caption_numbers",
+            list(range(len(figures) + 1, len(figures) + len(screenshots) + 1)),
+            screenshot_numbers,
+        ))
         with zipfile.ZipFile(document_path) as archive:
             names = archive.namelist()
             document_xml = archive.read("word/document.xml").decode("utf-8")
@@ -424,6 +517,17 @@ class ManualDocxInspector:
         checks.append(self._equal("structure.page_breaks", 2,
                                   document_xml.count('w:type="page"')))
         full_text = "".join(paragraph.text for paragraph in document.paragraphs)
+        if expectations.get("document_kind") == "final_document":
+            forbidden_final_markers = [marker for marker in (
+                "章节导航（页码将在 Word 打开或导出时自动更新）",
+                "图中内容以已审核的真实截图为准",
+                "页面实际内容和操作范围以图中已审核的真实界面为准",
+            ) if marker in full_text]
+            checks.append(ManualQaCheck(
+                "content.final_review_markers", not forbidden_final_markers, "blocker",
+                [], forbidden_final_markers,
+                "passed" if not forbidden_final_markers else "终稿仍包含仅供审阅阶段使用的提示语",
+            ))
         font_summary = self.font_asset.validate(full_text)
         checks.append(self._equal("font.missing_codepoints", 0,
                                   font_summary["missing_codepoints"]))
@@ -439,19 +543,278 @@ class ManualDocxInspector:
         checks.append(self._equal("render.a4_dimensions", True,
                                   all(size == A4_PIXELS for size in dimensions)))
         checks.append(self._equal("render.blank_pages", [], blank_pages))
+        # Header and footer text means a visually empty body page is not a
+        # pixel-perfect white image. Treat zero-density body pages as blockers
+        # so an otherwise polished final document cannot pass with a numbered,
+        # header-only sheet in the middle.
+        body_blank_pages = [
+            index for index, (kind, ratio) in enumerate(
+                zip(render.page_kinds, render.fill_ratios), start=1
+            ) if kind == "content" and ratio < 0.01
+        ]
+        checks.append(self._equal("render.body_blank_pages", [], body_blank_pages))
         if render.underfilled_pages:
             checks.append(ManualQaCheck(
-                "render.page_density", False, "warning", "no page below 35%",
-                list(render.underfilled_pages), "部分正文页密度偏低，建议补充证据化说明或调整图文比例",
+                "render.page_density", False, "warning",
+                "中间正文页填充率不低于 50%，末页不低于 25%",
+                list(render.underfilled_pages),
+                "存在内容较少的章节尾页或末页，建议复核分页，但不阻断交付",
             ))
         else:
             checks.append(ManualQaCheck(
-                "render.page_density", True, "warning", "no page below 35%", [], "passed",
+                "render.page_density", True, "warning",
+                "中间正文页填充率不低于 50%，末页不低于 25%", [], "passed",
             ))
-        placeholder_hits = sorted(set(re.findall(r"待确认|待补充|TODO|TBD", full_text, re.I)))
+        placeholder_hits = sorted(set(re.findall(
+            r"待确认|待补充|TODO|TBD|后续迭代|建议后续", full_text, re.I
+        )))
         checks.append(ManualQaCheck(
-            "content.placeholders", not placeholder_hits, "warning", [], placeholder_hits,
-            "passed" if not placeholder_hits else "正文仍包含待确认或待补充标记",
+            "content.placeholders", not placeholder_hits, "blocker", [], placeholder_hits,
+            "passed" if not placeholder_hits else "正文仍包含占位或路线图措辞，不能作为当前版本实现说明",
+        ))
+        epistemic_hits = sorted(set(re.findall(
+            r"根据(?:项目|现有)?证据推断|据此推断|合理推断", full_text
+        )))
+        checks.append(ManualQaCheck(
+            "content.epistemic_caveats", not epistemic_hits, "blocker", [], epistemic_hits,
+            "passed" if not epistemic_hits else
+            "正式材料中仍包含推断性措辞，必须改写为可由证据直接支持的事实",
+        ))
+        unverified_outcomes = sorted(set(
+            match.group(0)
+            for pattern in UNVERIFIED_OUTCOME_PATTERNS
+            for match in pattern.finditer(full_text)
+        ))
+        checks.append(ManualQaCheck(
+            "content.unverified_outcomes", not unverified_outcomes, "blocker", [],
+            unverified_outcomes,
+            "passed" if not unverified_outcomes else
+            "正文包含源码和项目材料无法直接证明的测试结果、验收或上线结论",
+        ))
+        source_name_candidates = set(
+            match.group(0)
+            for match in re.finditer(
+                r"(?<![\w/])(?:[\w.-]+/)+[\w.-]+\.(?:py|java|kt|ts|tsx|js|jsx|vue|go|rs|cs|php)|"
+                r"(?<![\w/])[A-Za-z][\w.-]*\.(?:py|java|kt|ts|tsx|js|jsx|vue|go|rs|cs|php)\b",
+                full_text,
+                re.I,
+            )
+        )
+        # Product/framework names are legitimate prose, not source file names.
+        framework_names = {"vue.js", "react.js", "node.js", "next.js", "nuxt.js"}
+        source_file_mentions = sorted(
+            value for value in source_name_candidates
+            if value.lower() not in framework_names
+        )
+        checks.append(ManualQaCheck(
+            "content.internal_source_names", not source_file_mentions, "warning", [],
+            source_file_mentions,
+            "passed" if not source_file_mentions else
+            "正式叙述仍暴露内部源码文件名；应改写为中文业务角色并仅在证据元数据中保留路径",
+        ))
+        unsupported_blocks = []
+        substantive_block_count = 0
+        evidence_bound_block_count = 0
+        for item in sections:
+            for block_index, block in enumerate(item.get("blocks", []), start=1):
+                if block.get("type") in {"figure_request", "subheading"}:
+                    continue
+                substantive_block_count += 1
+                refs = [str(ref).strip() for ref in block.get("evidence_refs", [])
+                        if str(ref).strip()]
+                if refs:
+                    evidence_bound_block_count += 1
+                else:
+                    unsupported_blocks.append({
+                        "section_key": item.get("section_key"),
+                        "block_index": block_index,
+                        "block_type": block.get("type"),
+                    })
+        checks.append(ManualQaCheck(
+            "content.evidence_coverage", not unsupported_blocks, "blocker",
+            "每个正文、列表和表格块至少绑定 1 条真实证据",
+            {
+                "substantive_blocks": substantive_block_count,
+                "evidence_bound_blocks": evidence_bound_block_count,
+                "unsupported_blocks": unsupported_blocks,
+            },
+            "passed" if not unsupported_blocks else "存在未绑定证据的事实性内容块",
+        ))
+        inference_blocks = [
+            {"section_key": item.get("section_key"), "block_index": index}
+            for item in sections
+            for index, block in enumerate(item.get("blocks", []), start=1)
+            if block.get("inference")
+        ]
+        checks.append(ManualQaCheck(
+            "content.inference_claims", not inference_blocks, "blocker", [],
+            inference_blocks,
+            "passed" if not inference_blocks else
+            "正文仍包含 AI 推断，必须改写为源码可直接证明的实现事实",
+        ))
+        review_sections = [
+            item.get("section_key") for item in sections
+            if item.get("status") == "needs_review"
+        ]
+        checks.append(ManualQaCheck(
+            "content.section_review_status", not review_sections, "blocker",
+            "所有章节均已通过证据规范化或人工确认", review_sections,
+            "passed" if not review_sections else "部分章节仍需复核，不能标记为正式通过版",
+        ))
+        section_quality = []
+        for item in sections:
+            # Chapter 7 is delivered from the reviewed screenshot snapshot, not
+            # from generic AI prose volume. Screenshot authenticity, six-part
+            # interpretation, order and sensitive-data review have dedicated
+            # blocker checks below, so applying the 950-character chapter rule
+            # here double-counts the wrong evidence and penalizes concise pages.
+            if item.get("section_key") == "ui_operations" and screenshots:
+                continue
+            substantive = [block for block in item["blocks"]
+                           if block.get("type") not in {"figure_request", "subheading"}]
+            paragraphs = [block for block in substantive
+                          if block.get("type") == "paragraph"]
+            paragraph_characters = sum(len(str(block.get("text", "")))
+                                       for block in paragraphs)
+            content = "".join(
+                str(block.get("text", "")) + str(block.get("lead", "")) +
+                "".join(str(value) for value in block.get("items", [])) +
+                "".join(str(cell) for row in block.get("rows", []) for cell in row)
+                for block in substantive
+            )
+            minimum = 750 if item.get("section_key") == "introduction" else 950
+            if (len(content) < minimum or len(substantive) < 4 or
+                    len(paragraphs) < 2 or paragraph_characters < 320):
+                section_quality.append({
+                    "section_key": item.get("section_key"),
+                    "characters": len(content), "blocks": len(substantive),
+                    "paragraphs": len(paragraphs),
+                    "paragraph_characters": paragraph_characters,
+                })
+        checks.append(ManualQaCheck(
+            "content.section_depth", not section_quality, "blocker",
+            "每章至少 4 个实质块和 2 个正文段落；引言不少于 750 字，其他章节不少于 950 字",
+            section_quality,
+            "passed" if not section_quality else "部分章节仍像提纲，正文深度不足",
+        ))
+        expected_section_keys = set(expectations.get("section_keys") or [])
+        actual_section_keys = {item.get("section_key") for item in sections}
+        missing_sections = sorted(expected_section_keys - actual_section_keys)
+        checks.append(ManualQaCheck(
+            "content.required_sections", not missing_sections, "blocker",
+            sorted(expected_section_keys), sorted(actual_section_keys),
+            "passed" if not missing_sections else
+            "项目证据表明这些章节适用，但正文生成失败或缺失：{0}".format(
+                "、".join(missing_sections)
+            ),
+        ))
+        expected_figure_sections = set(expectations.get("figure_sections") or [])
+        actual_figure_sections = {item.get("section_key") for item in figures
+                                  if item.get("png_relative_path")}
+        missing_figures = sorted(expected_figure_sections - actual_figure_sections)
+        checks.append(ManualQaCheck(
+            "content.figure_coverage", not missing_figures, "blocker",
+            sorted(expected_figure_sections), sorted(actual_figure_sections),
+            "passed" if not missing_figures else
+            "必要章节图表尚未成功生成：{0}".format("、".join(missing_figures)),
+        ))
+        ui_text = "".join(
+            json.dumps(item.get("blocks", []), ensure_ascii=False)
+            for item in sections if item.get("section_key") == "ui_operations"
+        )
+        ui_applicable = bool(expectations.get("ui_applicable")) or bool(re.search(
+            r"界面|页面|按钮|前端|vue|react|客户端", ui_text, re.I
+        ))
+        ui_mode = expectations.get("ui_evidence_mode") or "unknown"
+        checks.append(ManualQaCheck(
+            "content.ui_screenshot", not ui_applicable or bool(screenshots), "blocker",
+            "识别到真实界面时至少包含 1 张已说明的截图",
+            {"count": len(screenshots), "mode": ui_mode},
+            "passed" if not ui_applicable or screenshots else
+            ({"waiting_for_screenshots": "用户界面章节正在等待用户提供并确认真实截图证据",
+              "not_applicable": "用户已确认项目不适用截图",
+              "source_inferred": "用户明确选择了源码推断版，正式质量仍需人工确认"}
+             .get(ui_mode, "用户界面章节尚未获得可采用的真实截图证据")),
+        ))
+        checks.append(ManualQaCheck(
+            "content.screenshot_interpretations_reviewed",
+            all(item.get("interpretation_revision_id") for item in screenshots), "blocker",
+            "所有采用截图均绑定明确的已审核解读版本",
+            [item.get("interpretation_revision_id") for item in screenshots],
+            "passed" if all(item.get("interpretation_revision_id") for item in screenshots)
+            else "存在未绑定已审核解读版本的采用截图",
+        ))
+        screenshot_refs = ["screenshot:{0}:v{1}".format(
+            item.get("asset_id"), item.get("interpretation_version")
+        ) for item in screenshots if item.get("asset_id") and item.get("interpretation_version")]
+        ui_blocks = [block for section in sections if section.get("section_key") == "ui_operations"
+                     for block in section.get("blocks", [])]
+        first_seen_refs, invalid_ui_blocks = [], []
+        valid_screenshot_refs = set(screenshot_refs)
+        for index, block in enumerate(ui_blocks):
+            refs = [ref for ref in block.get("evidence_refs", [])
+                    if str(ref).startswith("screenshot:")]
+            if (screenshot_refs and block.get("type") not in {"subheading", "figure_request"} and
+                    (not refs or any(ref not in valid_screenshot_refs for ref in refs))):
+                invalid_ui_blocks.append(index)
+            for ref in refs:
+                if ref in valid_screenshot_refs and ref not in first_seen_refs:
+                    first_seen_refs.append(ref)
+        checks.append(ManualQaCheck(
+            "content.ui_screenshot_evidence_refs", not screenshot_refs or not invalid_ui_blocks,
+            "blocker", "第 7 章事实性内容只引用当前采用截图解读版本",
+            {"invalid_block_indexes": invalid_ui_blocks, "valid_refs": screenshot_refs},
+            "passed" if not screenshot_refs or not invalid_ui_blocks else
+            "第 7 章存在未绑定当前采用截图解读版本的事实性内容",
+        ))
+        checks.append(ManualQaCheck(
+            "content.ui_group_order", not screenshot_refs or first_seen_refs == screenshot_refs,
+            "blocker", screenshot_refs, first_seen_refs,
+            "passed" if not screenshot_refs or first_seen_refs == screenshot_refs else
+            "第 7 章的截图引用顺序与人工确认的页面组和截图顺序不一致",
+        ))
+        checks.append(ManualQaCheck(
+            "content.ui_section_current",
+            not screenshots or bool(expectations.get("ui_section_current")), "blocker",
+            "用户界面章节基于当前采用截图版本生成",
+            expectations.get("ui_evidence_mode"),
+            "passed" if not screenshots or expectations.get("ui_section_current")
+            else "截图、解读或项目概要已变化，用户界面章节需要更新",
+        ))
+        checks.append(ManualQaCheck(
+            "content.screenshot_sensitive_review",
+            all(item.get("sensitive_status", "confirmed_safe") == "confirmed_safe"
+                for item in screenshots), "blocker", "采用截图的敏感信息已确认",
+            [item.get("sensitive_status") for item in screenshots],
+            "passed" if all(item.get("sensitive_status", "confirmed_safe") == "confirmed_safe"
+                            for item in screenshots)
+            else "存在尚未确认敏感信息或已标记含敏感信息的截图",
+        ))
+        screenshot_reference_numbers = [number for number in range(
+            len(figures) + 1, len(figures) + len(screenshots) + 1
+        ) if re.search(r"图\s*{0}(?!\d)".format(number), full_text)]
+        checks.append(self._equal(
+            "content.screenshot_figure_references",
+            list(range(len(figures) + 1, len(figures) + len(screenshots) + 1)),
+            screenshot_reference_numbers,
+        ))
+        screenshot_signatures = {}
+        for item in screenshots:
+            signature = (
+                str(item.get("title", "")).strip(),
+                json.dumps(item.get("description", {}), ensure_ascii=False, sort_keys=True),
+            )
+            screenshot_signatures.setdefault(signature, []).append(
+                item.get("screenshot_key") or item.get("image_relative_path")
+            )
+        repeated_screenshots = [values for values in screenshot_signatures.values()
+                                if len(values) > 1]
+        checks.append(ManualQaCheck(
+            "content.screenshot_distinctness", not repeated_screenshots, "blocker",
+            "每张截图具有不同页面标题和针对该页面的六维说明",
+            repeated_screenshots,
+            "passed" if not repeated_screenshots else
+            "存在标题和说明完全相同的截图；不能用同一空页面重复充当多个操作界面",
         ))
         passed = all(check.passed for check in checks if check.severity == "blocker")
         warning_count = sum(1 for check in checks
@@ -462,11 +825,8 @@ class ManualDocxInspector:
             "passed": passed,
             "policy_version": QA_POLICY_VERSION,
             "renderer_kind": RENDERER_KIND,
-            "renderer_disclosure": (
-                "运行时页面由与 DOCX 同源的内置确定性渲染器生成；"
-                "发行基线已另用 LibreOffice 完成真实 DOCX 全页回归。"
-            ),
-            "word_render_baseline": "libreoffice_fixture_passed",
+            "renderer_disclosure": "运行时页面由同源确定性渲染器生成。",
+            "word_render_baseline": "companion_rendered",
             "check_count": len(checks),
             "failed_check_count": len(failed),
             "failed_checks": failed,
@@ -503,13 +863,115 @@ class ManualQaService:
         self._database = database
         self._data_root = data_root.expanduser().resolve()
         self._documents = documents or ManualDocumentService(database, data_root)
-        self._renderer = renderer or ManualCompanionRenderer()
+        self._renderer = renderer or LibreOfficeManualRenderer()
         self._inspector = inspector or ManualDocxInspector()
+
+    def _coverage_expectations(self, job_id: str, sections: list) -> dict:
+        section_keys = {item.get("section_key") for item in sections}
+        has_ui = "ui_operations" in section_keys
+        has_research = False
+        with self._database.connect() as connection:
+            row = connection.execute(
+                """SELECT project_profile_json,notes_json FROM manual_research_artifacts
+                WHERE job_id=? ORDER BY version DESC LIMIT 1""", (job_id,),
+            ).fetchone()
+            ui_node = connection.execute(
+                """SELECT status,output_json FROM manual_execution_nodes
+                WHERE job_id=? AND node_key='section:ui_operations'""", (job_id,),
+            ).fetchone()
+            assessment = connection.execute(
+                """SELECT status FROM manual_capture_assessments
+                WHERE job_id=? ORDER BY version DESC LIMIT 1""", (job_id,),
+            ).fetchone()
+        if row is not None:
+            has_research = True
+            try:
+                profile = json.loads(row["project_profile_json"] or "{}")
+                notes = json.loads(row["notes_json"] or "{}")
+            except json.JSONDecodeError:
+                profile, notes = {}, {}
+            guidance_keys = {
+                item.get("section_key") for item in notes.get("section_guidance", [])
+                if isinstance(item, dict)
+            }
+            profile_text = json.dumps(profile, ensure_ascii=False).lower()
+            has_ui = "ui_operations" in guidance_keys or any(
+                marker in profile_text for marker in
+                ("vue", "react", "svelte", "tauri", "electron", "frontend", "前端", "界面")
+            )
+        if has_research:
+            expected_sections = {
+                "introduction", "architecture", "modules", "data_interfaces",
+                "runtime", "security_reliability", "testing_summary",
+            }
+            if has_ui:
+                expected_sections.add("ui_operations")
+            required_figure_sections = {
+                "architecture", "modules", "data_interfaces", "runtime",
+            }
+        else:
+            expected_sections = section_keys
+            required_figure_sections = {
+                item.get("section_key") for item in sections
+                if any(block.get("type") == "figure_request"
+                       for block in item.get("blocks", []))
+            }
+        ui_output = json.loads(ui_node["output_json"] or "{}") if ui_node else {}
+        explicit_mode = ui_output.get("evidence_mode")
+        return {
+            "section_keys": sorted(expected_sections),
+            "figure_sections": sorted(required_figure_sections),
+            "ui_applicable": has_ui,
+            "ui_evidence_mode": (
+                explicit_mode if explicit_mode in {"source_inferred", "not_applicable"}
+                else "not_applicable" if assessment and assessment["status"] == "not_applicable"
+                else "waiting_for_screenshots" if ui_node and ui_node["status"] in {
+                    "waiting_for_screenshots", "waiting_for_review", "outdated"
+                } else "screenshot_driven" if ui_node and ui_node["status"] == "completed"
+                else "unknown"
+            ),
+            "ui_section_current": bool(not ui_node or ui_node["status"] == "completed"),
+        }
+
+    @staticmethod
+    def _rendered_toc_pages(pdf_path: Path, sections: list) -> dict:
+        """Read chapter heading pages from the rendered PDF when Poppler is available."""
+        candidates = [shutil.which("pdftotext")]
+        _, pdftoppm = LibreOfficeRenderer._resolve_tools()
+        if pdftoppm:
+            executable = "pdftotext.exe" if Path(pdftoppm).suffix.lower() == ".exe" \
+                else "pdftotext"
+            candidates.append(str(Path(pdftoppm).with_name(executable)))
+        candidates.extend(["/opt/homebrew/bin/pdftotext", "/usr/local/bin/pdftotext"])
+        pdftotext = next((item for item in candidates if item and Path(item).is_file()), None)
+        if not pdftotext:
+            return {}
+        completed = subprocess.run(
+            [pdftotext, "-layout", str(pdf_path), "-"], capture_output=True,
+            timeout=60, check=False,
+        )
+        if completed.returncode != 0:
+            return {}
+        pages = completed.stdout.decode("utf-8", errors="replace").split("\f")
+        result = {}
+        for index, section in enumerate(sections, 1):
+            heading = re.compile(
+                r"(?m)^\s*{0}\s+{1}\s*$".format(
+                    index, re.escape(str(section.get("title", "")).strip())
+                )
+            )
+            for page_number, page in enumerate(pages, 1):
+                if page_number > 2 and heading.search(page):
+                    result[index] = page_number
+                    break
+        return result if len(result) == len(sections) else {}
 
     def execute(self, job_id: str, version: Optional[int] = None) -> dict:
         self._database.initialize()
         preview = self._documents.preview(job_id, version or self._documents.get(job_id)["version"])
         document = preview["document"]
+        if document.get("document_kind") == "review_checkpoint":
+            raise ManualQaError("阶段审阅稿仅用于正文预览与落盘；请等待正式候选稿后再执行逐页质检")
         if document["integrity"]["status"] != "verified":
             raise ManualQaError("正式说明书文件缺失或完整性校验失败")
         step_id = self._start_step(job_id)
@@ -526,14 +988,40 @@ class ManualQaService:
             "project_version": document["project_version"],
         }
         try:
-            render = self._renderer.render(
-                render_path, context, preview["sections"], preview["figures"],
-                preview["screenshots"], task_root,
-            )
+            runtime_renderer = getattr(self._renderer, "renderer_kind", RENDERER_KIND)
+            if runtime_renderer == "libreoffice_word":
+                probe_path = render_path / "toc-probe"
+                probe = self._renderer.render(
+                    document_path, probe_path, context, preview["sections"], preview["figures"],
+                    preview["screenshots"], task_root,
+                )
+                toc_pages = self._rendered_toc_pages(probe.pdf_path, preview["sections"])
+                if toc_pages:
+                    document = self._documents.persist_toc_page_results(
+                        job_id, document["version"], toc_pages
+                    )
+                render = self._renderer.render(
+                    document_path, render_path, context, preview["sections"], preview["figures"],
+                    preview["screenshots"], task_root,
+                )
+                shutil.rmtree(probe_path, ignore_errors=True)
+            else:
+                render = self._renderer.render(
+                    document_path, render_path, context, preview["sections"], preview["figures"],
+                    preview["screenshots"], task_root,
+                )
+            expectations = self._coverage_expectations(job_id, preview["sections"])
+            expectations["document_kind"] = document.get("document_kind")
             result = self._inspector.inspect(
                 document_path, document["sha256"], preview["sections"],
-                preview["figures"], preview["screenshots"], render,
+                preview["figures"], preview["screenshots"], render, expectations,
             )
+            result.summary["renderer_kind"] = runtime_renderer
+            if runtime_renderer == "libreoffice_word":
+                result.summary["renderer_disclosure"] = (
+                    "运行时页面由 LibreOffice 直接渲染当前导出的 DOCX。"
+                )
+                result.summary["word_render_baseline"] = "current_document_rendered"
             payload = {
                 "schema_version": 1,
                 "job_id": job_id,
@@ -572,7 +1060,7 @@ class ManualQaService:
                 report_relative_path,render_relative_path,preview_pdf_relative_path,created_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (qa_run_id, document["id"], job_id, qa_version, QA_POLICY_VERSION,
-                 RENDERER_KIND, 1 if result.passed else 0,
+                 runtime_renderer, 1 if result.passed else 0,
                  json.dumps([check.__dict__ for check in result.checks], ensure_ascii=False,
                             separators=(",", ":")),
                  json.dumps(result.summary, ensure_ascii=False, separators=(",", ":")),
@@ -609,6 +1097,11 @@ class ManualQaService:
                 WHERE q.document_artifact_id=? ORDER BY q.qa_version DESC LIMIT 1""",
                 (document["id"],),
             ).fetchone()
+            decisions = [] if row is None else connection.execute(
+                """SELECT check_key,action,reason,created_at
+                FROM manual_qa_decisions WHERE qa_run_id=? ORDER BY created_at""",
+                (row["id"],),
+            ).fetchall()
         if row is None:
             raise ManualQaError("该说明书版本尚未执行质量检查")
         return {
@@ -619,8 +1112,81 @@ class ManualQaService:
             "passed": bool(row["passed"]), "checks": json.loads(row["checks_json"]),
             "summary": json.loads(row["summary_json"]),
             "page_count": json.loads(row["summary_json"])["rendered_pages"],
+            "decisions": [dict(item) for item in decisions],
             "created_at": row["created_at"],
         }
+
+    def defer_check(self, job_id: str, version: int, check_key: str, reason: str) -> dict:
+        """Waive one eligible failure while preserving the original QA facts."""
+        self._database.initialize()
+        reason = reason.strip()
+        if len(reason) < 4:
+            raise ManualQaError("请说明本轮忽略该问题的原因")
+        qa = self.get(job_id, version)
+        check = next((item for item in qa["checks"] if item["key"] == check_key), None)
+        if check is None:
+            raise ManualQaError("质量检查项不存在")
+        if check["passed"]:
+            raise ManualQaError("该质量检查项已经通过，无需忽略")
+        waivable = {
+            "render.page_density",
+            "content.section_depth",
+            "content.figure_coverage",
+        }
+        if check_key not in waivable:
+            raise ManualQaError("该项涉及文档真实性、完整性或安全性，不能通过忽略绕过")
+        now = utc_now()
+        with self._database.connect() as connection:
+            connection.execute(
+                """INSERT INTO manual_qa_decisions(
+                id,qa_run_id,document_artifact_id,job_id,check_key,action,reason,created_at)
+                VALUES (?,?,?,?,?,'deferred',?,?)
+                ON CONFLICT(qa_run_id,check_key) DO UPDATE SET
+                action='deferred',reason=excluded.reason,created_at=excluded.created_at""",
+                (str(uuid4()), qa["id"], qa["document_artifact_id"], job_id,
+                 check_key, reason, now),
+            )
+            decisions = connection.execute(
+                """SELECT check_key FROM manual_qa_decisions
+                WHERE qa_run_id=? AND action='deferred'""", (qa["id"],),
+            ).fetchall()
+            waived = sorted({row["check_key"] for row in decisions})
+            raw_failed = sorted(item["key"] for item in qa["checks"]
+                                if item["severity"] == "blocker" and not item["passed"])
+            effective_failed = [key for key in raw_failed if key not in waived]
+            effective_passed = not effective_failed
+            summary = dict(qa["summary"])
+            summary.update({
+                "passed": effective_passed,
+                "raw_failed_checks": raw_failed,
+                "waived_checks": waived,
+                "waived_check_count": len(waived),
+                "failed_checks": effective_failed,
+                "failed_check_count": len(effective_failed),
+            })
+            document = connection.execute(
+                """SELECT qa_json FROM manual_document_artifacts WHERE id=?""",
+                (qa["document_artifact_id"],),
+            ).fetchone()
+            document_qa = json.loads(document["qa_json"] or "{}")
+            document_qa["quality"] = summary
+            connection.execute(
+                """UPDATE manual_document_qa_runs SET passed=?,summary_json=? WHERE id=?""",
+                (1 if effective_passed else 0,
+                 json.dumps(summary, ensure_ascii=False, separators=(",", ":")), qa["id"]),
+            )
+            connection.execute(
+                """UPDATE manual_document_artifacts SET status=?,qa_json=? WHERE id=?""",
+                ("qa_passed" if effective_passed else "qa_failed",
+                 json.dumps(document_qa, ensure_ascii=False, separators=(",", ":")),
+                 qa["document_artifact_id"]),
+            )
+            connection.execute(
+                """UPDATE manual_generation_jobs SET status=?,updated_at=? WHERE id=?""",
+                ("completed_with_warnings" if waived or not effective_passed else "completed",
+                 now, job_id),
+            )
+        return self.get(job_id, version)
 
     def read_page(self, job_id: str, version: int, page_number: int) -> bytes:
         item, document = self.get(job_id, version), self._documents.get(job_id, version)
@@ -631,11 +1197,18 @@ class ManualQaService:
                 """SELECT render_relative_path FROM manual_document_qa_runs
                 WHERE id=?""", (item["id"],),
             ).fetchone()
-        path = self._safe_path(
-            document["task_id"], Path(row["render_relative_path"]) /
-            "page-{0}.png".format(page_number)
-        )
-        return path.read_bytes()
+        render_path = (self._data_root / "tasks" / document["task_id"] /
+                       Path(row["render_relative_path"])).resolve()
+        page_path = next((candidate for candidate in render_path.glob("page-*.png")
+                          if candidate.stem.split("-")[-1].isdigit() and
+                          int(candidate.stem.split("-")[-1]) == page_number), None)
+        if page_path is None:
+            raise ManualQaError("质量检查预览页不存在")
+        return self._safe_path(
+            document["task_id"], page_path.relative_to(
+                (self._data_root / "tasks" / document["task_id"]).resolve()
+            )
+        ).read_bytes()
 
     def read_pdf(self, job_id: str, version: int) -> bytes:
         item, document = self.get(job_id, version), self._documents.get(job_id, version)

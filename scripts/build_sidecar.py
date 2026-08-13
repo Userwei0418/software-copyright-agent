@@ -22,6 +22,28 @@ OUTPUT_DIR = ROOT / "src-tauri" / "binaries"
 BINARY_BASENAME = "copyright-agent-sidecar"
 
 
+def source_fingerprint() -> str:
+    """Fingerprint every source/data file that PyInstaller embeds in the sidecar."""
+    digest = hashlib.sha256()
+    roots = [ROOT / "src" / "software_copyright_agent", ENTRY_POINT]
+    paths: list[Path] = []
+    for root in roots:
+        if root.is_file():
+            paths.append(root)
+        elif root.is_dir():
+            paths.extend(path for path in root.rglob("*") if path.is_file()
+                         and "__pycache__" not in path.parts
+                         and path.suffix not in {".pyc", ".pyo"})
+    for path in sorted(paths):
+        relative = path.relative_to(ROOT).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def detect_target_triple() -> str:
     rustc = shutil.which("rustc")
     if rustc:
@@ -118,6 +140,7 @@ def build(target_triple: str, output_dir: Path) -> dict[str, object]:
     metadata = {
         "artifact": str(final_path.relative_to(ROOT)),
         "target_triple": target_triple,
+        "source_fingerprint": source_fingerprint(),
         "sha256": sha256(final_path),
         "size_bytes": final_path.stat().st_size,
     }
@@ -126,18 +149,49 @@ def build(target_triple: str, output_dir: Path) -> dict[str, object]:
     return metadata
 
 
+def ensure_current(target_triple: str, output_dir: Path) -> dict[str, object]:
+    final_path = output_dir / artifact_name(target_triple)
+    manifest = output_dir / f"{final_path.name}.json"
+    expected_fingerprint = source_fingerprint()
+    try:
+        metadata = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        metadata = {}
+    if (
+        final_path.is_file()
+        and final_path.stat().st_size > 0
+        and metadata.get("source_fingerprint") == expected_fingerprint
+        and metadata.get("sha256") == sha256(final_path)
+    ):
+        return {**metadata, "rebuilt": False}
+    return {**build(target_triple, output_dir), "rebuilt": True}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-triple", help="Override the detected Rust target triple")
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--if-stale", action="store_true",
+                        help="Only rebuild when embedded sidecar sources changed")
     args = parser.parse_args(argv)
+    if not args.dry_run and importlib.util.find_spec("PyInstaller") is None:
+        candidates = [
+            ROOT / ".venv" / "bin" / "python",
+            ROOT / ".venv" / "Scripts" / "python.exe",
+        ]
+        project_python = next((path for path in candidates if path.is_file()), None)
+        if project_python and Path(sys.executable) != project_python:
+            os.execv(str(project_python), [str(project_python), str(Path(__file__).resolve()),
+                                           *(argv if argv is not None else sys.argv[1:])])
+        raise RuntimeError("PyInstaller is required to build the sidecar")
     target_triple = args.target_triple or detect_target_triple()
     if args.dry_run:
         print(json.dumps({"target_triple": target_triple,
                           "artifact": artifact_name(target_triple)}, sort_keys=True))
         return 0
-    print(json.dumps(build(target_triple, args.output_dir.resolve()),
+    operation = ensure_current if args.if_stale else build
+    print(json.dumps(operation(target_triple, args.output_dir.resolve()),
                      ensure_ascii=False, sort_keys=True))
     return 0
 

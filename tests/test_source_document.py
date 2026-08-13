@@ -49,8 +49,14 @@ class SourceDocumentBuilderTests(unittest.TestCase):
                 font_table = archive.read("word/fontTable.xml").decode("utf-8")
             self.assertEqual(xml.count('w:type="page"'), 1)
             self.assertEqual(xml.count("<w:sectPr"), 2)
-            self.assertEqual(sum(name.endswith(".odttf") for name in names), 1)
+            self.assertEqual(sum(name.endswith(".odttf") for name in names), 2)
             self.assertIn("embedRegular", font_table)
+
+    def test_default_fifty_line_page_uses_safe_a4_line_height(self) -> None:
+        template = SourceDocumentTemplate()
+
+        self.assertEqual(template.lines_per_page, 50)
+        self.assertLessEqual(template.code_line_height_pt, 14.2)
 
     def test_rejects_incomplete_preview(self) -> None:
         builder = SourceDocumentBuilder(

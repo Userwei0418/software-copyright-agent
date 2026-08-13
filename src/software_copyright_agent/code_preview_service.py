@@ -208,6 +208,9 @@ class CodePreviewService:
             "sufficient": preview.sufficient,
             "selected_files": preview.selected_files,
             "included_files": preview.included_files,
+            "available_buckets": list(preview.available_buckets),
+            "included_buckets": list(preview.included_buckets),
+            "included_languages": list(preview.included_languages),
             "truncated": preview.truncated,
         }
 

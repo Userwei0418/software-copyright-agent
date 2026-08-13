@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
@@ -13,10 +14,10 @@ from typing import List
 
 from PIL import Image, ImageChops
 
-from .font_assets import FontAsset
+from .font_assets import FontAsset, validate_font_bundle
 
 
-QA_POLICY_VERSION = "source-docx-qa-v3"
+QA_POLICY_VERSION = "source-docx-qa-v4"
 MINIMUM_BODY_FILL_RATIO = 0.86
 
 
@@ -53,13 +54,60 @@ class LibreOfficeRenderer:
         self.timeout_seconds = timeout_seconds
         self.dpi = dpi
         self.cjk_font = cjk_font or FontAsset.bundled_cjk()
+        self.symbol_font = FontAsset.bundled_symbols()
+
+    @staticmethod
+    def capability() -> dict:
+        soffice, pdftoppm = LibreOfficeRenderer._resolve_tools()
+        missing = []
+        if not soffice:
+            missing.append("LibreOffice")
+        if not pdftoppm:
+            missing.append("PDF 逐页渲染组件")
+        return {
+            "available": not missing,
+            "renderer": "libreoffice",
+            "missing": missing,
+            "message": "可执行真实 Word 逐页质检" if not missing else
+                "当前设备缺少{0}，暂不能生成真实 Word 预览".format("、".join(missing)),
+        }
+
+    @staticmethod
+    def _resolve_tools():
+        configured_soffice = os.environ.get("COPYRIGHT_AGENT_SOFFICE")
+        soffice_candidates = [configured_soffice, shutil.which("soffice")]
+        if sys.platform == "darwin":
+            soffice_candidates.extend([
+                "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+                str(Path.home() / "Applications/LibreOffice.app/Contents/MacOS/soffice"),
+            ])
+        elif sys.platform == "win32":
+            for variable in ("PROGRAMFILES", "PROGRAMFILES(X86)"):
+                base = os.environ.get(variable)
+                if base:
+                    soffice_candidates.append(str(Path(base) / "LibreOffice/program/soffice.exe"))
+        soffice = next((str(Path(item)) for item in soffice_candidates
+                        if item and Path(item).is_file()), None)
+
+        pdftoppm_candidates = [shutil.which("pdftoppm")]
+        if sys.platform == "darwin":
+            pdftoppm_candidates.extend([
+                "/opt/homebrew/bin/pdftoppm", "/usr/local/bin/pdftoppm",
+            ])
+        frozen_root = getattr(sys, "_MEIPASS", None)
+        if frozen_root:
+            pdftoppm_candidates.extend([
+                str(Path(frozen_root) / "tools" / "pdftoppm"),
+                str(Path(frozen_root) / "tools" / "pdftoppm.exe"),
+            ])
+        pdftoppm = next((str(Path(item)) for item in pdftoppm_candidates
+                         if item and Path(item).is_file()), None)
+        return soffice, pdftoppm
 
     def render(self, document_path: Path, output_dir: Path) -> RenderResult:
-        configured_soffice = os.environ.get("COPYRIGHT_AGENT_SOFFICE")
-        soffice = configured_soffice or shutil.which("soffice")
-        pdftoppm = shutil.which("pdftoppm")
-        if not soffice or not Path(soffice).is_file() or not pdftoppm:
-            raise SourceDocumentQaError("LibreOffice and pdftoppm are required for QA")
+        soffice, pdftoppm = self._resolve_tools()
+        if not soffice or not pdftoppm:
+            raise SourceDocumentQaError(self.capability()["message"])
         output_dir.mkdir(parents=True, exist_ok=True)
         temp_base = "/private/tmp" if Path("/private/tmp").is_dir() else None
         with tempfile.TemporaryDirectory(prefix="docx-qa-profile-", dir=temp_base) as profile, \
@@ -74,6 +122,9 @@ class LibreOfficeRenderer:
             user_fonts = Path(profile) / "Library" / "Fonts"
             user_fonts.mkdir(parents=True)
             shutil.copyfile(self.cjk_font.path, user_fonts / self.cjk_font.path.name)
+            shutil.copyfile(
+                self.symbol_font.path, user_fonts / self.symbol_font.path.name
+            )
             stable_temp = "/private/tmp" if Path("/private/tmp").is_dir() else profile
             environment["TMPDIR"] = stable_temp
             environment["TEMP"] = stable_temp
@@ -124,6 +175,7 @@ class SourceDocumentQaInspector:
     def __init__(self, expected_pages: int = 60, cjk_font: FontAsset = None) -> None:
         self.expected_pages = expected_pages
         self.cjk_font = cjk_font or FontAsset.bundled_cjk()
+        self.symbol_font = FontAsset.bundled_symbols()
 
     def inspect(self, document_path: Path, expected_sha256: str, render: RenderResult) -> QaResult:
         checks: List[QaCheck] = []
@@ -149,15 +201,26 @@ class SourceDocumentQaInspector:
         checks.append(self._check("structure.header_parts", 1, header_count))
         checks.append(self._check("structure.page_field", True, "PAGE" in footer_xml))
         checks.append(self._check("structure.numpages_field", True, "NUMPAGES" in footer_xml))
-        checks.append(self._check("font.embedded_parts", 1, len(embedded_fonts)))
+        checks.append(self._check("font.embedded_parts", 2, len(embedded_fonts)))
         checks.append(self._check("font.embed_regular", True, "embedRegular" in font_table_xml))
         checks.append(self._check("font.embed_setting", True, "embedTrueTypeFonts" in settings_xml))
         checks.append(self._check("font.content_type", True, "obfuscatedFont" in content_types_xml))
         root = ET.fromstring(document_bytes)
         namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
         document_text = "".join(node.text or "" for node in root.iter(namespace))
-        font_summary = self.cjk_font.validate(document_text)
-        checks.append(self._check("font.sha256", self.cjk_font.expected_sha256, font_summary["sha256"]))
+        font_summary = validate_font_bundle(
+            document_text, (self.cjk_font, self.symbol_font)
+        )
+        checks.append(self._check(
+            "font.cjk_sha256",
+            self.cjk_font.expected_sha256,
+            font_summary["fonts"][0]["sha256"],
+        ))
+        checks.append(self._check(
+            "font.symbol_sha256",
+            self.symbol_font.expected_sha256,
+            font_summary["fonts"][1]["sha256"],
+        ))
         checks.append(self._check("font.missing_codepoints", 0, font_summary["missing_codepoints"]))
         checks.append(self._check("render.page_count", self.expected_pages, len(render.page_paths)))
 

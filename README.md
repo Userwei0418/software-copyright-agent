@@ -151,6 +151,19 @@ COPYRIGHT_AGENT_SESSION_TOKEN="至少32字符的每次启动随机令牌" \
 
 sidecar 只绑定 `127.0.0.1` 随机端口，并在标准输出写入单行 JSON 握手。FastAPI、Pydantic 和 Uvicorn 是正式运行依赖，会随应用 sidecar 一起打包；它们不属于需要用户额外安装的外部程序。
 
+## 桌面安装包构建
+
+先安装锁定依赖并冻结当前平台 Sidecar，再调用 Tauri：
+
+```bash
+python -m pip install -e ".[test,packaging]"
+pnpm install --frozen-lockfile
+python scripts/build_sidecar.py
+pnpm tauri build
+```
+
+正式前端构建由 `scripts/build_frontend.mjs` 直接调用仓库内 TypeScript 与 Vite，打包阶段不会再次联网切换包管理器。macOS 与 Windows 的原生构建、安装包类型、Sidecar 生命周期和签名边界见 [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)。
+
 开发资产工作台前端：
 
 ```bash
@@ -174,8 +187,10 @@ python3 scripts/build_sidecar.py
 ```bash
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml
-pnpm tauri dev
+pnpm tauri:dev:stable
 ```
+
+`tauri:dev:stable` 保留前端热更新，但关闭 Rust/Sidecar 文件监视重启，适合长任务与截图采集验收；窗口标题会明确显示“开发版”，避免与 `/Applications` 中的旧安装版混淆。需要调试 Rust 热重载时仍可单独使用 `pnpm tauri dev`。
 
 Rust、Node 和 Python 只属于源码构建环境；发行给最终用户的是包含 WebView 桌面壳和冻结 sidecar 的预编译安装包，不要求用户另装这些开发工具。
 

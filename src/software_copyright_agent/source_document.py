@@ -9,10 +9,16 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor
 
-from .font_assets import DEFAULT_CJK_FAMILY, embed_font_in_docx
+from .font_assets import (
+    DEFAULT_CJK_FAMILY,
+    DEFAULT_SYMBOL_FAMILY,
+    FontAsset,
+    OpenTypeCmap,
+    embed_font_in_docx,
+)
 
 
-GENERATOR_VERSION = "source-docx-v1"
+GENERATOR_VERSION = "source-docx-v4"
 
 
 class SourceDocumentError(ValueError):
@@ -27,7 +33,7 @@ class SourceDocumentTemplate:
     code_font: str = "Courier New"
     east_asia_font: str = DEFAULT_CJK_FAMILY
     code_size_pt: float = 9.0
-    code_line_height_pt: float = 15.0
+    code_line_height_pt: float = 14.2
     code_pages: int = 59
     lines_per_page: int = 50
 
@@ -35,6 +41,8 @@ class SourceDocumentTemplate:
 class SourceDocumentBuilder:
     def __init__(self, template: SourceDocumentTemplate = None) -> None:
         self.template = template or SourceDocumentTemplate()
+        self._cjk_coverage = OpenTypeCmap(FontAsset.bundled_cjk().path)
+        self._symbol_coverage = OpenTypeCmap(FontAsset.bundled_symbols().path)
 
     def build(
         self,
@@ -75,14 +83,17 @@ class SourceDocumentBuilder:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         document.save(str(output_path))
-        font_summary = embed_font_in_docx(output_path)
+        cjk_font_summary = embed_font_in_docx(output_path, FontAsset.bundled_cjk())
+        symbol_font_summary = embed_font_in_docx(
+            output_path, FontAsset.bundled_symbols()
+        )
         return {
             "total_pages_expected": 1 + len(pages),
             "code_pages": len(pages),
             "lines_per_page": self.template.lines_per_page,
             "code_lines": sum(page["line_count"] for page in pages),
             "template": asdict(self.template),
-            "cjk_font": font_summary,
+            "embedded_fonts": [cjk_font_summary, symbol_font_summary],
         }
 
     def _validate_pages(self, pages: list) -> None:
@@ -180,16 +191,40 @@ class SourceDocumentBuilder:
         paragraph.paragraph_format.line_spacing = Pt(self.template.code_line_height_pt)
         paragraph.paragraph_format.keep_with_next = False
         paragraph.paragraph_format.keep_together = False
-        run = paragraph.add_run(entry.get("text", ""))
         is_header = entry.get("kind") == "file_header"
-        self._set_run_font(
-            run,
-            self.template.code_font,
-            self.template.code_size_pt,
-            RGBColor(31, 77, 120) if is_header else RGBColor(0, 0, 0),
-            bold=is_header,
-            east_asia=self.template.east_asia_font,
-        )
+        color = RGBColor(31, 77, 120) if is_header else RGBColor(0, 0, 0)
+        for text, symbol_fallback in self._font_spans(entry.get("text", "")):
+            run = paragraph.add_run(text)
+            family = DEFAULT_SYMBOL_FAMILY if symbol_fallback else self.template.code_font
+            self._set_run_font(
+                run,
+                family,
+                self.template.code_size_pt,
+                color,
+                bold=is_header,
+                east_asia=(DEFAULT_SYMBOL_FAMILY if symbol_fallback else self.template.east_asia_font),
+            )
+
+    def _font_spans(self, text: str) -> list:
+        if not text:
+            return [("", False)]
+        spans = []
+        current = []
+        current_fallback = None
+        for character in text:
+            codepoint = ord(character)
+            fallback = (
+                codepoint > 127
+                and not self._cjk_coverage.contains(codepoint)
+                and self._symbol_coverage.contains(codepoint)
+            )
+            if current and fallback != current_fallback:
+                spans.append(("".join(current), bool(current_fallback)))
+                current = []
+            current.append(character)
+            current_fallback = fallback
+        spans.append(("".join(current), bool(current_fallback)))
+        return spans
 
     @staticmethod
     def _set_run_font(

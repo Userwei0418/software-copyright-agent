@@ -1,11 +1,15 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from PIL import Image
 
 from fastapi.testclient import TestClient
 
 from software_copyright_agent.sidecar import (
-    MAX_REQUEST_BYTES, SESSION_HEADER, SIDECAR_PROTOCOL_VERSION, create_app,
+    MAX_DRAWIO_EDITOR_REQUEST_BYTES, MAX_REQUEST_BYTES, SESSION_HEADER, SIDECAR_PROTOCOL_VERSION,
+    _parent_is_alive, _parent_pid_from_environment, create_app,
 )
 
 
@@ -47,6 +51,127 @@ class SidecarFastApiTests(unittest.TestCase):
         )
         self.assertNotIn("access-control-allow-origin", denied.headers)
 
+    def test_quick_start_routes_require_session_and_validate_configuration(self) -> None:
+        self.assertEqual(self.client.get("/api/v1/quick-start").status_code, 401)
+        listed = self.client.get("/api/v1/quick-start", headers=self.headers)
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.json()["items"], [])
+        invalid = self.client.post("/api/v1/quick-start", headers=self.headers, json={
+            "project_path": str(self.data_dir / "missing"), "software_name": "演示软件",
+            "version": "V1.0", "screenshot_folder": str(self.data_dir),
+            "manual_model_id": "manual-model", "diagram_model_id": "diagram-model",
+            "vision_model_id": "vision-model", "sensitive_confirmed": True,
+            "auto_adopt_confirmed": True,
+        })
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.json()["error"]["code"], "quick_start_error")
+        missing = self.client.delete(
+            "/api/v1/quick-start/missing", headers=self.headers
+        )
+        self.assertEqual(missing.status_code, 400)
+
+    def test_source_document_qa_capability_is_session_protected(self) -> None:
+        endpoint = "/api/v1/tasks/task-1/source-materials/source-docx/qa-capability"
+        self.assertEqual(self.client.get(endpoint).status_code, 401)
+        response = self.client.get(endpoint, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("available", response.json())
+        self.assertEqual(response.json()["renderer"], "libreoffice")
+        self.assertIsInstance(response.json()["missing"], list)
+
+    def test_figure_list_returns_stable_error_before_sections_exist(self) -> None:
+        response = self.client.get(
+            "/api/v1/manual-jobs/not-started/figures", headers=self.headers
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "manual_figure_error")
+
+    def test_manual_document_finalize_route_is_registered(self) -> None:
+        response = self.client.post(
+            "/api/v1/manual-jobs/not-started/documents/1/finalize",
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"]["code"], "manual_document_finalize_error"
+        )
+
+    def test_figure_asset_route_returns_drawio_source_bytes(self) -> None:
+        source = b'<?xml version="1.0"?><mxfile><diagram id="a"/></mxfile>'
+        with patch(
+            "software_copyright_agent.sidecar.ManualFigureService.read_asset",
+            return_value=(source, "application/vnd.jgraph.mxfile"),
+        ) as read_asset:
+            unauthorized = self.client.get(
+                "/api/v1/manual-jobs/job-1/figures/architecture.drawio"
+            )
+            response = self.client.get(
+                "/api/v1/manual-jobs/job-1/figures/architecture.drawio",
+                headers=self.headers,
+            )
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, source)
+        self.assertEqual(
+            response.headers["content-type"], "application/vnd.jgraph.mxfile"
+        )
+        read_asset.assert_called_once_with("job-1", "architecture", "drawio")
+
+    def test_project_screenshot_routes_import_and_persist_explicit_ui_decision(self) -> None:
+        project = self.data_dir / "screenshot-project"
+        project.mkdir()
+        (project / "package.json").write_text(
+            '{"name":"screenshot-demo","dependencies":{"react":"1"}}', encoding="utf-8")
+        task_id = self.client.post(
+            "/api/v1/projects/scan", headers=self.headers, json={"path": str(project)}
+        ).json()["task_id"]
+        screenshot = self.data_dir / "dashboard.png"
+        Image.new("RGB", (1280, 720), "#dbeafe").save(screenshot)
+        imported = self.client.post(
+            f"/api/v1/tasks/{task_id}/screenshots/import-batch", headers=self.headers,
+            json={"paths": [str(screenshot)], "source": "user"},
+        )
+        self.assertEqual(imported.status_code, 200)
+        self.assertEqual(imported.json()["imported_count"], 1)
+        asset_id = imported.json()["results"][0]["asset"]["id"]
+        history = self.client.get(
+            f"/api/v1/tasks/{task_id}/screenshots/{asset_id}/history", headers=self.headers,
+        )
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.json()["image_revisions"][0]["version"], 1)
+        restored = self.client.post(
+            f"/api/v1/tasks/{task_id}/screenshots/{asset_id}/rollback", headers=self.headers,
+            json={"image_version": 1},
+        )
+        self.assertEqual(restored.status_code, 200)
+        self.assertEqual(restored.json()["version"], 2)
+        self.assertEqual(restored.json()["analysis_status"], "outdated")
+        decision = self.client.put(
+            f"/api/v1/tasks/{task_id}/screenshots/ui-evidence-decision",
+            headers=self.headers, json={"decision": "source_inferred",
+                                       "reason": "用户确认暂时没有真实截图"},
+        )
+        self.assertEqual(decision.status_code, 200)
+        workspace = self.client.get(
+            f"/api/v1/tasks/{task_id}/screenshots/workspace", headers=self.headers,
+        )
+        self.assertEqual(workspace.status_code, 200)
+        self.assertEqual(len(workspace.json()["assets"]), 1)
+        self.assertEqual(workspace.json()["ui_evidence_decision"]["decision"],
+                         "source_inferred")
+
+    def test_desktop_parent_pid_is_validated_and_monitored(self) -> None:
+        with patch.dict("os.environ", {"COPYRIGHT_AGENT_PARENT_PID": "invalid"}):
+            self.assertIsNone(_parent_pid_from_environment())
+        with patch.dict("os.environ", {"COPYRIGHT_AGENT_PARENT_PID": "4321"}):
+            self.assertEqual(_parent_pid_from_environment(), 4321)
+        with patch("software_copyright_agent.sidecar.os.kill") as signal:
+            self.assertTrue(_parent_is_alive(4321))
+            signal.assert_called_once_with(4321, 0)
+        with patch("software_copyright_agent.sidecar.os.kill",
+                   side_effect=ProcessLookupError):
+            self.assertFalse(_parent_is_alive(4321))
+
     def test_pydantic_schema_errors_use_stable_error_contract(self) -> None:
         response = self.client.post(
             "/api/v1/tasks/task-1/diagram-assets/system_architecture/revisions",
@@ -66,6 +191,32 @@ class SidecarFastApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 413)
         self.assertEqual(response.json()["error"]["code"], "request_too_large")
+        editor_endpoint = "/api/v1/manual-jobs/job/figures/figure/editor-revision"
+        editor_schema_error = self.client.post(
+            editor_endpoint,
+            headers={**self.headers, "content-length": str(MAX_REQUEST_BYTES + 1)},
+            content=b"{}",
+        )
+        self.assertEqual(editor_schema_error.status_code, 400)
+        ai_patch_schema_error = self.client.post(
+            "/api/v1/manual-jobs/job/figures/figure/ai-patch",
+            headers={**self.headers, "content-length": str(MAX_REQUEST_BYTES + 1)},
+            content=b"{}",
+        )
+        self.assertEqual(ai_patch_schema_error.status_code, 400)
+        ai_stream_schema_error = self.client.post(
+            "/api/v1/manual-jobs/job/figures/figure/ai-patch-stream",
+            headers={**self.headers, "content-length": str(MAX_REQUEST_BYTES + 1)},
+            content=b"{}",
+        )
+        self.assertEqual(ai_stream_schema_error.status_code, 400)
+        editor_too_large = self.client.post(
+            editor_endpoint,
+            headers={**self.headers,
+                     "content-length": str(MAX_DRAWIO_EDITOR_REQUEST_BYTES + 1)},
+            content=b"{}",
+        )
+        self.assertEqual(editor_too_large.status_code, 413)
 
     def test_model_config_metadata_never_contains_api_key(self) -> None:
         config_id = "11111111-1111-4111-8111-111111111111"
@@ -91,6 +242,18 @@ class SidecarFastApiTests(unittest.TestCase):
         )
         self.assertEqual(endpoint.status_code, 200)
         self.assertEqual(endpoint.json()["endpoint_mode"], "chat_completions")
+        self.assertIsNotNone(endpoint.json()["verified_at"])
+        with patch("software_copyright_agent.manual_screenshot_evidence.secrets.token_hex",
+                   return_value="abcd"), patch(
+            "software_copyright_agent.manual_screenshot_evidence.ScreenshotEvidenceService._vision_request",
+            return_value='{"code":"ABCD"}',
+        ):
+            vision = self.client.post(
+                f"/api/v1/model-configs/{second_id}/vision-capability", headers=self.headers,
+                json={"supports_vision": True},
+            )
+        self.assertEqual(vision.status_code, 200)
+        self.assertTrue(vision.json()["supports_vision"])
         listed = self.client.get("/api/v1/model-configs", headers=self.headers)
         self.assertEqual({item["model_name"] for item in listed.json()["items"]},
                          {"writer-v1", "writer-v2"})
