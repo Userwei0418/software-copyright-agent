@@ -25,6 +25,21 @@ class QuickStartUiContractTests(unittest.TestCase):
         self.assertIn("本地服务正在完成冷启动，稍后自动重连", app)
         self.assertIn("connect(attempt + 1)", app)
 
+    def test_sidebar_exposes_exportable_redacted_run_diagnostics(self):
+        app = (ROOT / "ui" / "App.tsx").read_text(encoding="utf-8")
+        page = (ROOT / "ui" / "RunLogs.tsx").read_text(encoding="utf-8")
+        api = (ROOT / "src" / "software_copyright_agent" / "sidecar.py").read_text(
+            encoding="utf-8")
+        diagnostics = (ROOT / "src" / "software_copyright_agent" /
+                       "run_diagnostics.py").read_text(encoding="utf-8")
+        rust = (ROOT / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+        self.assertIn("运行日志", app)
+        self.assertIn("<RunLogs", app)
+        self.assertIn("导出诊断包", page)
+        self.assertIn("/api/v1/run-diagnostics", api)
+        self.assertIn("[REDACTED]", diagnostics)
+        self.assertIn("export_run_diagnostics", rust)
+
     def test_quick_start_requires_explicit_screenshot_authorization(self):
         page = (ROOT / "ui" / "QuickStart.tsx").read_text(encoding="utf-8")
         self.assertIn("截图安全确认", page)
@@ -124,6 +139,7 @@ class QuickStartUiContractTests(unittest.TestCase):
         service = (ROOT / "src" / "software_copyright_agent" / "quick_start.py").read_text(
             encoding="utf-8")
         self.assertIn("节点重试", page)
+        self.assertNotIn("run.config.retry_limit + 1", page)
         self.assertIn('retry_limit=0', service)
         self.assertNotIn('previous_job["status"]', service)
 

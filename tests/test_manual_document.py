@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw
 
 from software_copyright_agent.manual_document import ManualDocumentService
 from software_copyright_agent.manual_pipeline import ManualPipelineService
+from software_copyright_agent.manual_qa import QA_POLICY_VERSION
 from software_copyright_agent.storage import Database
 
 
@@ -292,9 +293,9 @@ class ManualDocumentServiceTests(unittest.TestCase):
                     """INSERT INTO manual_document_qa_runs(id,document_artifact_id,job_id,
                     qa_version,policy_version,renderer_kind,passed,checks_json,summary_json,
                     report_relative_path,render_relative_path,preview_pdf_relative_path,created_at)
-                    VALUES (?,?,?,1,'manual-docx-qa-v15','libreoffice_word',1,
+                    VALUES (?,?,?,1,?,'libreoffice_word',1,
                     '[]','{}','report-current.json','render-current','preview-current.pdf',?)""",
-                    (str(uuid4()), result["id"], job["id"], now),
+                    (str(uuid4()), result["id"], job["id"], QA_POLICY_VERSION, now),
                 )
             final = service.finalize(job["id"], 2)
             self.assertEqual(final["document_kind"], "final_document")

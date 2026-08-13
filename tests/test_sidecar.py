@@ -70,6 +70,13 @@ class SidecarFastApiTests(unittest.TestCase):
         )
         self.assertEqual(missing.status_code, 400)
 
+    def test_run_diagnostics_is_session_protected_and_empty_by_default(self) -> None:
+        self.assertEqual(self.client.get("/api/v1/run-diagnostics").status_code, 401)
+        response = self.client.get("/api/v1/run-diagnostics?limit=3", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["run_count"], 0)
+        self.assertEqual(response.json()["runs"], [])
+
     def test_source_document_qa_capability_is_session_protected(self) -> None:
         endpoint = "/api/v1/tasks/task-1/source-materials/source-docx/qa-capability"
         self.assertEqual(self.client.get(endpoint).status_code, 401)

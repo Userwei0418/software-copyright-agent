@@ -13,6 +13,7 @@ import {
 } from "./api";
 import "./quick-start.css";
 import "./quick-start-enhancements.css";
+import type { AppPage } from "./App";
 
 type Props = {
   connection: SidecarConnection | null;
@@ -20,8 +21,7 @@ type Props = {
   onTaskChange: (taskId: string) => void;
   onOpenAssets: () => void;
   onOpenSettings: () => void;
-  onNavigate: (page: "quick" | "overview" | "source" | "manual" | "screenshots" |
-    "diagrams" | "assets" | "settings") => void;
+  onNavigate: (page: AppPage) => void;
 };
 
 const defaultConfig: QuickStartConfig = {
@@ -393,7 +393,7 @@ export function QuickStart({ connection, ensureConnection, onTaskChange, onOpenA
       <span>{stage.status === "completed" ? "✓" : stage.status === "failed" ? "!" :
         String(index + 1).padStart(2, "0")}</span>
       <div><strong>{stage.title}</strong><small>{stage.status === "running" ? stage.description : stage.message}</small>
-        {stage.attempt > 1 && <em>节点重试 {stage.attempt}/{run.config.retry_limit + 1}</em>}</div>
+        {stage.attempt > 1 && <em>节点重试记录 · 累计 {stage.attempt} 次</em>}</div>
       <button className="stage-help" data-help={meta.help}
         aria-label={`了解${stage.title}并查看详情`} onClick={() => openStage(key)}>?</button>
     </article>;

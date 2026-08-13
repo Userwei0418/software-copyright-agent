@@ -137,6 +137,13 @@ struct ManualExportReceiptRequest {
     sha256: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticsExportResult {
+    destination_path: String,
+    size_bytes: u64,
+}
+
 #[derive(Clone, Deserialize)]
 struct CaptureLaunchCandidate {
     id: String,
@@ -466,6 +473,44 @@ async fn export_manual_document(
         sha256,
         verified: true,
         receipt_recorded,
+    })
+}
+
+#[tauri::command]
+async fn export_run_diagnostics(
+    limit: u32,
+    destination: String,
+    state: State<'_, SidecarState>,
+) -> Result<DiagnosticsExportResult, String> {
+    if !(1..=20).contains(&limit) {
+        return Err("diagnostic run count must be between 1 and 20".into());
+    }
+    let destination = validate_json_destination(&destination)?;
+    let connection = active_sidecar(&state)?;
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}/api/v1/run-diagnostics?limit={}",
+            connection.base_url, limit
+        ))
+        .header("X-Session-Token", connection.session_token)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|_| "run diagnostics request failed")?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "run diagnostics are unavailable ({})",
+            response.status().as_u16()
+        ));
+    }
+    let body = response
+        .bytes()
+        .await
+        .map_err(|_| "run diagnostics body is invalid")?;
+    let size_bytes = write_verified_export(&destination, &body)?;
+    Ok(DiagnosticsExportResult {
+        destination_path: destination.to_string_lossy().into_owned(),
+        size_bytes,
     })
 }
 
@@ -1672,6 +1717,20 @@ fn validate_docx_destination(value: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn validate_json_destination(value: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err("diagnostic export destination must be absolute".into());
+    }
+    if path.extension().and_then(|item| item.to_str()) != Some("json") {
+        return Err("diagnostic export filename must end with .json".into());
+    }
+    if path.components().any(|item| matches!(item, Component::ParentDir)) {
+        return Err("diagnostic export destination must not contain parent traversal".into());
+    }
+    Ok(path)
+}
+
 fn validate_asset_destination(value: &str, extension: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(value);
     if !path.is_absolute()
@@ -1768,6 +1827,7 @@ pub fn run() {
             reveal_source_document,
             export_source_document,
             export_manual_document,
+            export_run_diagnostics,
             export_manual_figure_asset,
             reveal_exported_document,
             reveal_exported_asset,

@@ -4,12 +4,19 @@ import unittest
 from pathlib import Path
 from uuid import uuid4
 
-from software_copyright_agent.manual_drafting import ManualDraftingService
+from software_copyright_agent.manual_drafting import ManualDraftingService, unverified_outcome_hits
 from software_copyright_agent.manual_pipeline import ManualPipelineService
 from software_copyright_agent.storage import Database
 
 
 class ManualDraftingServiceTests(unittest.TestCase):
+    def test_test_intent_is_not_misclassified_as_a_completed_test_result(self) -> None:
+        source = ("测试用例构造符合规范的请求体，断言后端是否正确返回资源标识符；"
+                  "在验证权限控制时，模拟不同角色令牌访问受保护接口，"
+                  "确认拦截器是否按预期。")
+        self.assertEqual(unverified_outcome_hits(source), [])
+        self.assertEqual(ManualDraftingService._sanitize_unverified_outcomes(source), source)
+
     def test_unverified_test_outcomes_are_rewritten_to_evidence_bound_language(self) -> None:
         source = ("测试文件覆盖了用户权限模块的基础功能，并验证了状态流转的正确性。"
                   "源码中定义了相关断言目标和异常分支。")

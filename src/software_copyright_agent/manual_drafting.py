@@ -58,6 +58,10 @@ UNVERIFIED_OUTCOME_PATTERNS = tuple(re.compile(pattern) for pattern in (
     r"(?:测试(?:结构|文件|用例|过程)?|用例).{0,45}(?:提供|构成).{0,25}(?:保障|依据|防线)",
     r"(?:测试(?:结构|文件|用例|过程)?|用例).{0,45}确保.{0,30}",
 ))
+TEST_INTENT_MARKERS = re.compile(r"是否|用于|用以|以便|旨在|模拟|构造|断言|检查点")
+TEST_COMPLETION_MARKERS = re.compile(
+    r"已经|已通过|均已|全部通过|验证了|确认了|测试结果|结果表明|确保|证明"
+)
 EVIDENCE_BOUND_TESTING_SENTENCE = (
     "项目材料中可识别到相关文件、断言目标或校验逻辑；本文仅记录源码直接呈现的检查点，"
     "不表述为已经执行的结果。"
@@ -66,6 +70,23 @@ EVIDENCE_BOUND_TESTING_SENTENCE = (
 
 class ManualDraftingError(ValueError):
     pass
+
+
+def unverified_outcome_hits(text: str) -> list:
+    """Return unsupported result claims without flagging test-plan language.
+
+    A sentence that says a test *constructs*, *simulates* or checks *whether* a
+    condition holds describes a method, not a completed result.  Treating those
+    phrases as proof claims made Quick Start retry an unchanged document forever.
+    """
+    hits = []
+    for pattern in UNVERIFIED_OUTCOME_PATTERNS:
+        for match in pattern.finditer(text or ""):
+            value = match.group(0)
+            if TEST_INTENT_MARKERS.search(value) and not TEST_COMPLETION_MARKERS.search(value):
+                continue
+            hits.append(value)
+    return sorted(set(hits))
 
 
 class ManualDraftingService:
@@ -791,7 +812,7 @@ class ManualDraftingService:
     @staticmethod
     def _sanitize_unverified_outcomes(text: str) -> str:
         """Keep test intent while removing completion claims unsupported by run evidence."""
-        if not text or not any(pattern.search(text) for pattern in UNVERIFIED_OUTCOME_PATTERNS):
+        if not text or not unverified_outcome_hits(text):
             return text
         parts = re.split(r"(?<=[。！？；])", text)
         normalized = []
@@ -799,8 +820,7 @@ class ManualDraftingService:
             if not part:
                 continue
             replacement = (EVIDENCE_BOUND_TESTING_SENTENCE
-                           if any(pattern.search(part) for pattern in UNVERIFIED_OUTCOME_PATTERNS)
-                           else part)
+                           if unverified_outcome_hits(part) else part)
             if not normalized or normalized[-1] != replacement:
                 normalized.append(replacement)
         return "".join(normalized).strip()

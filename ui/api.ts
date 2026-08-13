@@ -180,6 +180,24 @@ export type QuickStartConfig = {
   sensitive_confirmed: boolean; auto_adopt_confirmed: boolean;
 };
 
+export type RunDiagnosticsStage = Pick<QuickStartStage, "key" | "title" | "description" |
+  "status" | "attempt" | "message" | "started_at" | "finished_at"> & {
+    events?: QuickStartStage["events"];
+    output?: Record<string, unknown>;
+  };
+export type RunDiagnosticsItem = {
+  id: string; status: string; current_stage: string; safe_error_message: string | null;
+  task_id: string | null; manual_job_id: string | null;
+  created_at: string; started_at: string | null; finished_at: string | null; updated_at: string;
+  config: Record<string, unknown>; stages: RunDiagnosticsStage[];
+  outputs: Record<string, unknown>; task_events: Array<Record<string, unknown>>;
+  manual_job: null | Record<string, unknown>; manual_nodes: Array<Record<string, unknown>>;
+  document_qa: Array<Record<string, unknown>>; source_qa: Array<Record<string, unknown>>;
+};
+export type RunDiagnosticsBundle = { schema_version: number; generated_from: string;
+  run_count: number; runs: RunDiagnosticsItem[] };
+export type DiagnosticsExportResult = { destinationPath: string; sizeBytes: number };
+
 export type ManualExportResult = { destinationPath: string; sizeBytes: number; sha256: string;
   verified: boolean; receiptRecorded: boolean };
 export type ManualExportRecord = { id: string; job_id: string; document_version: number;
@@ -646,6 +664,18 @@ export async function listQuickStartRuns(connection: SidecarConnection): Promise
   });
   return (await requireJson<{ items: QuickStartRun[] }>(response,
     "快速任务读取失败")).items;
+}
+
+export async function loadRunDiagnostics(connection: SidecarConnection, limit = 5) {
+  const response = await localFetch(connection,
+    `/api/v1/run-diagnostics?limit=${Math.max(1, Math.min(20, limit))}`, {
+      headers: { "X-Session-Token": connection.sessionToken },
+    });
+  return requireJson<RunDiagnosticsBundle>(response, "运行日志读取失败");
+}
+
+export async function exportRunDiagnostics(limit: number, destination: string) {
+  return invoke<DiagnosticsExportResult>("export_run_diagnostics", { limit, destination });
 }
 
 export async function loadQuickStartRun(connection: SidecarConnection, runId: string) {

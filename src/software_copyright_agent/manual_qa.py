@@ -15,13 +15,13 @@ from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from .font_assets import FontAsset
 from .manual_document import ManualDocumentError, ManualDocumentService
-from .manual_drafting import UNVERIFIED_OUTCOME_PATTERNS
+from .manual_drafting import unverified_outcome_hits
 from .service import utc_now
 from .source_document_qa import LibreOfficeRenderer, SourceDocumentQaError
 from .storage import Database
 
 
-QA_POLICY_VERSION = "manual-docx-qa-v15"
+QA_POLICY_VERSION = "manual-docx-qa-v16"
 # Default used by the deterministic renderer in focused unit tests. Production
 # persists the concrete runtime renderer so previews and QA evidence agree.
 RENDERER_KIND = "deterministic_companion"
@@ -580,11 +580,7 @@ class ManualDocxInspector:
             "passed" if not epistemic_hits else
             "正式材料中仍包含推断性措辞，必须改写为可由证据直接支持的事实",
         ))
-        unverified_outcomes = sorted(set(
-            match.group(0)
-            for pattern in UNVERIFIED_OUTCOME_PATTERNS
-            for match in pattern.finditer(full_text)
-        ))
+        unverified_outcomes = unverified_outcome_hits(full_text)
         checks.append(ManualQaCheck(
             "content.unverified_outcomes", not unverified_outcomes, "blocker", [],
             unverified_outcomes,

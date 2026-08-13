@@ -11,12 +11,16 @@ import { Settings } from "./Settings";
 import { FormalDiagramWorkspace } from "./FormalDiagramWorkspace";
 import { ScreenshotAssetWorkspace } from "./ScreenshotAssetWorkspace";
 import { QuickStart } from "./QuickStart";
+import { RunLogs } from "./RunLogs";
+
+export type AppPage = "quick" | "overview" | "source" | "manual" | "screenshots" |
+  "diagrams" | "assets" | "logs" | "settings";
 
 export function App() {
   const [connection, setConnection] = useState<SidecarConnection | null>(null);
   const [taskId, setTaskId] = useState("");
   const [message, setMessage] = useState("正在启动本地服务…");
-  const [page, setPage] = useState<"quick" | "overview" | "source" | "manual" | "screenshots" | "diagrams" | "assets" | "settings">("overview");
+  const [page, setPage] = useState<AppPage>("overview");
   const [previewRequested, setPreviewRequested] = useState(0);
   const [manualJob, setManualJob] = useState<FormalManualJob | null>(null);
   const connectionAttempt = useRef<Promise<SidecarConnection> | null>(null);
@@ -101,6 +105,8 @@ export function App() {
           onClick={() => setPage("diagrams")}>图表资产</button>
         <button className={`nav-item ${page === "assets" ? "active" : ""}`}
           onClick={() => setPage("assets")}>我的资产</button>
+        <button className={`nav-item ${page === "logs" ? "active" : ""}`}
+          onClick={() => setPage("logs")}>运行日志</button>
         <button className={`nav-item ${page === "settings" ? "active" : ""}`}
           onClick={() => setPage("settings")}>设置</button>
       </nav>
@@ -130,6 +136,7 @@ export function App() {
         onPreview={(value) => { setTaskId(value); setPreviewRequested((count) => count + 1); setPage("source"); }}
         onPreviewManual={(value) => { setTaskId(value); setPage("manual"); }}
         onDeleted={(value) => { if (taskId === value) { setTaskId(""); setManualJob(null); } }} /> :
+      page === "logs" ? <RunLogs connection={connection} /> :
       page === "settings" ? <Settings connection={connection} /> : page === "diagrams" ?
       <FormalDiagramWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId}
         onOpenManual={() => setPage("manual")} /> : page === "screenshots" ?

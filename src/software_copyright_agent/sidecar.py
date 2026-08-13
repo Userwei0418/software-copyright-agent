@@ -55,6 +55,7 @@ from .model_config import ModelConfigInput, ModelConfigService
 from .credential_vault import CredentialVault
 from .app_settings import AppSettingsService
 from .quick_start import QuickStartError, QuickStartService
+from .run_diagnostics import RunDiagnosticsService
 
 
 SIDECAR_PROTOCOL_VERSION = 1
@@ -388,6 +389,7 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
         qa=manual_qa_service, settings=AppSettingsService(database),
     )
     quick_start_service.recover_interrupted()
+    run_diagnostics_service = RunDiagnosticsService(database)
     auto_ui_lock = threading.Lock()
     auto_ui_pending = set()
     auto_ui_running = set()
@@ -582,6 +584,17 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 "error": {"code": "quick_start_error", "message": str(error)}
             })
         return Response(status_code=204)
+
+    @app.get("/api/v1/run-diagnostics")
+    def run_diagnostics(
+        limit: int = 5,
+        token: Optional[str] = Header(default=None, alias=SESSION_HEADER),
+    ):
+        if not authorized(token):
+            return JSONResponse(status_code=401, content={
+                "error": {"code": "unauthorized", "message": "Invalid session token"}
+            })
+        return run_diagnostics_service.recent(limit)
 
     @app.get("/api/v1/model-configs")
     def model_configs(token: Optional[str] = Header(default=None, alias=SESSION_HEADER)):

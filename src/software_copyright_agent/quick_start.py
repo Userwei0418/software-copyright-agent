@@ -27,6 +27,14 @@ class QuickStartError(ValueError):
     pass
 
 
+class QuickStartBlocked(QuickStartError):
+    """A durable, deterministic gate that must not be retried unchanged."""
+
+    def __init__(self, message: str, *, details: Optional[dict] = None) -> None:
+        super().__init__(message)
+        self.details = details or {}
+
+
 class QuickStartService:
     """Durable unattended orchestration built from the accepted manual workflows."""
 
@@ -318,16 +326,52 @@ class QuickStartService:
 
         def finalize_stage() -> dict:
             documents = self._documents.list(job_id)
+            def inspect_document(document: dict) -> dict:
+                quality = document.get("quality") or {}
+                if (quality.get("current_policy")
+                        and quality.get("status") not in {"not_checked", "outdated"}):
+                    try:
+                        return {"document": document,
+                                "qa_run": self._qa.get(job_id, document["version"])}
+                    except Exception:
+                        pass
+                return self._qa.execute(job_id, document["version"])
+
+            # A previous recovery may already have assembled a final document
+            # before a later QA rule rejected it.  Recheck that durable artifact
+            # under the current policy instead of assembling v4/v5 copies.
+            existing_final = next((item for item in documents
+                                   if item["document_kind"] == "final_document"), None)
+            if existing_final is not None:
+                final_qa = inspect_document(existing_final)
+                final_summary = final_qa["qa_run"].get("summary") or {}
+                final_blockers = int(
+                    final_summary.get("failed_check_count")
+                    or final_summary.get("blocker_count")
+                    or len(final_summary.get("failed_checks") or [])
+                )
+                if final_blockers == 0 and final_qa["qa_run"].get("passed"):
+                    return {"manual_document": final_qa["document"],
+                            "manual_quality": final_qa["qa_run"],
+                            "source_document": source_snapshot["source_document"]}
+                failed_checks = final_summary.get("failed_checks") or []
+                checks = final_qa["qa_run"].get("checks") or []
+                raise QuickStartBlocked(
+                    "现有终稿质量检查仍有阻断问题：" + "、".join(failed_checks),
+                    details={"document_version": existing_final["version"],
+                             "failed_checks": [
+                                 {"key": item.get("key"), "message": item.get("message"),
+                                  "actual": item.get("actual")}
+                                 for item in checks if not item.get("passed")
+                             ], "summary": final_summary},
+                )
+            # list() is version-descending. Always inspect the newest candidate;
+            # an older implementation kept rechecking v2 after v3 already existed.
             candidate = next((item for item in documents
                               if item["document_kind"] == "formal_candidate"), None)
             if candidate is None:
                 candidate = self._documents.assemble(job_id)
-                qa_result = self._qa.execute(job_id, candidate["version"])
-            else:
-                try:
-                    qa_result = self._qa.execute(job_id, candidate["version"])
-                except Exception:
-                    qa_result = {"qa_run": {"passed": False}}
+            qa_result = inspect_document(candidate)
             qa_summary = qa_result["qa_run"].get("summary") or {}
             # Manual QA publishes failed_check_count/failed_checks. Older quick
             # orchestration only looked for blocker_count, so a permissive
@@ -339,9 +383,21 @@ class QuickStartService:
                 or len(qa_summary.get("failed_checks") or [])
             )
             if qa_blockers > 0:
-                raise QuickStartError("说明书质量检查仍有阻断问题，不能自动定稿")
+                failed_checks = qa_summary.get("failed_checks") or []
+                checks = qa_result["qa_run"].get("checks") or []
+                failed_details = [{"key": item.get("key"), "message": item.get("message"),
+                                   "actual": item.get("actual")}
+                                  for item in checks if item.get("key") in failed_checks]
+                raise QuickStartBlocked(
+                    "说明书质量检查仍有阻断问题：" + "、".join(failed_checks),
+                    details={"document_version": candidate["version"],
+                             "failed_checks": failed_details,
+                             "warning_count": qa_summary.get("warning_count", 0)},
+                )
             if not qa_result["qa_run"].get("passed") and not config["finalize_with_warnings"]:
-                raise QuickStartError("说明书质量检查存在警告，当前配置不允许自动定稿")
+                raise QuickStartBlocked("说明书质量检查存在警告，当前配置不允许自动定稿",
+                                        details={"document_version": candidate["version"],
+                                                 "summary": qa_summary})
             final = self._documents.finalize(job_id, candidate["version"])
             final_qa = self._qa.execute(job_id, final["version"])
             # QA updates status, preview and quality metadata in place. Return
@@ -356,10 +412,17 @@ class QuickStartService:
                 or len(final_summary.get("failed_checks") or [])
             )
             if final_blockers > 0 or not final_qa["qa_run"].get("passed"):
-                raise QuickStartError("终稿逐页检查出现阻断问题，已保留文档但未标记交付完成")
+                raise QuickStartBlocked(
+                    "终稿逐页检查出现阻断问题，已保留文档但未标记交付完成",
+                    details={"document_version": final["version"],
+                             "summary": final_summary},
+                )
             return {"manual_document": final, "manual_quality": final_qa["qa_run"],
                     "source_document": source_snapshot["source_document"]}
-        outputs = self._stage(run_id, "finalize", finalize_stage)
+        # Re-rendering an unchanged document cannot repair a content/layout gate.
+        # The user-configured retry budget remains available for transient model
+        # and asset nodes, but the merge gate runs once per explicit recovery.
+        outputs = self._stage(run_id, "finalize", finalize_stage, retry_limit=0)
         self._set_run(run_id, outputs=outputs)
         self._stage(run_id, "delivery", lambda: {"ready": True})
         self._set_run(run_id, status="completed", finished=True, current_stage="delivery")
@@ -443,7 +506,12 @@ class QuickStartService:
                 return result
             except Exception as error:
                 last_error = error
-                self._update_stage(run_id, key, "failed", str(error))
+                details = getattr(error, "details", None)
+                self._update_stage(run_id, key, "failed", str(error), output=(
+                    {"failure": self._jsonable(details)} if details else None
+                ))
+                if isinstance(error, QuickStartBlocked):
+                    break
         raise last_error
 
     def _skip_completed(self, run_id: str, key: str, message: str) -> None:
