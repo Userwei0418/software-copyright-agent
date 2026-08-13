@@ -191,7 +191,7 @@ function App() {
               chapters.forEach((chapter, index) => { if (current >= chapter.time) next = index; });
               if (next !== activeChapter) setActiveChapter(next);
             }}>
-              <source src={demoVideoUrl} type="video/quicktime" />
+              <source src={demoVideoUrl} />
               你的浏览器暂不支持视频播放。
             </video>
             <div className="video-chapters" aria-label="视频章节">
