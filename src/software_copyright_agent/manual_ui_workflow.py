@@ -23,6 +23,48 @@ class ManualUiWorkflowService:
         self._qa = qa or ManualQaService(database, data_root, documents=self._documents)
         self._execution = execution or ManualExecutionNodeService(database)
 
+    def regenerate_section(self, job_id: str) -> dict:
+        """Retry only the screenshot-driven chapter without rerunning the full job."""
+        node_key = "section:ui_operations"
+        try:
+            current = self._execution.get(job_id, node_key)
+        except ValueError:
+            current = None
+        attempt = int(current.get("attempt", 0) if current else 0) + 1
+        self._execution.prepare(
+            job_id, node_key, "draft", "section", "用户界面与操作说明",
+            dependencies=["project_profile", "screenshots"],
+            max_attempts=max(attempt, int(current.get("max_attempts", 0) if current else 0)),
+            input_value={"section_key": "ui_operations", "evidence_mode": "adopted_screenshots"},
+        )
+        self._execution.queued(job_id, node_key)
+        self._execution.running(job_id, node_key, attempt)
+        try:
+            snapshot = self._evidence.snapshot_for_job(job_id)
+            screenshots = snapshot["screenshots"]
+            if not screenshots:
+                self._execution.waiting_for_screenshots(job_id, node_key, {
+                    "next_action": "至少审核并确认采用一张真实截图",
+                })
+                raise ManualUiWorkflowError("至少审核并确认采用一张真实截图")
+            section = self._drafting.generate_ui_from_screenshots(
+                job_id, snapshot["profile"]["profile"], screenshots
+            )
+            sources = self._evidence.record_ui_sources(
+                job_id, section["id"], snapshot["profile"]["id"], screenshots
+            )
+            self._execution.complete(job_id, node_key, {
+                "version": section["version"], "source_count": len(screenshots),
+                "adopted_set_hash": sources["adopted_set_hash"],
+                "next_action": "用户界面章节已更新；可继续装配当前可用资产",
+            })
+            return section
+        except ManualUiWorkflowError:
+            raise
+        except Exception as error:
+            self._execution.fail(job_id, node_key, str(error), "ui_section_generation")
+            raise ManualUiWorkflowError(str(error)) from error
+
     def confirm_and_update(self, job_id: str) -> dict:
         self._execution.prepare(
             job_id, "section:ui_operations", "draft", "section", "用户界面说明",

@@ -75,7 +75,8 @@ class FontAsset:
 
 
 def validate_font_bundle(
-    required_characters: Iterable[str], assets: Sequence[FontAsset] = ()
+    required_characters: Iterable[str], assets: Sequence[FontAsset] = (),
+    allow_system_symbol_fallback: bool = False,
 ) -> dict:
     """Validate integrity and union coverage for all fonts embedded in a DOCX."""
     selected = tuple(assets) or (FontAsset.bundled_cjk(), FontAsset.bundled_symbols())
@@ -92,6 +93,11 @@ def validate_font_bundle(
         for codepoint in codepoints
         if not any(coverage.contains(codepoint) for _, coverage in coverages)
     )
+    fallback = []
+    if allow_system_symbol_fallback:
+        fallback = [codepoint for codepoint in missing
+                    if unicodedata.category(chr(codepoint)).startswith("S")]
+        missing = [codepoint for codepoint in missing if codepoint not in fallback]
     if missing:
         sample = "".join(chr(codepoint) for codepoint in missing[:20])
         raise FontAssetError("Bundled font set lacks required glyphs: {0}".format(sample))
@@ -100,6 +106,8 @@ def validate_font_bundle(
         "fonts": summaries,
         "required_codepoints": len(codepoints),
         "missing_codepoints": 0,
+        "system_fallback_codepoints": len(fallback),
+        "system_fallback_sample": "".join(chr(codepoint) for codepoint in fallback[:20]),
     }
 
 

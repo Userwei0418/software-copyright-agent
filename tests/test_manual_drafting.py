@@ -46,8 +46,13 @@ class ManualDraftingServiceTests(unittest.TestCase):
         payload["blocks"][0]["evidence_refs"] = [refs[1]]
         payload["blocks"][1]["evidence_refs"] = [refs[1]]
         payload["blocks"][2]["evidence_refs"] = [refs[0]]
-        with self.assertRaisesRegex(Exception, "页面组顺序"):
-            ManualDraftingService._normalize_ui_payload(payload, refs)
+        repaired = ManualDraftingService._normalize_ui_payload(payload, refs)
+        first_seen = []
+        for block in repaired["blocks"]:
+            for ref in block["evidence_refs"]:
+                if ref not in first_seen:
+                    first_seen.append(ref)
+        self.assertEqual(first_seen, refs)
 
     def test_generates_structured_sections_versions_and_manual_edit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

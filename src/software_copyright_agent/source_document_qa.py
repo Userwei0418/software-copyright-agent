@@ -209,7 +209,8 @@ class SourceDocumentQaInspector:
         namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
         document_text = "".join(node.text or "" for node in root.iter(namespace))
         font_summary = validate_font_bundle(
-            document_text, (self.cjk_font, self.symbol_font)
+            document_text, (self.cjk_font, self.symbol_font),
+            allow_system_symbol_fallback=True,
         )
         checks.append(self._check(
             "font.cjk_sha256",

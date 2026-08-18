@@ -1,6 +1,6 @@
 [package]
 name = "software-copyright-agent-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local-first software copyright material generator"
 edition = "2021"
 

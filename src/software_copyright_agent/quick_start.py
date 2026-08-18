@@ -214,7 +214,12 @@ class QuickStartService:
                     )
                 return self._source.run_source_document_qa(task_id)
 
-            snapshot = self._stage(run_id, "source_docx", source_document)
+            # DOCX assembly and font validation are deterministic for an unchanged
+            # pagination artifact. Repeating the same failure immediately only
+            # floods history; recovery remains available as an explicit retry.
+            snapshot = self._stage(
+                run_id, "source_docx", source_document, retry_limit=0
+            )
             if snapshot["source_document"]["quality"]["status"] != "passed":
                 raise QuickStartError("源代码文档逐页检查未通过")
             return snapshot

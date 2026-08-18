@@ -438,6 +438,43 @@ class ManualDraftingService:
         missing = sorted(valid_refs - used_refs)
         if missing:
             raise ManualDraftingError("部分采用截图没有正文引用：" + "、".join(missing[:5]))
+        # The reviewed screenshot order is authoritative.  A vision model can still
+        # return otherwise valid page groups in a different JSON order, which used
+        # to turn a recoverable presentation issue into a permanently failed node.
+        # Canonicalise citation metadata locally before the final validation: keep
+        # the prose intact, order blocks by their earliest reviewed screenshot and
+        # defer a premature first citation to the nearest later block when needed.
+        ref_position = {ref: index for index, ref in enumerate(ordered_refs)}
+        for block in blocks:
+            block["evidence_refs"] = sorted(
+                dict.fromkeys(block.get("evidence_refs", [])),
+                key=lambda ref: ref_position[ref],
+            )
+        blocks.sort(key=lambda block: min(
+            ref_position[ref] for ref in block.get("evidence_refs", [])
+        ))
+
+        first_owner = {}
+        for index, block in enumerate(blocks):
+            for ref in block.get("evidence_refs", []):
+                first_owner.setdefault(ref, index)
+        previous_owner = 0
+        for ref in ordered_refs:
+            owner = max(first_owner[ref], previous_owner)
+            first_owner[ref] = owner
+            previous_owner = owner
+        for index, block in enumerate(blocks):
+            block["evidence_refs"] = [
+                ref for ref in block.get("evidence_refs", [])
+                if index >= first_owner[ref]
+            ]
+        for ref in ordered_refs:
+            owner = first_owner[ref]
+            refs = blocks[owner]["evidence_refs"]
+            if ref not in refs:
+                refs.append(ref)
+            refs.sort(key=lambda item: ref_position[item])
+
         first_seen = []
         for block in blocks:
             for ref in block.get("evidence_refs", []):

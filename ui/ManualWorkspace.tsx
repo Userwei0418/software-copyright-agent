@@ -593,7 +593,9 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
         await regenerateFormalManualFigure(connection, cockpitJob.id, node.key.replace(/^figure:/, ""));
         setMessage(`“${node.title}”已单项重试完成；请装配当前可用资产生成新候选稿。`);
       } else if (node.kind === "section") {
-        await regenerateFormalManualSection(connection, cockpitJob.id, node.key.replace(/^section:/, ""));
+        const sectionKey = node.key === "ui_section_update"
+          ? "ui_operations" : node.key.replace(/^section:/, "");
+        await regenerateFormalManualSection(connection, cockpitJob.id, sectionKey);
         setMessage(`“${node.title}”已单项重试完成；阶段正文与关联资产已标记更新。`);
       } else if (node.kind === "assemble" && selectedDocument) {
         await reassembleLatestAssets();

@@ -103,6 +103,20 @@ class SidecarFastApiTests(unittest.TestCase):
             response.json()["error"]["code"], "manual_document_finalize_error"
         )
 
+    def test_ui_operations_retry_uses_screenshot_workflow(self) -> None:
+        endpoint = "/api/v1/manual-jobs/job-1/sections/ui_operations/regenerate"
+        with patch(
+            "software_copyright_agent.sidecar.ManualUiWorkflowService.regenerate_section",
+            return_value={"section_key": "ui_operations", "version": 2},
+        ) as regenerate_ui, patch(
+            "software_copyright_agent.sidecar.ManualDraftingService.regenerate",
+        ) as regenerate_regular:
+            response = self.client.post(endpoint, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["section_key"], "ui_operations")
+        regenerate_ui.assert_called_once_with("job-1")
+        regenerate_regular.assert_not_called()
+
     def test_figure_asset_route_returns_drawio_source_bytes(self) -> None:
         source = b'<?xml version="1.0"?><mxfile><diagram id="a"/></mxfile>'
         with patch(

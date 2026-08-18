@@ -28,3 +28,12 @@ class BundledFontAssetTests(unittest.TestCase):
 
         self.assertEqual(summary["missing_codepoints"], 0)
         self.assertIn("Noto Sans Symbols 2", summary["families"])
+
+    def test_source_emoji_can_use_system_symbol_fallback(self) -> None:
+        summary = validate_font_bundle(
+            "构建状态 ✅ 失败状态 ❌", allow_system_symbol_fallback=True
+        )
+
+        self.assertEqual(summary["missing_codepoints"], 0)
+        self.assertEqual(summary["system_fallback_codepoints"], 2)
+        self.assertEqual(summary["system_fallback_sample"], "✅❌")

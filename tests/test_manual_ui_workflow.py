@@ -11,6 +11,9 @@ from software_copyright_agent.storage import Database
 class FakeExecution:
     def __init__(self, calls): self.calls = calls
     def prepare(self, job, key, *args, **kwargs): self.calls.append(("prepare", key))
+    def get(self, job, key):
+        return {"attempt": 1, "max_attempts": 2}
+    def queued(self, job, key): self.calls.append(("queued", key))
     def running(self, job, key, *args): self.calls.append(("running", key))
     def complete(self, job, key, output=None, warnings=False):
         self.calls.append(("complete", key, warnings))
@@ -52,6 +55,21 @@ class FakeQa:
 
 
 class ManualUiWorkflowTests(unittest.TestCase):
+    def test_section_retry_uses_adopted_screenshots_without_assembling_document(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            calls = []
+            service = ManualUiWorkflowService(
+                Database(Path(temporary) / "app.db"), Path(temporary),
+                evidence=FakeEvidence(), drafting=FakeDrafting(),
+                documents=FakeDocuments(calls), qa=FakeQa(calls),
+                execution=FakeExecution(calls),
+            )
+            result = service.regenerate_section("job")
+            self.assertEqual(result["section_key"], "ui_operations")
+            self.assertIn(("queued", "section:ui_operations"), calls)
+            self.assertIn(("complete", "section:ui_operations", False), calls)
+            self.assertFalse(any(item[0] in {"assemble", "qa"} for item in calls))
+
     def test_one_confirmation_rewrites_ui_assembles_once_and_runs_qa(self):
         with tempfile.TemporaryDirectory() as temporary:
             calls = []

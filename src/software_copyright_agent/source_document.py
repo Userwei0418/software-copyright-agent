@@ -1,6 +1,7 @@
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
+import unicodedata
 
 from docx import Document
 from docx.enum.section import WD_SECTION
@@ -216,7 +217,8 @@ class SourceDocumentBuilder:
             fallback = (
                 codepoint > 127
                 and not self._cjk_coverage.contains(codepoint)
-                and self._symbol_coverage.contains(codepoint)
+                and (self._symbol_coverage.contains(codepoint)
+                     or unicodedata.category(character).startswith("S"))
             )
             if current and fallback != current_fallback:
                 spans.append(("".join(current), bool(current_fallback)))

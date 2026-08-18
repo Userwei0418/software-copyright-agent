@@ -188,6 +188,8 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
         (item.language ?? "").toLowerCase().includes(normalized)));
   }, [snapshot?.source_plan?.candidates, candidateGrade, candidateQuery]);
   const visibleCandidates = filteredCandidates.slice(0, candidateLimit);
+  const sourceDocumentRetryable = snapshot?.task.status === "failed" &&
+    snapshot.task.failure_category === "source_document_error";
 
   return <main className="source-page">
     <header className="topbar"><div><p className="eyebrow">SOURCE MATERIALS</p><h1>源码材料</h1>
@@ -197,6 +199,14 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
       <h2>请先选择项目</h2><p>到“项目概览”扫描新项目，或从最近任务恢复。</p></section> :
       <section className="source-content">
         {message && <div className={`source-notice ${working ? "working" : ""}`}>{message}</div>}
+        {sourceDocumentRetryable && <div className="source-retry-panel"><div>
+          <strong>源代码文档生成未完成</strong>
+          <span>{snapshot?.task.safe_error_message || "已保留分页结果，可直接重试当前步骤。"}</span>
+        </div><button className="primary"
+          disabled={!snapshot?.actions.source_docx || !!working || qaWorking}
+          onClick={() => run("source-docx")}>
+          {working === "source-docx" ? "正在重试…" : "重试生成 DOCX"}
+        </button></div>}
         {snapshot?.source_document && <div className="artifact-success"><div><span>✓</span><div>
           <strong>源代码文档已生成</strong><small>DOCX v{snapshot.source_document.version} · {
             snapshot.source_document.quality.status === "passed" ?
@@ -234,7 +244,8 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
           <Stage index="03" title="生成源代码 DOCX" ready={!!snapshot?.source_document}
             description="仅当项目信息已确认且代码足够时可生成，文件与摘要写入本地任务目录。"
             disabled={!snapshot?.actions.source_docx || !!working || qaWorking} onClick={() => run("source-docx")}
-            button={snapshot?.source_document ? "重新生成 DOCX" : "生成 DOCX"} />
+            button={sourceDocumentRetryable ? "重试生成 DOCX" :
+              snapshot?.source_document ? "重新生成 DOCX" : "生成 DOCX"} />
         </div>
         <div className="strategy-panel"><div><strong>源码筛选严格度</strong>
           <small>这是确定性取样：项目快照、严格度与分页规则都未变化时，重新生成会得到相同的源码正文，便于复核；源码有变动需先重新扫描项目。</small></div>

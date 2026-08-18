@@ -53,7 +53,8 @@ export type AppSettings = { manual_model_id: string | null; diagram_model_id: st
   generation_concurrency: number; document_style_prompt: string; diagram_style_prompt: string };
 export type Inspection = ProjectScanResult["inspection"];
 export type SourceMaterialsSnapshot = {
-  task: { id: string; status: string; current_stage_key: string; safe_error_message?: string | null };
+  task: { id: string; status: string; current_stage_key: string; failure_category?: string | null;
+    safe_error_message?: string | null };
   project: { name: string; version: string };
   source_plan: null | { version: number; created_at: string; summary: {
     total_source_files: number; selected_files: number; selected_code_lines: number;

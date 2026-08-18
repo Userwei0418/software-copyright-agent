@@ -1161,8 +1161,10 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 "error": {"code": "unauthorized", "message": "Invalid session token"}
             })
         try:
+            if section_key == "ui_operations":
+                return manual_ui_workflow_service.regenerate_section(job_id)
             return manual_drafting_service.regenerate(job_id, section_key)
-        except ManualDraftingError as error:
+        except (ManualDraftingError, ManualUiWorkflowError) as error:
             return JSONResponse(status_code=400, content={
                 "error": {"code": "manual_drafting_error", "message": str(error)}
             })

@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
 from .domain import TaskStatus
-from .font_assets import validate_font_bundle
+from .font_assets import FontAssetError, validate_font_bundle
 from .service import new_id, utc_now
 from .source_document import (
     GENERATOR_VERSION,
@@ -138,7 +138,13 @@ class SourceDocumentService:
                 entry.get("text", "")
                 for page in preview_payload["pages"] for entry in page["entries"]
             ) + str(software_name) + str(version_name) + "源程序代码文档构成封面正文第页共"
-            font_summary = validate_font_bundle(required_text)
+            # Source files legitimately contain UI markers and emoji such as ✅/❌.
+            # They render through the operating system's symbol fallback font on
+            # macOS and Windows; absence from the two embedded text fonts is a
+            # recorded warning, not a reason to reject the entire document.
+            font_summary = validate_font_bundle(
+                required_text, allow_system_symbol_fallback=True
+            )
             summary = self._builder.build(
                 temporary_path,
                 str(software_name),
@@ -150,9 +156,12 @@ class SourceDocumentService:
             os.replace(str(temporary_path), str(artifact_path))
         except Exception as error:
             temporary_path.unlink(missing_ok=True)
-            self._record_failure(task_id, stage_id, error)
+            safe_detail = self._safe_failure_detail(error)
+            self._record_failure(task_id, stage_id, safe_detail)
             raise SourceDocumentError(
-                "源代码 DOCX 生成失败，任务已保留，可修复后重试"
+                "源代码 DOCX 生成失败：{0}。任务已保留，可点击重试。".format(
+                    safe_detail
+                )
             ) from error
 
         finished_at = utc_now()
@@ -213,11 +222,24 @@ class SourceDocumentService:
                 facts[row["fact_key"]] = json.loads(row["value_json"])
         return facts
 
-    def _record_failure(self, task_id: str, stage_id: str, error: Exception) -> None:
+    @staticmethod
+    def _safe_failure_detail(error: Exception) -> str:
+        if isinstance(error, FontAssetError):
+            message = str(error)
+            if "is missing" in message or "license is missing" in message:
+                return "正式包缺少内置字体资源，请安装修复版本"
+            if "hash does not match" in message or "modified" in message:
+                return "内置字体资源校验失败，请安装修复版本"
+            if "lacks required glyphs" in message:
+                return "源码包含内置字体无法覆盖的文字：{0}".format(
+                    message.rsplit(":", 1)[-1].strip()
+                )
+            return "内置字体预检失败"
+        return "{0}".format(type(error).__name__)
+
+    def _record_failure(self, task_id: str, stage_id: str, detail: str) -> None:
         now = utc_now()
-        safe_message = "Source document generation failed: {0}".format(
-            type(error).__name__
-        )
+        safe_message = "Source document generation failed: {0}".format(detail)
         with UnitOfWork(self._database) as unit_of_work:
             unit_of_work.stages.fail(stage_id, "source_document_error", safe_message, now)
             task = unit_of_work.tasks.get(task_id)
