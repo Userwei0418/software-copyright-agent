@@ -163,6 +163,9 @@ class ManualExecutionNodeService:
     def outdated(self, job_id: str, node_key: str, output=None) -> dict:
         return self._park(job_id, node_key, "outdated", output)
 
+    def skip(self, job_id: str, node_key: str, output=None) -> dict:
+        return self._park(job_id, node_key, "skipped", output)
+
     def _park(self, job_id: str, node_key: str, status: str, output=None) -> dict:
         now = utc_now()
         with self._database.connect() as connection:

@@ -173,7 +173,7 @@ class QuickStartService:
             try:
                 self._execute(run_id)
             except Exception as error:
-                self._fail(run_id, str(error))
+                self._fail(run_id, str(error), waiting=isinstance(error, QuickStartBlocked))
 
     def _execute(self, run_id: str) -> None:
         run = self.get(run_id)
@@ -255,7 +255,7 @@ class QuickStartService:
                 pending = sorted(set(pending))
                 if pending:
                     self._screenshots.analyze_many(
-                        task_id, pending, config["vision_model_id"])
+                        task_id, pending, config["vision_model_id"], job_id)
                 assets = self._screenshots.list_assets(task_id)
                 failed = [item for item in assets if item["analysis_status"] == "failed"]
                 for _ in range(config["retry_limit"]):
@@ -263,7 +263,7 @@ class QuickStartService:
                         break
                     for item in failed:
                         self._screenshots.retry_analysis(
-                            task_id, item["id"], config["vision_model_id"])
+                            task_id, item["id"], config["vision_model_id"], job_id)
                     failed = [item for item in self._screenshots.list_assets(task_id)
                               if item["analysis_status"] == "failed"]
                 if failed:
@@ -272,18 +272,23 @@ class QuickStartService:
                 reviewed, reused = self._adopt_analyzed_screenshots(task_id)
                 if not reviewed and not reused:
                     raise QuickStartError("截图文件夹中没有可自动采用的真实截图")
+                self._pipeline.finish_screenshot_review(job_id)
                 return {"imported": imported.get("imported_count", 0),
                         "reused": len(reused), "adopted": len(reviewed),
                         "profile_version": profile_context["project_profile"]["version"],
                         "profile_fingerprint": profile_context["project_profile"].get(
                             "fingerprint")}
 
-            self._stage(run_id, "screenshots", screenshot_stage)
+            try:
+                self._stage(run_id, "screenshots", screenshot_stage)
+            except Exception as error:
+                self._pipeline.pause_for_review(job_id, str(error))
+                raise
 
             def manual_stage() -> dict:
                 result = self._workflow.run_existing(job_id)
                 if result.get("awaiting_assets"):
-                    raise QuickStartError("说明书仍有图表或截图资产未完成，已保留结果，可一键重试")
+                    raise QuickStartError("说明书仍有未完成节点，已保留成功产物，请查看失败原因后继续")
                 return {"job_id": job_id,
                         "awaiting_assets": result.get("awaiting_assets", False)}
 
@@ -308,7 +313,9 @@ class QuickStartService:
                     branch_errors.append((branch, error))
         if branch_errors:
             labels = {"source": "源码文档", "manual": "软件说明书"}
-            raise QuickStartError("；".join(
+            error_type = QuickStartBlocked if all(isinstance(error, QuickStartBlocked)
+                                                   for _, error in branch_errors) else QuickStartError
+            raise error_type("；".join(
                 "{0}分支：{1}".format(labels[branch], error)
                 for branch, error in branch_errors
             ))
@@ -612,13 +619,13 @@ class QuickStartService:
                     (encode_json(stages), now, run_id),
                 )
 
-    def _fail(self, run_id: str, message: str) -> None:
+    def _fail(self, run_id: str, message: str, *, waiting: bool = False) -> None:
         now = utc_now()
         with self._database.connect() as connection:
             connection.execute(
-                """UPDATE quick_start_runs SET status='failed',safe_error_message=?,
+                """UPDATE quick_start_runs SET status=?,safe_error_message=?,
                 finished_at=?,updated_at=? WHERE id=?""",
-                (message[:1000], now, now, run_id),
+                ("waiting_for_user" if waiting else "failed", message[:1000], now, now, run_id),
             )
 
     def _set_run(self, run_id: str, *, status: Optional[str] = None,

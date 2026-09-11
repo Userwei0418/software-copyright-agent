@@ -212,6 +212,11 @@ class ManualFigureServiceTests(unittest.TestCase):
             self.assertTrue(generation_models)
             self.assertEqual(set(generation_models), {"model-alt"})
             self.assertEqual(len(result["figures"]), 2)
+            call_count = len(generation_models)
+            resumed = service.generate_for_section(job["id"], "architecture")
+            self.assertEqual(len(generation_models), call_count,
+                             "An unchanged completed diagram must be reused without a model call")
+            self.assertTrue(resumed["generated"])
             architecture = next(item for item in result["figures"]
                                 if item["figure_key"] == "system_architecture")
             self.assertIn("artifacts/manual/jobs/job-v1/diagrams/",

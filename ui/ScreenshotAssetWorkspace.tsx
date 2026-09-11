@@ -1,6 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dialog } from "./Dialog";
-import { DragEvent, useEffect, useMemo, useState } from "react";
+import { DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   analyzeScreenshotEvidence, captureProjectPage, CaptureLaunchPlan,
   confirmScreenshotsAndUpdateManual, importScreenshotClipboard,
@@ -21,7 +21,7 @@ const EMPTY_INTERPRETATION: ScreenshotInterpretation = {
   visible_regions: [], key_controls: [], workflow_steps: [], success_state: "",
   failure_and_recovery: "", related_backend_actions: [], route_guess: "",
   related_evidence_refs: [], suggested_group: "", suggested_order: 0,
-  suggested_caption: "", confidence: 0, warnings: [],
+  suggested_caption: "", confidence: 0, warnings: [], unresolved_claims: [],
 };
 
 const LIST_FIELDS: Array<{ key: keyof ScreenshotInterpretation; label: string }> = [
@@ -37,6 +37,7 @@ function editableInterpretation(value: ScreenshotInterpretation | null | undefin
   const source = value && typeof value === "object" ? value : {} as ScreenshotInterpretation;
   const stringList = (item: unknown) => Array.isArray(item)
     ? item.map((entry) => String(entry)) : [];
+  const claims = stringList(asset?.unresolved_claims || source.unresolved_claims);
   return {
     ...EMPTY_INTERPRETATION, ...source,
     page_title: String(source.page_title || asset?.title || ""),
@@ -52,13 +53,14 @@ function editableInterpretation(value: ScreenshotInterpretation | null | undefin
     suggested_group: String(source.suggested_group || asset?.group_title || ""),
     suggested_order: Number(source.suggested_order || asset?.sort_order || 0),
     suggested_caption: String(source.suggested_caption || asset?.title || ""),
-    confidence: Number(source.confidence || 0), warnings: stringList(source.warnings),
+    confidence: Number(source.confidence || 0), unresolved_claims: claims,
+    warnings: stringList(source.warnings).filter((item) => !claims.includes(item)),
   };
 }
 
-export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onOpenManual, onOpenSettings }: {
+export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onOpenManual, onOpenSettings, onOpenQuickStart }: {
   connection: SidecarConnection | null; taskId: string; onTaskChange: (value: string) => void;
-  onOpenManual: () => void; onOpenSettings: () => void;
+  onOpenManual: () => void; onOpenSettings: () => void; onOpenQuickStart: () => void;
 }) {
   const [workspace, setWorkspace] = useState<ScreenshotEvidenceWorkspace | null>(null);
   const [jobId, setJobId] = useState("");
@@ -73,6 +75,7 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
   const [zoom, setZoom] = useState(100);
   const [recursive, setRecursive] = useState(false);
   const [busy, setBusy] = useState(false);
+  const actionPending = useRef(false);
   const [message, setMessage] = useState("");
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileText, setProfileText] = useState("");
@@ -89,6 +92,7 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
   const [updateState, setUpdateState] = useState<"idle" | "queued" | "running" | "done" | "failed">("idle");
 
   const assets = workspace?.assets || [];
+  const quickStartOwnsRun = Boolean(workspace?.quick_start_status && workspace.quick_start_status !== "completed");
   const selected = assets.find((item) => item.id === selectedId) || null;
   const groups = useMemo(() => {
     const values = new Map<string, ProjectScreenshotAsset[]>();
@@ -106,30 +110,34 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
     setUiDecision(value.ui_evidence_decision.decision);
     setUiDecisionReason(value.ui_evidence_decision.reason);
     setProfileText(JSON.stringify(value.profile.profile, null, 2));
-    setModelId((current) => current || value.vision_models[0]?.id || "");
+    setModelId((current) => current || value.preferred_vision_model_id || "");
     const next = value.assets.some((item) => item.id === preferred) ? preferred : value.assets[0]?.id || "";
     setSelectedId(next);
     setSelectedIds((current) => current.filter((id) => value.assets.some((item) => item.id === id)));
   }
 
   useEffect(() => {
+    let disposed = false;
     setWorkspace(null); setJobId(""); setSelectedId(""); setSelectedIds([]); setMessage("");
     releaseUrl(imageUrl); setImageUrl(""); setLaunchPlan(null); setCaptureStatus(null);
     if (!connection || !taskId) return;
     setMessage("正在读取项目概要与截图证据…");
     Promise.all([loadScreenshotEvidenceWorkspace(connection, taskId),
       listFormalManualJobs(connection, taskId)]).then(([value, jobs]) => {
+        if (disposed) return;
         setWorkspace(value); setJobId(jobs[0]?.id || "");
         setUiDecision(value.ui_evidence_decision.decision);
         setUiDecisionReason(value.ui_evidence_decision.reason);
         setProfileText(JSON.stringify(value.profile.profile, null, 2));
-        setModelId(value.vision_models[0]?.id || ""); setSelectedId(value.assets[0]?.id || "");
+        setModelId(value.preferred_vision_model_id || ""); setSelectedId(value.assets[0]?.id || "");
         setMessage(value.assets.length ? "截图证据已载入。" : "可在生成说明书前先导入真实截图。");
         if (jobs[0]?.id) loadCaptureLaunchPlan(connection, jobs[0].id).then((plan) => {
+          if (disposed) return;
           setLaunchPlan(plan); setCandidateId(plan.candidates[0]?.id || "");
           setCaptureUrl(plan.candidates[0]?.default_url || "");
         }).catch(() => undefined);
-      }).catch((error) => setMessage(error instanceof Error ? error.message : "截图工作台读取失败"));
+      }).catch((error) => { if (!disposed) setMessage(error instanceof Error ? error.message : "截图工作台读取失败"); });
+    return () => { disposed = true; };
   }, [connection, taskId]);
 
   useEffect(() => {
@@ -243,7 +251,12 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
 
   async function saveReview(adopted = selected?.adoption_status === "adopted",
                            confirmSafe = false) {
-    if (!connection || !selected) return;
+    if (!connection || !selected || actionPending.current) return;
+    if (adopted && interpretation.unresolved_claims?.length) {
+      setMessage("请先处理右侧顶部的待核实事项：核实描述，或删除无法证明的内容后移除对应事项；无需重新解读图片。");
+      return;
+    }
+    actionPending.current = true;
     const reviewedSensitiveStatus = confirmSafe && sensitiveStatus === "unreviewed"
       ? "confirmed_safe" : sensitiveStatus;
     setBusy(true); setMessage("正在保存人工审核的新解读版本…");
@@ -252,10 +265,12 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
         adopted, groupTitle, sortOrder, reviewedSensitiveStatus);
       setSensitiveStatus(reviewedSensitiveStatus);
       await refresh(selected.id); setMessage(adopted
-        ? "当前截图已完成审核并加入采用集；第 7 章与 Word 候选稿更新已自动排队，可继续审核下一张。"
+        ? workspace?.quick_start_status && workspace.quick_start_status !== "completed"
+          ? "当前截图已审核采用。全部处理后回到快速开始，点击继续生成；已完成的解读和源码文档会直接复用。"
+          : "当前截图已完成审核并加入采用集；第 7 章与 Word 候选稿更新已自动排队，可继续审核下一张。"
         : "截图解读已保存为审核版本，暂未加入采用集。");
     } catch (error) { setMessage(error instanceof Error ? error.message : "截图审核保存失败"); }
-    finally { setBusy(false); }
+    finally { actionPending.current = false; setBusy(false); }
   }
 
   async function replaceSelectedImage() {
@@ -316,6 +331,7 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
 
   async function confirmAndUpdate() {
     if (!connection) return;
+    if (quickStartOwnsRun) { onOpenQuickStart(); return; }
     setBusy(true); setUpdateState("queued");
     setMessage(jobId ? "正在提交：保存采用集 → 生成第 7 章 → 装配 Word → 一致性 QA…" : "正在保存截图采用集…");
     try {
@@ -436,8 +452,9 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
       {message && <div className="source-notice" role="status" aria-live="polite">{message}</div>}
       <div className="screenshot-evidence-toolbar">
         <button onClick={() => setProfileOpen(true)}>项目概要 v{workspace?.profile.version || "-"}</button>
-        <label>视觉模型<select value={modelId} onChange={(event) => { setModelId(event.target.value); setPrivacyAccepted(false); }}>
-          <option value="">没有已确认的视觉模型</option>{workspace?.vision_models.map((item) =>
+        <label>图片解读模型<select aria-label="图片解读模型" value={modelId} disabled={busy} onChange={(event) => { setModelId(event.target.value); setPrivacyAccepted(false); }}>
+          <option value="">请选择已验证的图片模型</option>{modelId && !workspace?.vision_models.some((item) => item.id === modelId) &&
+            <option value={modelId} disabled>本次模型不可用，请重新选择</option>}{workspace?.vision_models.map((item) =>
             <option value={item.id} key={item.id}>{item.name} · {item.model_name}</option>)}</select></label>
         {!workspace?.vision_models.length && <button className="vision-model-cta" onClick={onOpenSettings}>
           去设置视觉模型</button>}
@@ -446,13 +463,14 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
         <label className="compact-check"><input type="checkbox" checked={recursive}
           onChange={(event) => setRecursive(event.target.checked)} />扫描子文件夹</label>
         <button onClick={pasteImage} disabled={busy}>粘贴截图</button>
-        <button onClick={() => analyze()} disabled={busy || !modelId || (!selectedIds.length && !selected)}>批量分析</button>
+        <button onClick={() => analyze()} disabled={busy || !workspace?.vision_models.some((item) => item.id === modelId) || (!selectedIds.length && !selected)}>批量分析</button>
       </div>
       <section className="screenshot-flow-action"><div><strong>截图处理进度</strong>
-        <p>完成解读后逐张审核采用；采用集变化会自动更新第 7 章并装配新的 Word 候选稿。</p></div>
+        <p>{quickStartOwnsRun ? "完成审核后回到快速开始继续原任务，已完成的截图和文档会直接复用。"
+          : "完成解读后逐张审核采用；采用集变化会自动更新第 7 章并装配新的 Word 候选稿。"}</p></div>
         <ol><li className={assets.length > 0 && analyzedCount === assets.length ? "done" : "active"}><b>1</b><span>AI 解读<small>{analyzedCount}/{assets.length} 张</small></span></li>
           <li className={reviewQueue.length ? "active" : adoptedCount ? "done" : ""}><b>2</b><span>审核采用<small>{adoptedCount} 张已采用</small></span></li>
-          <li className={!reviewQueue.length && adoptedCount ? "active" : ""}><b>3</b><span>自动更新说明书<small>去重装配</small></span></li></ol>
+          <li className={!reviewQueue.length && adoptedCount ? "active" : ""}><b>3</b><span>{quickStartOwnsRun ? "继续原任务" : "自动更新说明书"}<small>{quickStartOwnsRun ? "回到快速开始" : "去重装配"}</small></span></li></ol>
         {failedAssets.length ? <button className="primary retry-primary" onClick={() => analyze(
           selected?.analysis_status === "failed" ? [selected.id] : failedAssets.map((item) => item.id)
         )} disabled={busy || !modelId}>
@@ -460,7 +478,7 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
           : reviewQueue.length ? <button className="primary" onClick={focusNextReview} disabled={busy}>
           {selectedNeedsReview ? `前往审核当前截图（剩 ${reviewQueue.length} 张）` : `审核下一张（剩 ${reviewQueue.length} 张）`}</button>
           : <button className="primary" onClick={confirmAndUpdate} disabled={busy || !adoptedCount}>
-            {updateState === "queued" ? "正在提交更新…" : updateState === "running" ? "正在生成并装配…"
+            {quickStartOwnsRun ? "返回快速开始，继续原任务" : updateState === "queued" ? "正在提交更新…" : updateState === "running" ? "正在生成并装配…"
               : updateState === "done" ? "已生成新的说明书候选稿"
               : jobId ? `立即同步 ${adoptedCount} 张截图` : `保存 ${adoptedCount} 张截图采用集`}</button>}
       </section>
@@ -508,8 +526,17 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
             <span>{selected.interpretation_model || "尚未分析"}{selected.interpretation_elapsed_ms ? ` · ${selected.interpretation_elapsed_ms}ms` : ""}
               {selected.interpretation_attempts ? ` · ${selected.interpretation_attempts} 次尝试` : ""}</span></footer>}
         </section>
-        <aside className="evidence-inspector"><header><strong>AI 结构化解读</strong><small>证据、置信度和警告均可人工修订并保存版本。</small></header>
-          {selected ? <><label>页面名称<input value={interpretation.page_title}
+        <aside className="evidence-inspector"><header><strong>截图解读与审核</strong><small>修改不准确的描述，保留图片能证明的内容。</small></header>
+          {selected ? <fieldset className="screenshot-review-fields" disabled={busy}>
+            <label className={`screenshot-claims ${interpretation.unresolved_claims?.length ? "has-claims" : ""}`}>
+              待核实事项（每行一项）
+              <small>核实描述，或删除正文中无法证明的内容后移除对应事项。这里只记录需要处理的问题，不要求截图展示所有后台接口。</small>
+              <textarea value={(interpretation.unresolved_claims || []).join("\n")}
+                placeholder="没有待核实事项，可审核采用"
+                onChange={(event) => setInterpretation({ ...interpretation,
+                  unresolved_claims: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })}/>
+            </label>
+            <label>页面名称<input value={interpretation.page_title}
             onChange={(event) => setInterpretation({ ...interpretation, page_title: event.target.value })} /></label>
             <div className="two-fields"><label>页面类型<input value={interpretation.page_type}
               onChange={(event) => setInterpretation({ ...interpretation, page_type: event.target.value })} /></label>
@@ -518,6 +545,7 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
             <label>页面用途<textarea value={interpretation.purpose}
               onChange={(event) => setInterpretation({ ...interpretation, purpose: event.target.value })} /></label>
             {LIST_FIELDS.map((field) => <label key={field.key}>{field.label}<textarea
+              aria-label={field.label}
               value={(interpretation[field.key] as string[]).join("\n")}
               onChange={(event) => setInterpretation({ ...interpretation,
                 [field.key]: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} /></label>)}
@@ -559,7 +587,7 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
               <button className="primary review-adopt" onClick={() => saveReview(true, true)}
                 disabled={busy || sensitiveStatus === "contains_sensitive"}>
                 {selectedNeedsReview ? "审核并采用当前截图" : "保存修改"}</button></div>
-          </> : <p>选择一张截图后查看结构化解读。</p>}
+          </fieldset> : <p>选择一张截图后查看结构化解读。</p>}
         </aside>
       </div>
       <details className="experimental-capture" open={captureOpen} onToggle={(event) => setCaptureOpen(event.currentTarget.open)}>

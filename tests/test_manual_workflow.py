@@ -32,6 +32,44 @@ class FakeStage:
 
 
 class ManualWorkflowServiceTests(unittest.TestCase):
+    def test_resume_keeps_ui_chapter_until_adopted_screenshot_versions_change(self):
+        from software_copyright_agent.manual_workflow import _NoopExecutionNodes, _NoopScreenshotEvidence
+        with tempfile.TemporaryDirectory() as temporary:
+            calls = []
+            class Execution(_NoopExecutionNodes):
+                def list(self, job_id):
+                    return [{"key": "section:ui_operations", "kind": "section", "status": "completed"}]
+            class Evidence(_NoopScreenshotEvidence):
+                changed = False
+                def snapshot_for_job(self, job_id):
+                    return {"profile": self.prepare_profile("task"), "screenshots": [{"id": "screen"}]}
+                def ui_update_required(self, job_id): return self.changed
+                def list_assets(self, task_id):
+                    return [{"adoption_status": "adopted", "review_status": "reviewed", "archived": False}]
+            class Draft(FakeStage):
+                ui_calls = 0
+                def list_sections(self, job_id):
+                    return [{"id": "saved-ui", "section_key": "ui_operations", "version": 1}]
+                def generate_ui_from_screenshots(self, *args):
+                    self.ui_calls += 1
+                    return {"id": "new-ui", "section_key": "ui_operations", "version": 2}
+            evidence = Evidence()
+            draft = Draft(calls, "draft", {"status": "completed", "sections": [], "errors": []})
+            service = ManualWorkflowService(
+                Database(Path(temporary) / "app.db"), Path(temporary), pipeline=FakePipeline(calls),
+                execution=Execution(), screenshot_evidence=evidence,
+                research=FakeStage(calls, "research", {"version": 1, "research_notes": []}),
+                drafting=draft, figures=FakeStage(calls, "figures", {"status": "completed", "figures": [], "errors": []}),
+                screenshots=ScreenshotStages(calls),
+                documents=FakeStage(calls, "document", {"version": 1}),
+                qa=FakeStage(calls, "qa", {"document": {"version": 1}, "qa_run": {"passed": True}}),
+            )
+            service.run_existing("job")
+            self.assertEqual(draft.ui_calls, 0)
+            evidence.changed = True
+            service.run_existing("job")
+            self.assertEqual(draft.ui_calls, 1)
+
     def test_explicit_source_inferred_choice_finishes_without_fake_running_screenshot_node(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             calls, nodes = [], []

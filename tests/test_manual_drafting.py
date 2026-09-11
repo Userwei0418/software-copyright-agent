@@ -175,6 +175,16 @@ class ManualDraftingServiceTests(unittest.TestCase):
             self.assertEqual(result["status"], "completed")
             self.assertEqual(calls["introduction"], 2)
             self.assertEqual(len(result["sections"]), 7)
+            calls_before_resume = dict(calls)
+            resumed = service.resume_all(job["id"])
+            self.assertEqual(calls, calls_before_resume, "Resuming must not recall completed chapters")
+            self.assertEqual([item["version"] for item in resumed["sections"]], [1] * 7)
+            from software_copyright_agent.manual_execution import ManualExecutionNodeService
+            ManualExecutionNodeService(database).fail(job["id"], "section:introduction", "HTTP 500", "model_request")
+            service.resume_all(job["id"])
+            self.assertEqual(calls["introduction"], calls_before_resume["introduction"] + 1)
+            self.assertEqual({k: v for k, v in calls.items() if k != "introduction"},
+                             {k: v for k, v in calls_before_resume.items() if k != "introduction"})
             architecture = next(item for item in result["sections"]
                                 if item["section_key"] == "architecture")
             self.assertEqual(architecture["figure_requests"][0]["figure_type"], "architecture")

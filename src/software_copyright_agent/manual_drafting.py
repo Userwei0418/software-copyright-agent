@@ -105,7 +105,10 @@ class ManualDraftingService:
             database, data_root
         )._call_model
 
-    def generate_all(self, job_id: str, on_section_completed=None) -> dict:
+    def resume_all(self, job_id: str, on_section_completed=None) -> dict:
+        return self.generate_all(job_id, on_section_completed, resume=True)
+
+    def generate_all(self, job_id: str, on_section_completed=None, *, resume=False) -> dict:
         self._database.initialize()
         context = self._context(job_id)
         research = self._research(job_id, context["task_id"])
@@ -117,6 +120,11 @@ class ManualDraftingService:
         )
         state_lock = Lock()
         execution = ManualExecutionNodeService(self._database)
+        prior_nodes = {item["key"]: item for item in execution.list(job_id)}
+        saved = {item["section_key"]: item for item in self.list_sections(job_id)} if resume else {}
+        reusable = {key: section for key, section in saved.items()
+                    if prior_nodes.get("section:" + key, {}).get("status") in
+                    {"completed", "completed_with_warnings"}}
         completed = 0
         states = {
             section_key: {"key": section_key, "title": title, "status": "queued",
@@ -140,6 +148,8 @@ class ManualDraftingService:
 
         def run_section(blueprint: tuple) -> dict:
             section_key, title, ordinal = blueprint
+            if section_key in reusable:
+                return reusable[section_key]
             node_key = "section:{0}".format(section_key)
             with manual_job_slot(job_id, concurrency):
                 execution.running(job_id, node_key, 1)
@@ -171,12 +181,13 @@ class ManualDraftingService:
                 try:
                     result = future.result()
                     generated.append(result)
-                    execution.complete(
-                        job_id, "section:{0}".format(section_key),
-                        {"version": result["version"], "elapsed_ms": result["elapsed_ms"],
-                         "figure_request_count": len(result.get("figure_requests", [])),
-                         "next_action": "审阅正文；本章图表请求已立即进入独立队列"},
-                    )
+                    if section_key not in reusable:
+                        execution.complete(
+                            job_id, "section:{0}".format(section_key),
+                            {"version": result["version"], "elapsed_ms": result["elapsed_ms"],
+                             "figure_request_count": len(result.get("figure_requests", [])),
+                             "next_action": "审阅正文；本章图表请求已立即进入独立队列"},
+                        )
                     if on_section_completed:
                         on_section_completed(result)
                 except Exception as error:

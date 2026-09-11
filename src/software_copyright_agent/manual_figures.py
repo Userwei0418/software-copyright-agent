@@ -277,8 +277,21 @@ class ManualFigureService:
             context["model_id"]
         )
         execution = ManualExecutionNodeService(self._database)
+        prior_nodes = {item["key"]: item for item in execution.list(job_id)}
+        saved = {item["figure_key"]: item for item in self.list(job_id)}
+        section_updated = sections[0].get("updated_at", "") if sections else ""
         for request in requests:
             node_key = "figure:{0}".format(request["figure_key"])
+            existing = saved.get(request["figure_key"])
+            if (existing and existing["available"]
+                    and prior_nodes.get(node_key, {}).get("status") in {"completed", "completed_with_warnings"}
+                    and existing["updated_at"] >= section_updated
+                    and all((self._data_root / "tasks" / context["task_id"] / existing[field]).is_file()
+                            for field in ("drawio_relative_path", "svg_relative_path", "png_relative_path")
+                            if existing.get(field))
+                    and existing.get("png_relative_path")):
+                generated.append(existing)
+                continue
             execution.prepare(
                 job_id, node_key, "diagrams", "figure", request["title"],
                 dependencies=["section:{0}".format(request["section_key"])],
@@ -311,6 +324,13 @@ class ManualFigureService:
         return {"generated": generated, "errors": errors}
 
     def finish_incremental(self, job_id: str, stream: dict, results: list) -> dict:
+        active_keys = {"figure:" + item["figure_key"] for item in self._requests(self._sections(job_id))}
+        execution = ManualExecutionNodeService(self._database)
+        for node in execution.list(job_id):
+            if node["kind"] == "figure" and node["key"] not in active_keys:
+                execution.skip(job_id, node["key"], {
+                    "next_action": "当前章节已不再引用此图表，旧版本保留在历史记录中",
+                })
         generated = [item for result in results for item in result.get("generated", [])]
         errors = [item for result in results for item in result.get("errors", [])]
         self._finish_step(job_id, stream["step_id"], generated, errors)
@@ -1340,7 +1360,7 @@ edge.route 使用正交折点 points:[{{"x":数值,"y":数值}}]，每条线最�
         with self._database.connect() as connection:
             rows = connection.execute(
                 """SELECT section_key, title, content_json, evidence_refs_json,
-                figure_requests_json FROM manual_section_artifacts
+                figure_requests_json, updated_at FROM manual_section_artifacts
                 WHERE job_id = ? ORDER BY ordinal""", (job_id,),
             ).fetchall()
         if not rows:
@@ -1348,7 +1368,8 @@ edge.route 使用正交折点 points:[{{"x":数值,"y":数值}}]，每条线最�
         return [{"section_key": row["section_key"], "title": row["title"],
                  "blocks": json.loads(row["content_json"]),
                  "evidence_refs": json.loads(row["evidence_refs_json"]),
-                 "figure_requests": json.loads(row["figure_requests_json"])} for row in rows]
+                 "figure_requests": json.loads(row["figure_requests_json"]),
+                 "updated_at": row["updated_at"]} for row in rows]
 
     @staticmethod
     def _requests(sections: list) -> list:

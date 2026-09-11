@@ -180,6 +180,16 @@ class ManualWorkflowService:
                     })
                     return {"section": None, "error": None,
                             "status": "waiting_for_screenshots"}
+                previous = next((item for item in self._execution.list(job_id)
+                                 if item["key"] == "section:ui_operations"), None) \
+                    if hasattr(self._execution, "list") else None
+                if (previous and previous["status"] in {"completed", "completed_with_warnings"}
+                        and hasattr(self._screenshot_evidence, "ui_update_required")
+                        and not self._screenshot_evidence.ui_update_required(job_id)):
+                    section = next((item for item in self._drafting.list_sections(job_id)
+                                    if item["section_key"] == "ui_operations"), None)
+                    if section:
+                        return {"section": section, "error": None, "status": "completed"}
                 self._execution.running(job_id, "section:ui_operations", 1)
                 try:
                     section = self._drafting.generate_ui_from_screenshots(
@@ -207,10 +217,10 @@ class ManualWorkflowService:
             with ThreadPoolExecutor(max_workers=3,
                                     thread_name_prefix="manual-draft-plan") as executor:
                 draft_future = executor.submit(
-                    self._drafting.generate_all, job_id,
+                    getattr(self._drafting, "resume_all", self._drafting.generate_all), job_id,
                     on_section_completed=dispatch_section_figures,
                 ) if incremental_figures else executor.submit(
-                    self._drafting.generate_all, job_id
+                    getattr(self._drafting, "resume_all", self._drafting.generate_all), job_id
                 )
                 screenshot_plan_future = executor.submit(screenshot_plan_task)
                 ui_future = executor.submit(ui_chapter_task)
@@ -345,7 +355,9 @@ class ManualWorkflowService:
             screenshot_stage = screenshot_result["stage"]
             asset_nodes = self._execution.list(job_id) if hasattr(self._execution, "list") else []
             blocking_assets = [item for item in asset_nodes if (
-                item.get("kind") == "figure" and item.get("status") != "completed"
+                item.get("kind") == "figure" and item.get("status") not in {"completed", "skipped"}
+            ) or (
+                item.get("kind") == "section" and item.get("status") == "failed"
             ) or (
                 item.get("key") == "screenshots" and item.get("status") in {
                     "failed", "waiting_for_authorization", "waiting_for_review",
@@ -378,7 +390,7 @@ class ManualWorkflowService:
                 }
             figure_dependencies = [
                 item["key"] for item in self._execution.list(job_id)
-                if item.get("kind") == "figure"
+                if item.get("kind") == "figure" and item.get("status") != "skipped"
             ] if hasattr(self._execution, "list") else []
             self._execution.prepare(
                 job_id, "assemble", "assemble_docx", "assemble", "Word 文档装配",

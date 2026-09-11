@@ -396,6 +396,15 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
 
     def schedule_auto_ui_update(task_id: str) -> None:
         """Debounce screenshot review changes into one durable chapter/document update."""
+        # An unfinished Quick Start owns its chapter/assembly lifecycle. Review
+        # saves must not race it or wait forever on its paused manual job.
+        with database.connect() as connection:
+            owner = connection.execute(
+                "SELECT status FROM quick_start_runs WHERE task_id=? ORDER BY created_at DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        if owner and owner["status"] != "completed":
+            return
         with auto_ui_lock:
             auto_ui_pending.add(task_id)
             if task_id in auto_ui_running:
@@ -1446,10 +1455,18 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                     """SELECT * FROM manual_screenshot_import_batches WHERE task_id=?
                     ORDER BY created_at DESC LIMIT 30""", (task_id,),
                 ).fetchall()
+                owner = connection.execute(
+                    "SELECT status,config_json FROM quick_start_runs WHERE task_id=? ORDER BY created_at DESC LIMIT 1",
+                    (task_id,),
+                ).fetchone()
+            preferred = (json.loads(owner["config_json"]).get("vision_model_id") if owner
+                         else app_settings_service.get().get("vision_model_id"))
             return {
                 "profile": profile,
                 "assets": screenshot_evidence_service.list_assets(task_id, include_archived),
                 "vision_models": screenshot_evidence_service.list_vision_models(),
+                "preferred_vision_model_id": preferred,
+                "quick_start_status": owner["status"] if owner else None,
                 "batches": [{**dict(row), "summary": json.loads(row["summary_json"] or "{}")}
                             for row in batches],
                 "ui_evidence_decision": screenshot_evidence_service.get_ui_decision(task_id),

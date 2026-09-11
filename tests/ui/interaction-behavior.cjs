@@ -676,6 +676,45 @@ async function testAssetsExposeLatestFailureAndExportCandidatesAsReviewOnly() {
   assert.equal(exportArgs[3], true, 'A candidate must use the review-export API contract');
 }
 
+async function testScreenshotReviewUsesTaskModelAndExposesBlockingClaims() {
+  const save = deferred(); let calls = 0, payload, returnedToQuick = 0;
+  const asset = { id: 'screen', title: 'Page', analysis_status: 'completed', review_status: 'pending',
+    adoption_status: 'pending', sensitive_status: 'unreviewed', group_title: 'Page', sort_order: 1,
+    version: 1, interpretation_version: 1, width: 1000, height: 700,
+    unresolved_claims: ['按钮用途需要确认'], interpretation: { page_title: 'Page',
+      purpose: 'Visible page', unresolved_claims: ['按钮用途需要确认'], warnings: [] } };
+  const workspace = { profile: { version: 1, profile: {} }, assets: [asset], batches: [],
+    preferred_vision_model_id: 'glm', quick_start_status: 'waiting_for_user',
+    ui_evidence_decision: { decision: 'waiting_for_screenshots', reason: '' },
+    vision_models: [{ id: 'qwen', name: 'Qwen', model_name: 'qwen3.8' },
+      { id: 'glm', name: 'GLM', model_name: 'glm-5.3-flash' }] };
+  const host = mount('ScreenshotAssetWorkspace', {
+    loadScreenshotEvidenceWorkspace: async () => workspace,
+    loadScreenshotEvidenceImage: async () => 'blob:screen',
+    reviewScreenshotEvidence: (...args) => { calls++; payload = args; return save.promise; },
+  }, { taskId: 'task', onTaskChange() {}, onOpenManual() {}, onOpenSettings() {}, onOpenQuickStart() { returnedToQuick++; } });
+  await host.flush();
+  assert.equal(host.nodes(n => n.type === 'select')[0].props.value, 'glm');
+  await host.click('审核并采用当前截图'); assert.equal(calls, 0);
+  assert.ok(host.text().includes('请先处理右侧顶部'));
+  const claims = host.nodes(n => n.type === 'textarea' && n.props.value === '按钮用途需要确认')[0];
+  assert.ok(claims, 'Blocking claims must be editable');
+  claims.props.onChange({ target: { value: '' } }); await host.flush();
+  const action = host.button('审核并采用当前截图').props.onClick;
+  const pending = action(); action(); await host.flush();
+  assert.equal(calls, 1); assert.equal(payload[3].unresolved_claims.length, 0);
+  assert.equal(host.nodes(n => n.type === 'fieldset')[0].props.disabled, true);
+  asset.review_status = 'reviewed'; asset.adoption_status = 'adopted';
+  asset.sensitive_status = 'confirmed_safe';
+  asset.unresolved_claims = []; asset.interpretation.unresolved_claims = [];
+  save.resolve({}); await pending; await host.flush();
+  assert.ok(host.text().includes('全部处理后回到快速开始'));
+  assert.equal(host.nodes(n => n.type === 'select')[0].props.value, 'glm');
+  await host.click('返回快速开始，继续原任务');
+  assert.equal(returnedToQuick, 1, 'Screenshot review returns to the owning Quick Start instead of creating another update pipeline');
+  host.unmount();
+}
+
 (async () => {
   for (const test of [testSettingsPreserveUnsavedPreferences, testModelOperationsCannotOverlapOrDelete,
     testFailedSettingsLoadCannotOverwriteDefaults, testQuickRecoveryKeepsIdentityAndHistory,
@@ -686,7 +725,7 @@ async function testAssetsExposeLatestFailureAndExportCandidatesAsReviewOnly() {
     testCompletedManualOperationsRespectClosedPreview, testSourceExportRequiresCurrentFileIntegrity,
     testAppReconnectPreservesWorkspaceIdentityAndUnsavedChapter,
     testOverviewLocksScanOpenAndConfirmBeforeRerender, testOverviewIgnoresResponsesAfterLeavingOrReplacingConnection,
-    testDrawioLoadTimeoutAndReconnectPreserveCurrentXml]) {
+    testDrawioLoadTimeoutAndReconnectPreserveCurrentXml, testScreenshotReviewUsesTaskModelAndExposesBlockingClaims]) {
     await test(); console.log(`PASS ${test.name}`);
   }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

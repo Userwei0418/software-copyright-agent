@@ -196,7 +196,8 @@ export function App() {
       <FormalDiagramWorkspace key={taskId || "empty"} connection={connection} taskId={taskId} onTaskChange={setTaskId}
         onOpenManual={() => setPage("manual")} /> : page === "screenshots" ?
       <ScreenshotAssetWorkspace key={taskId || "empty"} connection={connection} taskId={taskId} onTaskChange={setTaskId}
-        onOpenManual={() => setPage("manual")} onOpenSettings={() => setPage("settings")} /> : null}
+        onOpenManual={() => setPage("manual")} onOpenSettings={() => setPage("settings")}
+        onOpenQuickStart={() => setPage("quick")} /> : null}
   </div>;
 }
 

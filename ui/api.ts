@@ -167,7 +167,8 @@ export type QuickStartRun = {
   current_stage: string; safe_error_message: string | null;
   created_at: string; started_at: string | null; finished_at: string | null; updated_at: string;
   config: { software_name: string; version: string; project_path: string;
-    screenshot_folder: string; concurrency: number; retry_limit: number };
+    screenshot_folder: string; concurrency: number; retry_limit: number;
+    manual_model_id?: string; diagram_model_id?: string; vision_model_id?: string };
   stages: QuickStartStage[];
   outputs: Record<string, unknown>;
   manual_job: FormalManualJob | null;
@@ -267,7 +268,7 @@ export type ScreenshotInterpretation = {
   workflow_steps: string[]; success_state: string; failure_and_recovery: string;
   related_backend_actions: string[]; route_guess: string; related_evidence_refs: string[];
   suggested_group: string; suggested_order: number; suggested_caption: string;
-  confidence: number; warnings: string[];
+  confidence: number; warnings: string[]; unresolved_claims?: string[];
 };
 
 export type ProjectScreenshotAsset = {
@@ -283,6 +284,7 @@ export type ProjectScreenshotAsset = {
   interpretation_id: string | null; interpretation_version: number | null;
   interpretation_reviewed: boolean; interpretation_model: string | null;
   interpretation_elapsed_ms: number | null; interpretation_attempts: number | null;
+  unresolved_claims?: string[];
   archived: boolean; created_at: string; updated_at: string;
 };
 
@@ -291,6 +293,8 @@ export type ScreenshotProjectProfile = { id: string; task_id: string; version: n
 
 export type ScreenshotEvidenceWorkspace = {
   profile: ScreenshotProjectProfile; assets: ProjectScreenshotAsset[];
+  preferred_vision_model_id?: string | null;
+  quick_start_status?: QuickStartRun["status"] | null;
   vision_models: Array<{ id: string; name: string; model_name: string; status: "supported";
     confirmed: boolean; message: string }>;
   batches: Array<{ id: string; source: string; status: string; input_count: number;

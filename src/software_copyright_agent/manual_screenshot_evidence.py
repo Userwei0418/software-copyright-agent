@@ -25,7 +25,7 @@ from .screenshot_claims import unresolved_screenshot_claims
 from .storage import Database, encode_json
 
 
-PROMPT_VERSION = "screenshot-interpretation-v2"
+PROMPT_VERSION = "screenshot-interpretation-v3"
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 MIN_WIDTH, MIN_HEIGHT = 640, 360
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -896,8 +896,21 @@ class ScreenshotEvidenceService:
             ).fetchone()
         if cached:
             normalized = json.loads(cached["interpretation_json"])
-            result = self._persist_interpretation(asset, revision, profile, config, cache_key,
-                                                  normalized, 0, 0)
+            with self._database.connect() as connection:
+                latest = connection.execute(
+                    "SELECT id,version FROM manual_screenshot_interpretation_revisions WHERE asset_id=? ORDER BY version DESC LIMIT 1",
+                    (asset["id"],),
+                ).fetchone()
+                if latest and latest["id"] == cached["id"]:
+                    connection.execute(
+                        "UPDATE manual_project_screenshot_assets SET analysis_status='completed',failure_reason=NULL,updated_at=? WHERE id=?",
+                        (utc_now(), asset["id"]),
+                    )
+            if latest and latest["id"] == cached["id"]:
+                result = {"version": latest["version"]}
+            else:
+                result = self._persist_interpretation(asset, revision, profile, config, cache_key,
+                                                      normalized, 0, 0)
             if node:
                 ManualExecutionNodeService(self._database).complete(
                     job_id, node_key, {"cache_hit": True, "version": result["version"],
@@ -1329,6 +1342,9 @@ related_backend_actions 仅填写项目证据明确支持的动作，并在 rela
 图片未显示请求与代码依据不足时返回空数组，不能从按钮名称编造英文函数名或后台成功结果。
 仍有事实推断或需要核实的主张必须逐条放入 unresolved_claims，并降低 confidence；这类主张
 需人工修订后才能采用。warnings 仅用于普通观察提醒（如本图未显示失败状态）。
+非必要信息不可见时（如悬浮图标的用途、后台接口对应关系），从 workflow_steps 和
+related_backend_actions 中省略该信息，在 warnings 说明观察范围即可；不要为了补全不可见细节
+提出阻断审核的问题。unresolved_claims 只记录影响当前页面核心用途且不能通过省略来解决的事实疑点。
 列表元素使用简短中文字符串。不要输出章节散文、Markdown 或解释。
 
 项目概要：{0}
