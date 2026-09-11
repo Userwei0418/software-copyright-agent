@@ -21,10 +21,11 @@ from .credential_vault import CredentialVault
 from .manual_execution import ManualExecutionNodeService, manual_job_slot
 from .manual_generation import ManualGenerationError, ManualGenerationService, MODEL_READ_TIMEOUT_SECONDS
 from .service import utc_now
+from .screenshot_claims import unresolved_screenshot_claims
 from .storage import Database, encode_json
 
 
-PROMPT_VERSION = "screenshot-interpretation-v1"
+PROMPT_VERSION = "screenshot-interpretation-v3"
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 MIN_WIDTH, MIN_HEIGHT = 640, 360
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -36,7 +37,7 @@ INTERPRETATION_FIELDS = {
     "related_backend_actions": list, "route_guess": str,
     "related_evidence_refs": list, "suggested_group": str,
     "suggested_order": int, "suggested_caption": str, "confidence": (int, float),
-    "warnings": list,
+    "warnings": list, "unresolved_claims": list,
 }
 
 
@@ -576,6 +577,10 @@ class ScreenshotEvidenceService:
                adopted: bool, group_title: str, sort_order: int,
                sensitive_status: str = "confirmed_safe") -> dict:
         normalized = self._normalize_interpretation(interpretation)
+        claims = unresolved_screenshot_claims(normalized)
+        if adopted and claims:
+            raise ScreenshotEvidenceError(
+                "截图事实仍需核实，修改解读、补充证据或取消采用后再保存：" + "；".join(claims[:4]))
         if sensitive_status not in {"unreviewed", "confirmed_safe", "contains_sensitive"}:
             raise ScreenshotEvidenceError("敏感信息审核状态无效")
         if adopted and sensitive_status != "confirmed_safe":
@@ -623,6 +628,12 @@ class ScreenshotEvidenceService:
     def set_adoption_status(self, task_id: str, asset_ids: list, status: str) -> list:
         if status not in {"pending", "adopted", "excluded"}:
             raise ScreenshotEvidenceError("截图采用状态无效")
+        if status == "adopted":
+            unresolved = [item for item in self.list_assets(task_id)
+                          if item["id"] in asset_ids and item["unresolved_claims"]]
+            if unresolved:
+                raise ScreenshotEvidenceError("截图事实仍需核实，不能采用：" + "、".join(
+                    item["title"] for item in unresolved[:6]))
         now = utc_now()
         with self._database.connect() as connection:
             for asset_id in asset_ids:
@@ -670,6 +681,9 @@ class ScreenshotEvidenceService:
                    not item["interpretation_reviewed"] or
                    item["analysis_status"] in {"outdated", "failed"} or
                    item["sensitive_status"] != "confirmed_safe"]
+        unresolved = [item["title"] for item in adopted if item["unresolved_claims"]]
+        if unresolved:
+            raise ScreenshotEvidenceError("截图事实仍需核实，请先编辑解读：" + "、".join(unresolved[:6]))
         if invalid:
             raise ScreenshotEvidenceError(
                 "以下采用截图没有最新已审核解读：" + "、".join(invalid[:6]))
@@ -882,8 +896,21 @@ class ScreenshotEvidenceService:
             ).fetchone()
         if cached:
             normalized = json.loads(cached["interpretation_json"])
-            result = self._persist_interpretation(asset, revision, profile, config, cache_key,
-                                                  normalized, 0, 0)
+            with self._database.connect() as connection:
+                latest = connection.execute(
+                    "SELECT id,version FROM manual_screenshot_interpretation_revisions WHERE asset_id=? ORDER BY version DESC LIMIT 1",
+                    (asset["id"],),
+                ).fetchone()
+                if latest and latest["id"] == cached["id"]:
+                    connection.execute(
+                        "UPDATE manual_project_screenshot_assets SET analysis_status='completed',failure_reason=NULL,updated_at=? WHERE id=?",
+                        (utc_now(), asset["id"]),
+                    )
+            if latest and latest["id"] == cached["id"]:
+                result = {"version": latest["version"]}
+            else:
+                result = self._persist_interpretation(asset, revision, profile, config, cache_key,
+                                                      normalized, 0, 0)
             if node:
                 ManualExecutionNodeService(self._database).complete(
                     job_id, node_key, {"cache_hit": True, "version": result["version"],
@@ -1308,8 +1335,17 @@ class ScreenshotEvidenceService:
                         0.0 if key == "confidence" else "")
                   for key, expected in INTERPRETATION_FIELDS.items()}
         return """你是软件著作权材料的界面证据分析器。只依据图片和项目概要返回单个 JSON 对象。
-不得编造不可见的后台动作、成功结果、权限或业务数据；推断必须降低 confidence，并写入 warnings
-或 related_evidence_refs。列表元素使用简短中文字符串。不要输出章节散文、Markdown 或解释。
+不得编造不可见的后台动作、成功结果、权限或业务数据。success_state 只能描述截图当前可见状态，
+例如“0 个连接，等待添加”，不能把按钮的预期效果写成已经保存或调用成功。workflow_steps 只能
+描述本图可见的操作入口，不得补写未出现的表单、保存按钮或后续页面。
+related_backend_actions 仅填写项目证据明确支持的动作，并在 related_evidence_refs 绑定依据；
+图片未显示请求与代码依据不足时返回空数组，不能从按钮名称编造英文函数名或后台成功结果。
+仍有事实推断或需要核实的主张必须逐条放入 unresolved_claims，并降低 confidence；这类主张
+需人工修订后才能采用。warnings 仅用于普通观察提醒（如本图未显示失败状态）。
+非必要信息不可见时（如悬浮图标的用途、后台接口对应关系），从 workflow_steps 和
+related_backend_actions 中省略该信息，在 warnings 说明观察范围即可；不要为了补全不可见细节
+提出阻断审核的问题。unresolved_claims 只记录影响当前页面核心用途且不能通过省略来解决的事实疑点。
+列表元素使用简短中文字符串。不要输出章节散文、Markdown 或解释。
 
 项目概要：{0}
 文件名/现有标题：{1}
@@ -1339,7 +1375,7 @@ class ScreenshotEvidenceService:
     def _normalize_interpretation(value):
         result = {}
         for key, expected in INTERPRETATION_FIELDS.items():
-            item = value.get(key)
+            item = value.get(key, [] if key == "unresolved_claims" else None)
             if key == "confidence":
                 try:
                     result[key] = max(0.0, min(1.0, float(item)))
@@ -1400,6 +1436,7 @@ class ScreenshotEvidenceService:
                 "group_key": row["group_key"], "group_title": row["group_title"],
                 "sort_order": row["sort_order"], "sensitive_status": row["sensitive_status"],
                 "failure_reason": row["failure_reason"], "interpretation": interpretation,
+                "unresolved_claims": unresolved_screenshot_claims(interpretation),
                 "interpretation_id": row["interpretation_id"],
                 "interpretation_version": row["interpretation_version"],
                 "interpretation_reviewed": bool(row["interpretation_reviewed"] or 0),

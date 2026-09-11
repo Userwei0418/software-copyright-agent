@@ -19,3 +19,4 @@ src-tauri/binaries/*
 *.db-wal
 .software-copyright-agent/
 public/landing/demo.mov
+/artifacts/

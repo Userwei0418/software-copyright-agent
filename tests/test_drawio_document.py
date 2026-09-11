@@ -24,6 +24,47 @@ class FakeRenderer:
 
 
 class DrawioDocumentTests(unittest.TestCase):
+    def test_architecture_return_route_leaves_title_clearance(self) -> None:
+        nodes = [
+            {"key": key, "label": key, "kind": "component", "layer": layer}
+            for layer, keys in enumerate((
+                ("shell", "cli"), ("sidecar", "scan", "workflow"),
+                ("research", "draft", "illustration", "screenshot", "document"),
+            )) for key in keys
+        ]
+        pairs = [("shell", "sidecar"), ("cli", "sidecar"),
+                 ("sidecar", "scan"), ("sidecar", "workflow")]
+        pairs += [("workflow", target)
+                  for target in ("research", "draft", "illustration", "screenshot", "document")]
+        figure = {"figure_key": "return-to-local", "title": "系统总体架构图",
+                  "figure_type": "architecture", "layout": "layered-vertical",
+                  "nodes": nodes, "edges": [
+                      {"key": source + "-" + target, "source": source, "target": target,
+                       "label": "调用"} for source, target in pairs
+                  ]}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "return.drawio"
+            GenericDrawioDocumentBuilder().build(figure, path)
+            tree = ET.parse(path)
+            cells = {cell.get("id"): cell for cell in tree.findall(".//mxCell")}
+            title = InternalSvgRenderer._rect(cells["diagram-title"])
+            for edge in tree.findall(".//mxCell[@edge='1']"):
+                points = [(float(point.get("x")), float(point.get("y")))
+                          for point in edge.findall("./mxGeometry/Array/mxPoint")]
+                route = InternalSvgRenderer._orthogonal_route(
+                    InternalSvgRenderer._rect(cells[edge.get("source")]),
+                    InternalSvgRenderer._rect(cells[edge.get("target")]), points,
+                )
+                self.assertFalse(any(GenericDrawioDocumentBuilder._segment_hits_box(
+                    start, end, title, 15.0) for start, end in zip(route, route[1:])),
+                    edge.get("id"))
+            # The runtime gate must reject an editor-supplied route through the
+            # title too, rather than only protecting generated edge labels.
+            point = cells["cli-sidecar"].find("./mxGeometry/Array/mxPoint")
+            point.set("y", "40")
+            tree.write(path, encoding="utf-8", xml_declaration=True)
+            self.assertFalse(DrawioDocumentInspector().inspect(path)["passed"])
+
     def test_short_terminal_edge_label_is_clamped_inside_canvas(self) -> None:
         figure = {
             "figure_key": "short-terminal-label", "title": "短边标签回归",
@@ -458,7 +499,7 @@ class DemoService:
                 ).fetchone()
             finally:
                 connection.close()
-            self.assertEqual(row, (1, "drawio-generator-v11"))
+            self.assertEqual(row, (1, "drawio-generator-v12"))
 
             asset_service = DiagramAssetService(Database(data / "app.db"), data)
             revision = asset_service.create_revision(
@@ -529,9 +570,25 @@ class DemoService:
             InternalSvgRenderer().render(drawio, svg)
             rendered = svg.read_text(encoding="utf-8")
         self.assertEqual(report["vertex_count"], 3)
-        self.assertIn("界面与访问层", rendered)
+        self.assertIn("前端应用", rendered)
+        self.assertNotIn("数据与外部服务层", rendered)
         self.assertIn("界面 / 组件", rendered)
         self.assertNotIn('data-node-key="layer-label-0"', rendered)
+
+    def test_layer_names_follow_semantics_beyond_four_layers(self) -> None:
+        nodes = [
+            {"key": str(index), "label": label, "kind": "component", "layer": index}
+            for index, label in enumerate(("桌面操作", "项目扫描", "任务执行", "文档装配", "本地数据", "模型服务"))
+        ]
+        nodes[4]["layer_label"] = "数据资产"
+        nodes[5]["layer_label"] = "第 6 层"
+        positions = {node["key"]: (160, 100 + index * 110, 220, 70)
+                     for index, node in enumerate(nodes)}
+        labels = GenericDrawioDocumentBuilder._layer_labels(
+            {"figure_type": "architecture", "nodes": nodes}, positions,
+        )
+        self.assertEqual([item["label"] for item in labels],
+                         ["桌面操作", "项目扫描", "任务执行", "文档装配", "数据资产", "模型服务"])
 
     def test_architecture_uses_page_width_for_three_peer_data_layer(self) -> None:
         figure = {

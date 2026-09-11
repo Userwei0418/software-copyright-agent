@@ -17,11 +17,12 @@ from .font_assets import FontAsset
 from .manual_document import ManualDocumentError, ManualDocumentService
 from .manual_drafting import unverified_outcome_hits
 from .service import utc_now
+from .screenshot_claims import screenshot_analysis_reminders, unresolved_screenshot_claims
 from .source_document_qa import LibreOfficeRenderer, SourceDocumentQaError
 from .storage import Database
 
 
-QA_POLICY_VERSION = "manual-docx-qa-v16"
+QA_POLICY_VERSION = "manual-docx-qa-v18"
 # Default used by the deterministic renderer in focused unit tests. Production
 # persists the concrete runtime renderer so previews and QA evidence agree.
 RENDERER_KIND = "deterministic_companion"
@@ -124,7 +125,8 @@ class ManualCompanionRenderer:
         for item in screenshots:
             screenshots_by_section.setdefault(item["section_key"], []).append(item)
         self._new_page("content")
-        for index, section in enumerate(sections, 1):
+        for fallback_index, section in enumerate(sections, 1):
+            index = int(section.get("ordinal") or fallback_index)
             self._heading("{0}  {1}".format(index, section["title"]))
             subsection_index = 0
             for block in section["blocks"]:
@@ -216,7 +218,8 @@ class ManualCompanionRenderer:
         self._draw_text(page, self.left, 175, "目录", self.fonts["h1"], ACCENT, bold=True)
         self._draw_text(page, self.left, 255, "章节目录", self.fonts["body"], MUTED)
         y = 345
-        for index, section in enumerate(sections, 1):
+        for fallback_index, section in enumerate(sections, 1):
+            index = int(section.get("ordinal") or fallback_index)
             self._draw_text(page, self.left + 20, y, "{0:02d}    {1}".format(index, section["title"]),
                             self.fonts["body"], INK, bold=True)
             y += 72
@@ -482,6 +485,22 @@ class ManualDocxInspector:
         heading_count = sum(1 for paragraph in document.paragraphs
                             if paragraph.style.name == "Heading 1") - 1
         checks.append(self._equal("structure.chapter_headings", len(sections), heading_count))
+        if "rendered_toc_pages" in expectations:
+            actual_toc_pages = {}
+            for paragraph in document.paragraphs:
+                instructions = "".join(paragraph._p.xpath(".//w:instrText/text()"))
+                match = re.search(r"PAGEREF manual_section_(\d+)\b", instructions)
+                if match:
+                    value = paragraph.text.rsplit("\t", 1)[-1].strip()
+                    actual_toc_pages[int(match.group(1))] = int(value) if value.isdigit() else value
+            rendered_pages = expectations["rendered_toc_pages"]
+            checks.append(ManualQaCheck(
+                "structure.toc_page_numbers",
+                bool(rendered_pages) and rendered_pages == actual_toc_pages, "blocker",
+                rendered_pages, actual_toc_pages,
+                "passed" if rendered_pages and rendered_pages == actual_toc_pages else
+                "目录页码未能与当前 Word 实际渲染页核对，请重新执行质量检查",
+            ))
         expected_tables = sum(1 for section_item in sections for block in section_item["blocks"]
                               if block.get("type") == "table"
                               and section_item.get("section_key") != "ui_operations")
@@ -491,6 +510,12 @@ class ManualDocxInspector:
                                     len(document.inline_shapes)))
         captions = [paragraph.text for paragraph in document.paragraphs
                     if paragraph.style.name == "Caption"]
+        duplicate_labels = [value for value in captions if re.match(
+            r"^(?:图|表)\s*\d+\s+(?:图|表|Figure|Table)\s*\d+", value, re.I)]
+        checks.append(ManualQaCheck(
+            "structure.caption_prefixes", not duplicate_labels, "blocker", [], duplicate_labels,
+            "passed" if not duplicate_labels else "图表标题重复编号，请重新装配文档",
+        ))
         figure_numbers = [int(match.group(1)) for value in captions
                           if (match := re.match(r"^图 (\d+)\s+", value))]
         screenshot_numbers = figure_numbers[len(figures):]
@@ -516,7 +541,10 @@ class ManualDocxInspector:
         checks.append(self._contains("font.content_type", content_types, "obfuscatedFont"))
         checks.append(self._equal("structure.page_breaks", 2,
                                   document_xml.count('w:type="page"')))
-        full_text = "".join(paragraph.text for paragraph in document.paragraphs)
+        # A table is substantive manual content too. python-docx's top-level
+        # paragraphs omit its cells, including nested tables; scanning only those
+        # paragraphs let placeholders and unverified claims pass in table rows.
+        full_text = "\n".join(self._document_text(document))
         if expectations.get("document_kind") == "final_document":
             forbidden_final_markers = [marker for marker in (
                 "章节导航（页码将在 Word 打开或导出时自动更新）",
@@ -740,6 +768,44 @@ class ManualDocxInspector:
             "passed" if all(item.get("interpretation_revision_id") for item in screenshots)
             else "存在未绑定已审核解读版本的采用截图",
         ))
+        description_fields = (
+            "page_purpose", "entry_conditions", "visible_regions", "typical_workflow",
+            "backend_interactions", "result_validation_recovery",
+        )
+        incomplete_descriptions = [
+            {"screenshot_key": item.get("screenshot_key"),
+             "missing_fields": [key for key in description_fields
+                                if not str(item.get("description", {}).get(key) or "").strip()]}
+            for item in screenshots
+        ]
+        incomplete_descriptions = [item for item in incomplete_descriptions
+                                   if item["missing_fields"]]
+        checks.append(ManualQaCheck(
+            "content.screenshot_description_complete", not incomplete_descriptions, "blocker",
+            "每张采用截图均包含页面用途、进入条件、可见区域、操作流程、交互和结果说明",
+            incomplete_descriptions,
+            "passed" if not incomplete_descriptions else "采用截图的操作说明存在缺失项",
+        ))
+        unresolved_claims, analysis_reminders = [], []
+        for item in screenshots:
+            identity = {"asset_id": item.get("asset_id"),
+                        "screenshot_key": item.get("screenshot_key"), "title": item.get("title")}
+            claims = unresolved_screenshot_claims(item.get("interpretation"))
+            reminders = screenshot_analysis_reminders(item.get("interpretation"))
+            if claims:
+                unresolved_claims.append({**identity, "claims": claims})
+            if reminders:
+                analysis_reminders.append({**identity, "warnings": reminders})
+        checks.append(ManualQaCheck(
+            "content.screenshot_unresolved_claims", not unresolved_claims, "blocker", [],
+            unresolved_claims, "passed" if not unresolved_claims else
+            "截图解读仍包含未解决的事实推断，请到界面截图修改解读、补充证据或取消采用",
+        ))
+        checks.append(ManualQaCheck(
+            "content.screenshot_analysis_warnings", not analysis_reminders, "warning", [],
+            analysis_reminders, "passed" if not analysis_reminders else
+            "截图保留了普通观察提醒，可审阅后按允许提醒的设置继续",
+        ))
         screenshot_refs = ["screenshot:{0}:v{1}".format(
             item.get("asset_id"), item.get("interpretation_version")
         ) for item in screenshots if item.get("asset_id") and item.get("interpretation_version")]
@@ -779,10 +845,10 @@ class ManualDocxInspector:
         ))
         checks.append(ManualQaCheck(
             "content.screenshot_sensitive_review",
-            all(item.get("sensitive_status", "confirmed_safe") == "confirmed_safe"
+            all(item.get("sensitive_status") == "confirmed_safe"
                 for item in screenshots), "blocker", "采用截图的敏感信息已确认",
             [item.get("sensitive_status") for item in screenshots],
-            "passed" if all(item.get("sensitive_status", "confirmed_safe") == "confirmed_safe"
+            "passed" if all(item.get("sensitive_status") == "confirmed_safe"
                             for item in screenshots)
             else "存在尚未确认敏感信息或已标记含敏感信息的截图",
         ))
@@ -835,6 +901,21 @@ class ManualDocxInspector:
             "font": font_summary,
         }
         return ManualQaResult(passed, tuple(checks), summary, render)
+
+    @classmethod
+    def _document_text(cls, container):
+        """Yield body and table text once, including nested table cells."""
+        for paragraph in container.paragraphs:
+            yield paragraph.text
+        seen_cells = set()
+        for table in container.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    # Merged cells are exposed repeatedly by python-docx.
+                    if cell._tc in seen_cells:
+                        continue
+                    seen_cells.add(cell._tc)
+                    yield from cls._document_text(cell)
 
     @staticmethod
     def _equal(key: str, expected: object, actual: object) -> ManualQaCheck:
@@ -950,7 +1031,8 @@ class ManualQaService:
             return {}
         pages = completed.stdout.decode("utf-8", errors="replace").split("\f")
         result = {}
-        for index, section in enumerate(sections, 1):
+        for fallback_index, section in enumerate(sections, 1):
+            index = int(section.get("ordinal") or fallback_index)
             heading = re.compile(
                 r"(?m)^\s*{0}\s+{1}\s*$".format(
                     index, re.escape(str(section.get("title", "")).strip())
@@ -970,6 +1052,8 @@ class ManualQaService:
             raise ManualQaError("阶段审阅稿仅用于正文预览与落盘；请等待正式候选稿后再执行逐页质检")
         if document["integrity"]["status"] != "verified":
             raise ManualQaError("正式说明书文件缺失或完整性校验失败")
+        if document.get("freshness", {}).get("status") == "outdated":
+            raise ManualQaError("项目信息、正文、图表或截图已有更新，请先重新装配再执行质量检查")
         step_id = self._start_step(job_id)
         task_root = self._data_root / "tasks" / document["task_id"]
         document_path = task_root / document["docx_relative_path"]
@@ -1007,7 +1091,16 @@ class ManualQaService:
                     preview["screenshots"], task_root,
                 )
             expectations = self._coverage_expectations(job_id, preview["sections"])
+            # LibreOffice names the PDF after the DOCX; only the deterministic
+            # companion uses preview.pdf. Persist the actual rendered artifact.
+            preview_pdf_relative = render.pdf_path.resolve().relative_to(
+                task_root.resolve()
+            ).as_posix()
             expectations["document_kind"] = document.get("document_kind")
+            if runtime_renderer == "libreoffice_word":
+                expectations["rendered_toc_pages"] = self._rendered_toc_pages(
+                    render.pdf_path, preview["sections"]
+                )
             result = self._inspector.inspect(
                 document_path, document["sha256"], preview["sections"],
                 preview["figures"], preview["screenshots"], render, expectations,
@@ -1044,10 +1137,9 @@ class ManualQaService:
         job_status = "completed" if step_status == "completed" else "completed_with_warnings"
         merged_qa = dict(document["qa"])
         merged_qa["quality"] = result.summary
-        merged_qa["warning_count"] = (
-            int(merged_qa.get("warning_count", 0)) + result.summary["warning_count"]
-        )
-        preview_pdf_relative = (render_relative / "preview.pdf").as_posix()
+        # A new QA run replaces the preceding run's warnings. Adding to the
+        # already merged count inflated the same warning on every retry.
+        merged_qa["warning_count"] = len(merged_qa.get("warnings") or []) + result.summary["warning_count"]
         qa_run_id = str(uuid4())
         with self._database.connect() as connection:
             connection.execute(

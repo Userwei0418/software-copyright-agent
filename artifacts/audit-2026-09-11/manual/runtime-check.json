@@ -1,0 +1,628 @@
+{
+  "disclosure": "隔离 SQLite + 合成排版样本；未访问正式数据库，未调用模型。QA 应拒绝该样本成为终稿。",
+  "root": "/tmp/manual-runtime-audit-20260911/f2c998f1-4dc4-48dc-aa58-0607bf2bbc06",
+  "job_id": "3db35eb0-8170-4ba5-88d9-174883b8f761",
+  "renderer": "libreoffice_word",
+  "document": {
+    "id": "5aace791-5f91-48b8-b4cb-5fe5991f073b",
+    "job_id": "3db35eb0-8170-4ba5-88d9-174883b8f761",
+    "task_id": "task",
+    "version": 1,
+    "status": "qa_failed",
+    "project_name": "软著材料助手排版回归样本",
+    "project_version": "V1.0",
+    "filename": "软著材料助手排版回归样本-V1.0-软件说明书-审阅稿.docx",
+    "document_kind": "formal_candidate",
+    "docx_relative_path": "artifacts/manual/jobs/job-v1/software-manual-review.v1.docx",
+    "preview_pdf_relative_path": "qa/manual/3db35eb0-8170-4ba5-88d9-174883b8f761/doc-v1/render-v1/software-manual-review.v1.pdf",
+    "qa": {
+      "generator_version": "formal-manual-docx-v13",
+      "design_preset": "compact_reference_guide",
+      "named_override": "cn_software_manual_a4",
+      "header_pattern": "editorial_cover",
+      "section_count": 4,
+      "figure_count": 1,
+      "screenshot_count": 1,
+      "warning_count": 1,
+      "warnings": [],
+      "document_kind": "formal_candidate",
+      "software_name": "软著材料助手排版回归样本",
+      "software_version": "V1.0",
+      "quality": {
+        "passed": false,
+        "policy_version": "manual-docx-qa-v17",
+        "renderer_kind": "libreoffice_word",
+        "renderer_disclosure": "运行时页面由 LibreOffice 直接渲染当前导出的 DOCX。",
+        "word_render_baseline": "current_document_rendered",
+        "check_count": 39,
+        "failed_check_count": 3,
+        "failed_checks": [
+          "content.placeholders",
+          "content.evidence_coverage",
+          "content.section_depth"
+        ],
+        "warning_count": 1,
+        "rendered_pages": 6,
+        "underfilled_pages": [
+          5
+        ],
+        "page_fill_ratios": [
+          0.4348,
+          0.2404,
+          0.9514,
+          0.9311,
+          0.2113,
+          0.8089
+        ],
+        "page_dimensions": [
+          1191,
+          1684
+        ],
+        "document_sha256": "791bc9efc485cd5fca6106d1a35a5d128ee1ee7d1fdc0a34962df4f45a4c6958",
+        "font": {
+          "family": "Noto Sans CJK SC",
+          "path": "/Users/zhouwei5/Documents/ChatGPT/软著Agent/src/software_copyright_agent/assets/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+          "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+          "required_codepoints": 295,
+          "missing_codepoints": 0,
+          "license": "SIL Open Font License 1.1"
+        }
+      }
+    },
+    "quality": {
+      "status": "failed",
+      "passed": false,
+      "qa_version": 1,
+      "policy_version": "manual-docx-qa-v17",
+      "current_policy": true,
+      "generator_version": "formal-manual-docx-v13",
+      "current_generator": true,
+      "checked_at": "2026-09-10T18:15:11.347671Z"
+    },
+    "sha256": "791bc9efc485cd5fca6106d1a35a5d128ee1ee7d1fdc0a34962df4f45a4c6958",
+    "integrity": {
+      "status": "verified",
+      "size_bytes": 13696923
+    },
+    "freshness": {
+      "status": "current",
+      "latest_asset_update": "2026-09-10T18:15:02.439638Z"
+    },
+    "created_at": "2026-09-10T18:15:03.009613Z"
+  },
+  "qa_run": {
+    "id": "03e5db8d-6e0f-4e2d-a943-fcac8cbf84cf",
+    "job_id": "3db35eb0-8170-4ba5-88d9-174883b8f761",
+    "document_artifact_id": "5aace791-5f91-48b8-b4cb-5fe5991f073b",
+    "document_version": 1,
+    "qa_version": 1,
+    "policy_version": "manual-docx-qa-v17",
+    "renderer_kind": "libreoffice_word",
+    "passed": false,
+    "checks": [
+      {
+        "key": "artifact.sha256",
+        "passed": true,
+        "severity": "blocker",
+        "expected": "791bc9efc485cd5fca6106d1a35a5d128ee1ee7d1fdc0a34962df4f45a4c6958",
+        "actual": "791bc9efc485cd5fca6106d1a35a5d128ee1ee7d1fdc0a34962df4f45a4c6958",
+        "message": "passed"
+      },
+      {
+        "key": "structure.a4_width",
+        "passed": true,
+        "severity": "blocker",
+        "expected": 7560310,
+        "actual": 7560310,
+        "message": "passed"
+      },
+      {
+        "key": "structure.a4_height",
+        "passed": true,
+        "severity": "blocker",
+        "expected": 10692130,
+        "actual": 10692130,
+        "message": "passed"
+      },
+      {
+        "key": "structure.chapter_headings",
+        "passed": true,
+        "severity": "blocker",
+        "expected": 4,
+        "actual": 4,
+        "message": "passed"
+      },
+      {
+        "key": "structure.toc_page_numbers",
+        "passed": true,
+        "severity": "blocker",
+        "expected": {
+          "1": 3,
+          "2": 3,
+          "3": 4,
+          "7": 6
+        },
+        "actual": {
+          "1": 3,
+          "2": 3,
+          "3": 4,
+          "7": 6
+        },
+        "message": "passed"
+      },
+      {
+        "key": "structure.tables",
+        "passed": true,
+        "severity": "blocker",
+        "expected": 3,
+        "actual": 3,
+        "message": "passed"
+      },
+      {
+        "key": "structure.inline_images",
+        "passed": true,
+        "severity": "blocker",
+        "expected": ">= 2",
+        "actual": 2,
+        "message": "passed"
+      },
+      {
+        "key": "structure.figure_caption_numbers",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [
+          1,
+          2
+        ],
+        "actual": [
+          1,
+          2
+        ],
+        "message": "passed"
+      },
+      {
+        "key": "structure.screenshot_caption_numbers",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [
+          2
+        ],
+        "actual": [
+          2
+        ],
+        "message": "passed"
+      },
+      {
+        "key": "font.embedded_parts",
+        "passed": true,
+        "severity": "blocker",
+        "expected": ">= 1",
+        "actual": 1,
+        "message": "passed"
+      },
+      {
+        "key": "font.embed_regular",
+        "passed": true,
+        "severity": "blocker",
+        "expected": true,
+        "actual": true,
+        "message": "passed"
+      },
+      {
+        "key": "font.embed_setting",
+        "passed": true,
+        "severity": "blocker",
+        "expected": true,
+        "actual": true,
+        "message": "passed"
+      },
+      {
+        "key": "font.content_type",
+        "passed": true,
+        "severity": "blocker",
+        "expected": true,
+        "actual": true,
+        "message": "passed"
+      },
+      {
+        "key": "structure.page_breaks",
+        "passed": true,
+        "severity": "blocker",
+        "expected": 2,
+        "actual": 2,
+        "message": "passed"
+      },
+      {
+        "key": "font.missing_codepoints",
+        "passed": true,
+        "severity": "blocker",
+        "expected": 0,
+        "actual": 0,
+        "message": "passed"
+      },
+      {
+        "key": "render.page_count",
+        "passed": true,
+        "severity": "blocker",
+        "expected": ">= 3",
+        "actual": 6,
+        "message": "passed"
+      },
+      {
+        "key": "render.a4_dimensions",
+        "passed": true,
+        "severity": "blocker",
+        "expected": true,
+        "actual": true,
+        "message": "passed"
+      },
+      {
+        "key": "render.blank_pages",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [],
+        "actual": [],
+        "message": "passed"
+      },
+      {
+        "key": "render.body_blank_pages",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [],
+        "actual": [],
+        "message": "passed"
+      },
+      {
+        "key": "render.page_density",
+        "passed": false,
+        "severity": "warning",
+        "expected": "中间正文页填充率不低于 50%，末页不低于 25%",
+        "actual": [
+          5
+        ],
+        "message": "存在内容较少的章节尾页或末页，建议复核分页，但不阻断交付"
+      },
+      {
+        "key": "content.placeholders",
+        "passed": false,
+        "severity": "blocker",
+        "expected": [],
+        "actual": [
+          "待确认"
+        ],
+        "message": "正文仍包含占位或路线图措辞，不能作为当前版本实现说明"
+      },
+      {
+        "key": "content.epistemic_caveats",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [],
+        "actual": [],
+        "message": "passed"
+      },
+      {
+        "key": "content.unverified_outcomes",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [],
+        "actual": [],
+        "message": "passed"
+      },
+      {
+        "key": "content.internal_source_names",
+        "passed": true,
+        "severity": "warning",
+        "expected": [],
+        "actual": [],
+        "message": "passed"
+      },
+      {
+        "key": "content.evidence_coverage",
+        "passed": false,
+        "severity": "blocker",
+        "expected": "每个正文、列表和表格块至少绑定 1 条真实证据",
+        "actual": {
+          "substantive_blocks": 16,
+          "evidence_bound_blocks": 0,
+          "unsupported_blocks": [
+            {
+              "section_key": "introduction",
+              "block_index": 1,
+              "block_type": "paragraph"
+            },
+            {
+              "section_key": "introduction",
+              "block_index": 2,
+              "block_type": "paragraph"
+            },
+            {
+              "section_key": "introduction",
+              "block_index": 3,
+              "block_type": "list"
+            },
+            {
+              "section_key": "introduction",
+              "block_index": 4,
+              "block_type": "table"
+            },
+            {
+              "section_key": "architecture",
+              "block_index": 1,
+              "block_type": "paragraph"
+            },
+            {
+              "section_key": "architecture",
+              "block_index": 2,
+              "block_type": "paragraph"
+            },
+            {
+              "section_key": "architecture",
+              "block_index": 3,
+              "block_type": "list"
+            },
+            {
+              "section_key": "architecture",
+              "block_index": 4,
+              "block_type": "table"
+            },
+            {
+              "section_key": "modules",
+              "block_index": 1,
+              "block_type": "paragraph"
+            },
+            {
+              "section_key": "modules",
+              "block_index": 2,
+              "block_type": "paragraph"
+            },
+            {
+              "section_key": "modules",
+              "block_index": 3,
+              "block_type": "list"
+            },
+            {
+              "section_key": "modules",
+              "block_index": 4,
+              "block_type": "table"
+            },
+            {
+              "section_key": "ui_operations",
+              "block_index": 1,
+              "block_type": "paragraph"
+            },
+            {
+              "section_key": "ui_operations",
+              "block_index": 2,
+              "block_type": "paragraph"
+            },
+            {
+              "section_key": "ui_operations",
+              "block_index": 3,
+              "block_type": "list"
+            },
+            {
+              "section_key": "ui_operations",
+              "block_index": 4,
+              "block_type": "table"
+            }
+          ]
+        },
+        "message": "存在未绑定证据的事实性内容块"
+      },
+      {
+        "key": "content.inference_claims",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [],
+        "actual": [],
+        "message": "passed"
+      },
+      {
+        "key": "content.section_review_status",
+        "passed": true,
+        "severity": "blocker",
+        "expected": "所有章节均已通过证据规范化或人工确认",
+        "actual": [],
+        "message": "passed"
+      },
+      {
+        "key": "content.section_depth",
+        "passed": false,
+        "severity": "blocker",
+        "expected": "每章至少 4 个实质块和 2 个正文段落；引言不少于 750 字，其他章节不少于 950 字",
+        "actual": [
+          {
+            "section_key": "introduction",
+            "characters": 391,
+            "blocks": 4,
+            "paragraphs": 2,
+            "paragraph_characters": 189
+          },
+          {
+            "section_key": "architecture",
+            "characters": 391,
+            "blocks": 4,
+            "paragraphs": 2,
+            "paragraph_characters": 189
+          },
+          {
+            "section_key": "modules",
+            "characters": 391,
+            "blocks": 4,
+            "paragraphs": 2,
+            "paragraph_characters": 189
+          }
+        ],
+        "message": "部分章节仍像提纲，正文深度不足"
+      },
+      {
+        "key": "content.required_sections",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [
+          "architecture",
+          "introduction",
+          "modules",
+          "ui_operations"
+        ],
+        "actual": [
+          "architecture",
+          "introduction",
+          "modules",
+          "ui_operations"
+        ],
+        "message": "passed"
+      },
+      {
+        "key": "content.figure_coverage",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [
+          "architecture"
+        ],
+        "actual": [
+          "architecture"
+        ],
+        "message": "passed"
+      },
+      {
+        "key": "content.ui_screenshot",
+        "passed": true,
+        "severity": "blocker",
+        "expected": "识别到真实界面时至少包含 1 张已说明的截图",
+        "actual": {
+          "count": 1,
+          "mode": "unknown"
+        },
+        "message": "passed"
+      },
+      {
+        "key": "content.screenshot_interpretations_reviewed",
+        "passed": true,
+        "severity": "blocker",
+        "expected": "所有采用截图均绑定明确的已审核解读版本",
+        "actual": [
+          "legacy:workspace"
+        ],
+        "message": "passed"
+      },
+      {
+        "key": "content.screenshot_description_complete",
+        "passed": true,
+        "severity": "blocker",
+        "expected": "每张采用截图均包含页面用途、进入条件、可见区域、操作流程、交互和结果说明",
+        "actual": [],
+        "message": "passed"
+      },
+      {
+        "key": "content.ui_screenshot_evidence_refs",
+        "passed": true,
+        "severity": "blocker",
+        "expected": "第 7 章事实性内容只引用当前采用截图解读版本",
+        "actual": {
+          "invalid_block_indexes": [],
+          "valid_refs": []
+        },
+        "message": "passed"
+      },
+      {
+        "key": "content.ui_group_order",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [],
+        "actual": [],
+        "message": "passed"
+      },
+      {
+        "key": "content.ui_section_current",
+        "passed": true,
+        "severity": "blocker",
+        "expected": "用户界面章节基于当前采用截图版本生成",
+        "actual": "unknown",
+        "message": "passed"
+      },
+      {
+        "key": "content.screenshot_sensitive_review",
+        "passed": true,
+        "severity": "blocker",
+        "expected": "采用截图的敏感信息已确认",
+        "actual": [
+          "confirmed_safe"
+        ],
+        "message": "passed"
+      },
+      {
+        "key": "content.screenshot_figure_references",
+        "passed": true,
+        "severity": "blocker",
+        "expected": [
+          2
+        ],
+        "actual": [
+          2
+        ],
+        "message": "passed"
+      },
+      {
+        "key": "content.screenshot_distinctness",
+        "passed": true,
+        "severity": "blocker",
+        "expected": "每张截图具有不同页面标题和针对该页面的六维说明",
+        "actual": [],
+        "message": "passed"
+      }
+    ],
+    "summary": {
+      "passed": false,
+      "policy_version": "manual-docx-qa-v17",
+      "renderer_kind": "libreoffice_word",
+      "renderer_disclosure": "运行时页面由 LibreOffice 直接渲染当前导出的 DOCX。",
+      "word_render_baseline": "current_document_rendered",
+      "check_count": 39,
+      "failed_check_count": 3,
+      "failed_checks": [
+        "content.placeholders",
+        "content.evidence_coverage",
+        "content.section_depth"
+      ],
+      "warning_count": 1,
+      "rendered_pages": 6,
+      "underfilled_pages": [
+        5
+      ],
+      "page_fill_ratios": [
+        0.4348,
+        0.2404,
+        0.9514,
+        0.9311,
+        0.2113,
+        0.8089
+      ],
+      "page_dimensions": [
+        1191,
+        1684
+      ],
+      "document_sha256": "791bc9efc485cd5fca6106d1a35a5d128ee1ee7d1fdc0a34962df4f45a4c6958",
+      "font": {
+        "family": "Noto Sans CJK SC",
+        "path": "/Users/zhouwei5/Documents/ChatGPT/软著Agent/src/software_copyright_agent/assets/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+        "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+        "required_codepoints": 295,
+        "missing_codepoints": 0,
+        "license": "SIL Open Font License 1.1"
+      }
+    },
+    "page_count": 6,
+    "decisions": [],
+    "created_at": "2026-09-10T18:15:11.347671Z"
+  },
+  "pdf_readback": {
+    "bytes": 254723,
+    "sha256": "cfae0c2f27a682ab5dc521e96ea84735127f4503f06c4926975810a1a8d4831e",
+    "valid_header": true
+  },
+  "finalize_gate": {
+    "blocked": true,
+    "message": "质量检查仍有阻断问题，请修复后重新检查；当前审阅稿仍可导出"
+  }
+}

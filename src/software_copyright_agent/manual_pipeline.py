@@ -178,11 +178,15 @@ class ManualPipelineService:
             })
         nodes = ManualExecutionNodeService(self._database).list(job_id)
         persisted_progress = json.loads(job["progress_json"])
+        status = ("waiting_for_review" if job["status"] == "failed" and
+                  persisted_progress.get("waiting_for_review") else job["status"])
         progress = self._node_progress(nodes, persisted_progress)
+        if status == "waiting_for_review":
+            progress["percent"] = min(progress["percent"], persisted_progress.get("percent", 0))
         return {
             "id": job["id"], "task_id": job["task_id"],
             "model_config_id": job["model_config_id"], "version": job["version"],
-            "status": job["status"], "current_step": job["current_step"],
+            "status": status, "current_step": job["current_step"],
             "progress": progress, "created_at": job["created_at"],
             "started_at": job["started_at"], "finished_at": job["finished_at"],
             "updated_at": job["updated_at"], "safe_error_message": job["safe_error_message"],
@@ -239,3 +243,33 @@ class ManualPipelineService:
                             separators=(",", ":")), now, now, job_id),
             )
         return self.get(job_id)
+
+    def pause_for_review(self, job_id: str, reason: str) -> dict:
+        """Pause the existing job before drafting; resumption reuses its research."""
+        execution = ManualExecutionNodeService(self._database)
+        dependencies = [node["key"] for node in execution.list(job_id)
+                        if node["kind"] == "screenshot_analysis"]
+        execution.prepare(job_id, "screenshot_review", "screenshots", "screenshot_review",
+                          "审核并采用截图", dependencies=dependencies, max_attempts=1)
+        execution.waiting_for_review(job_id, "screenshot_review", {
+            "next_action": reason, "reason": reason,
+        })
+        now = utc_now()
+        with self._database.connect() as connection:
+            row = connection.execute("SELECT progress_json FROM manual_generation_jobs WHERE id=?",
+                                     (job_id,)).fetchone()
+            progress = json.loads(row["progress_json"])
+            progress["waiting_for_review"] = True
+            connection.execute(
+                """UPDATE manual_generation_jobs SET status='failed',progress_json=?,
+                current_step='screenshots',safe_error_message=?,updated_at=? WHERE id=?""",
+                (json.dumps(progress, ensure_ascii=False), reason[:1000], now, job_id),
+            )
+        return self.get(job_id)
+
+    def finish_screenshot_review(self, job_id: str) -> None:
+        execution = ManualExecutionNodeService(self._database)
+        if any(node["key"] == "screenshot_review" for node in execution.list(job_id)):
+            execution.complete(job_id, "screenshot_review", {
+                "next_action": "截图采用集已确认，继续撰写说明书",
+            })

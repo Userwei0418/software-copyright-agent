@@ -1,0 +1,170 @@
+{
+  "task_id": "99f67040-d30c-4019-8eef-1670be1eeda7",
+  "data_root": "/tmp/copyright-audit-20260911",
+  "docx": "/tmp/copyright-audit-20260911/tasks/99f67040-d30c-4019-8eef-1670be1eeda7/artifacts/source-code/source-code.v1.docx",
+  "render": "/tmp/copyright-audit-20260911/tasks/99f67040-d30c-4019-8eef-1670be1eeda7/qa/source-code/v1/render",
+  "source_plan": {
+    "excluded_files": 47,
+    "grades": {
+      "A": 16,
+      "B": 58,
+      "C": 57
+    },
+    "selected_code_lines": 30983,
+    "selected_files": 74,
+    "strategy": "standard",
+    "total_source_files": 131
+  },
+  "preview": {
+    "available_buckets": [
+      "frontend_other",
+      "other"
+    ],
+    "available_visual_lines": 33928,
+    "generated_pages": 59,
+    "included_buckets": [
+      "frontend_other",
+      "other"
+    ],
+    "included_files": 33,
+    "included_languages": [
+      "Python",
+      "Rust",
+      "TypeScript TSX"
+    ],
+    "required_visual_lines": 2950,
+    "selected_files": 74,
+    "sufficient": true,
+    "target_pages": 59,
+    "truncated": true,
+    "used_visual_lines": 2950
+  },
+  "actual_preview_pages": 59,
+  "entries_per_page": [
+    50
+  ],
+  "rendered_png_count": 60,
+  "entry_types": {
+    "code": 2883,
+    "file_header": 35,
+    "separator": 32
+  },
+  "docx_sha256": "5cddab1ddbfe94703123e1735d795c21c562e77cc6782ca076f945560812ba4e",
+  "sha256_matches_record": true,
+  "qa": {
+    "blank_pages": [],
+    "check_count": 19,
+    "cjk_font": {
+      "families": [
+        "Noto Sans CJK SC",
+        "Noto Sans Symbols 2"
+      ],
+      "fonts": [
+        {
+          "family": "Noto Sans CJK SC",
+          "license": "SIL Open Font License 1.1",
+          "missing_codepoints": 0,
+          "path": "/Users/zhouwei5/Documents/ChatGPT/软著Agent/src/software_copyright_agent/assets/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+          "required_codepoints": 0,
+          "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b"
+        },
+        {
+          "family": "Noto Sans Symbols 2",
+          "license": "SIL Open Font License 1.1",
+          "missing_codepoints": 0,
+          "path": "/Users/zhouwei5/Documents/ChatGPT/软著Agent/src/software_copyright_agent/assets/fonts/noto-cjk/NotoSansSymbols2-Regular.ttf",
+          "required_codepoints": 0,
+          "sha256": "630846d528dbe4c4981370a4d0a9475a1fd1491a129bb411f8e157cdb5de13c6"
+        }
+      ],
+      "missing_codepoints": 0,
+      "required_codepoints": 528,
+      "system_fallback_codepoints": 0,
+      "system_fallback_sample": ""
+    },
+    "document_sha256": "5cddab1ddbfe94703123e1735d795c21c562e77cc6782ca076f945560812ba4e",
+    "failed_check_count": 0,
+    "minimum_body_fill_ratio": 0.8812,
+    "page_dimensions": [
+      827,
+      1170
+    ],
+    "passed": true,
+    "rendered_pages": 60,
+    "underfilled_pages": [],
+    "visual_review_required": true
+  },
+  "visual_review": {
+    "contact_sheet_pages_reviewed": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60
+    ],
+    "full_page_images_reviewed": [
+      2,
+      45,
+      60
+    ],
+    "result": "No unexpected blank pages, clipped code, missing Chinese glyphs, overlapping headers/footers, or overflow observed.",
+    "limits": "Contact sheet layout review of all pages plus full-size sampling; not a character-by-character review of all 60 pages.",
+    "contact_sheet_directory": "/tmp/copyright-e2e-source-review"
+  },
+  "sampling_note": "The first excerpt is landing/main.tsx, which belongs to the same repository marketing site; the sample also covers application Python/Rust/TSX. No claim of exhaustive module coverage."
+}

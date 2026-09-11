@@ -95,6 +95,7 @@ class ScreenshotEvidenceServiceTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             cached = service.analyze_many("task", [asset_id], "vision-model")
             self.assertTrue(cached["results"][0]["cache_hit"])
+            self.assertEqual(cached["results"][0]["version"], analyzed["results"][0]["version"])
             self.assertEqual(len(calls), 1)
             reviewed = service.review(
                 "task", asset_id, self._analysis(), adopted=True,
@@ -132,6 +133,77 @@ class ScreenshotEvidenceServiceTests(unittest.TestCase):
                     group_title="项目管理", sort_order=1,
                     sensitive_status="unreviewed",
                 )
+
+    def test_unresolved_claim_can_be_saved_for_review_but_cannot_be_adopted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_root, database = self._fixture(root)
+            image = root / "review-claim.png"
+            Image.new("RGB", (1280, 720), "white").save(image)
+            service = ScreenshotEvidenceService(database, data_root)
+            asset_id = service.import_batch("task", [str(image)])["results"][0]["asset"]["id"]
+            value = self._analysis()
+            value["warnings"] = ["未观察到失败提示", "依据按钮推断保存成功"]
+            with self.assertRaisesRegex(ScreenshotEvidenceError, "事实仍需核实"):
+                service.review("task", asset_id, value, adopted=True,
+                               group_title="项目管理", sort_order=1)
+            pending = service.review("task", asset_id, value, adopted=False,
+                                     group_title="项目管理", sort_order=1)
+            self.assertEqual(pending["unresolved_claims"], ["依据按钮推断保存成功"])
+
+            with self.assertRaisesRegex(ScreenshotEvidenceError, "事实仍需核实"):
+                service.set_adoption_status("task", [asset_id], "adopted")
+            value["warnings"] = ["未观察到失败提示"]
+            reviewed = service.review("task", asset_id, value, adopted=True,
+                                      group_title="项目管理", sort_order=1)
+            self.assertEqual(reviewed["interpretation"]["warnings"], ["未观察到失败提示"])
+            self.assertEqual(reviewed["interpretation_version"], 2)
+
+    def test_task_model_and_manual_review_resume_share_the_same_job(self):
+        from fastapi.testclient import TestClient
+        from unittest.mock import patch
+        from software_copyright_agent.sidecar import create_app
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_root, database = self._fixture(root)
+            image = root / "screen.png"
+            Image.new("RGB", (1280, 720), "white").save(image)
+            service = ScreenshotEvidenceService(database, data_root)
+            asset_id = service.import_batch("task", [str(image)])["results"][0]["asset"]["id"]
+            pipeline = ManualPipelineService(database)
+            job = pipeline.create("task", "vision-model")
+            with database.connect() as connection:
+                connection.execute(
+                    """INSERT INTO quick_start_runs(id,task_id,manual_job_id,status,current_stage,
+                    config_json,stages_json,outputs_json,created_at,updated_at)
+                    VALUES('run','task',?,'waiting_for_user','screenshots',?, '[]','{}','now','now')""",
+                    (job["id"], json.dumps({"vision_model_id": "vision-model"})),
+                )
+            token = "review-fixture-session-token-0000000000"
+            with TestClient(create_app(data_root, token)) as client:
+                headers = {"X-Session-Token": token}
+                workspace = client.get('/api/v1/tasks/task/screenshots/workspace', headers=headers).json()
+                self.assertEqual(workspace['preferred_vision_model_id'], 'vision-model')
+                self.assertEqual(workspace['quick_start_status'], 'waiting_for_user')
+                value = self._analysis()
+                value['unresolved_claims'] = ['按钮用途需要核实']
+                payload = {'interpretation': value, 'adopted': True, 'group_title': '页面',
+                           'sort_order': 1, 'sensitive_status': 'confirmed_safe'}
+                url = f'/api/v1/tasks/task/screenshots/{asset_id}/review'
+                self.assertEqual(client.put(url, headers=headers, json=payload).status_code, 400)
+                paused = pipeline.pause_for_review(job['id'], '截图需要审核')
+                self.assertEqual(paused['status'], 'waiting_for_review')
+                self.assertLess(paused['progress']['percent'], 100)
+                value['unresolved_claims'] = []
+                with patch('software_copyright_agent.sidecar.threading.Thread.start') as start:
+                    reviewed = client.put(url, headers=headers, json=payload)
+                    self.assertEqual(reviewed.status_code, 200)
+                    self.assertEqual(reviewed.json()['adoption_status'], 'adopted')
+                    start.assert_not_called()
+                pipeline.finish_screenshot_review(job['id'])
+                resumed = pipeline.get(job['id'])
+                self.assertEqual(resumed['id'], job['id'])
+                self.assertEqual(next(n for n in resumed['nodes'] if n['key'] == 'screenshot_review')['status'], 'completed')
 
     def test_single_image_failure_is_retryable_without_rerunning_batch(self):
         with tempfile.TemporaryDirectory() as temporary:

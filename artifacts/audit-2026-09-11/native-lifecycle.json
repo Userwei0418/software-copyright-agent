@@ -1,0 +1,18 @@
+{
+  "native_bundle": "self-built debug 0.1.1",
+  "data_isolated": true,
+  "actual_sidecar_version": "0.1.1",
+  "actual_pdf_preview_pages": 60,
+  "preview_page_checked": 41,
+  "export_path": "/private/tmp/copyright-audit-native-source-20260911.docx.docx",
+  "source_size": 13983826,
+  "export_size": 13983826,
+  "sha256_equal": true,
+  "native_save_dialog": "passed",
+  "note": "macOS dialog kept its hidden extension after the tester typed .docx; tested saved path has .docx.docx",
+  "escape_close": "passed; returned to source workspace",
+  "exit_method": "CLI interrupt after CUA reported macOS screen locked; not a normal UI Quit test",
+  "last_sidecar_pid": 6261,
+  "child_after_exit": "exited",
+  "word_wps": "not_exercised"
+}

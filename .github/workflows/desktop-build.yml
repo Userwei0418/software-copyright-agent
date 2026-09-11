@@ -13,6 +13,7 @@ on:
       - "src/**"
       - "src-tauri/**"
       - "ui/**"
+      - "shared/**"
       - "tests/**"
   pull_request:
     paths:
@@ -24,6 +25,7 @@ on:
       - "src/**"
       - "src-tauri/**"
       - "ui/**"
+      - "shared/**"
       - "tests/**"
 
 permissions:
@@ -52,6 +54,8 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
       - run: pnpm build
+      - run: node tests/ui/interaction-behavior.cjs
+      - run: node tests/ui/connection-behavior.cjs
       - name: Install Tauri Linux system dependencies
         run: |
           sudo apt-get update

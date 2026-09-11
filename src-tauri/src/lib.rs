@@ -187,25 +187,16 @@ struct ProjectPageCaptureResult {
     browser: String,
 }
 
-const SENSEAUDIO_MODELS: &[&str] = &[
-    "senseaudio-s2",
-    "senseaudio-s2-flash",
-    "senseaudio-s2-lite",
-    "senseaudio-s1",
-    "senseaudio-vl-1.0-260319",
-    "senseaudio-vl-lite-1.0-260319",
-    "sensenova-6.7-flash-lite",
-    "deepseek-v4-flash-0731",
-    "deepseek-v4-flash",
-    "deepseek-v4-pro",
-    "qwen3.6-27b",
-    "qwen3.6-35b-a3b",
-    "kimi-k2.6",
-    "glm-5.1",
-    "glm-5.2",
-    "minimax-m2.7",
-    "doubao-seed-2-0-pro-260215",
-];
+#[derive(Deserialize)]
+struct SenseAudioCatalog {
+    models: Vec<String>,
+}
+
+fn senseaudio_models() -> Vec<String> {
+    serde_json::from_str::<SenseAudioCatalog>(include_str!("../../shared/senseaudio-models.json"))
+        .expect("bundled SenseAudio catalog must contain valid model IDs")
+        .models
+}
 
 #[tauri::command]
 async fn start_sidecar(
@@ -378,16 +369,7 @@ async fn reveal_source_document(
     let document = snapshot
         .source_document
         .ok_or("source document has not been generated")?;
-    if document.integrity.status != "verified" {
-        return Err("source document integrity verification failed".into());
-    }
-    if document.quality.status != "passed" {
-        return Err(if document.quality.status == "outdated" {
-            "source document was produced under an obsolete generator or QA policy; regenerate and recheck before export".into()
-        } else {
-            "source document has not passed the current quality check".into()
-        });
-    }
+    validate_source_document_export(&document)?;
     let data_dir = runtime_data_dir(&app)?;
     let path = verified_artifact_path(&data_dir, &task_id, &document.artifact_relative_path)?;
     reveal_in_file_manager(&path)
@@ -403,7 +385,8 @@ async fn export_source_document(
     validate_task_id(&task_id)?;
     let source = resolve_source_document(&task_id, &app, &state).await?;
     let destination = validate_docx_destination(&destination)?;
-    fs::copy(source, destination).map_err(|_| "failed to export source document")?;
+    let body = fs::read(source).map_err(|_| "failed to read source document for export")?;
+    write_verified_export(&destination, &body)?;
     Ok(())
 }
 
@@ -519,6 +502,9 @@ fn write_verified_export(destination: &Path, body: &[u8]) -> Result<u64, String>
     if !parent.is_dir() {
         return Err("export destination directory is unavailable".into());
     }
+    if destination.exists() && !destination.is_file() {
+        return Err("export destination must be a file, not a directory".into());
+    }
     let name = destination
         .file_name()
         .and_then(|value| value.to_str())
@@ -538,8 +524,10 @@ fn write_verified_export(destination: &Path, body: &[u8]) -> Result<u64, String>
     let backup = parent.join(format!(".{name}.{}.bak", &random_token()[..12]));
     let had_existing = destination.exists();
     if had_existing {
-        fs::rename(destination, &backup)
-            .map_err(|_| "failed to prepare existing export for replacement")?;
+        if fs::rename(destination, &backup).is_err() {
+            let _ = fs::remove_file(&temporary);
+            return Err("failed to prepare existing export for replacement".into());
+        }
     }
     if let Err(error) = fs::rename(&temporary, destination) {
         if had_existing {
@@ -547,7 +535,7 @@ fn write_verified_export(destination: &Path, body: &[u8]) -> Result<u64, String>
         }
         let _ = fs::remove_file(&temporary);
         return Err(format!(
-            "failed to finalize manual document export: {error}"
+            "failed to finalize document export: {error}"
         ));
     }
     let written = match fs::read(destination) {
@@ -817,10 +805,7 @@ async fn probe_model_config(
             && is_senseaudio(&base)
             && matches!(status, 404 | 405)
         {
-            let discovered_models = SENSEAUDIO_MODELS
-                .iter()
-                .map(|value| (*value).to_owned())
-                .collect();
+            let discovered_models = senseaudio_models();
             return validate_catalog_model(request, base, credential, client, discovered_models)
                 .await;
         }
@@ -1634,11 +1619,23 @@ async fn resolve_source_document(
     let document = snapshot
         .source_document
         .ok_or("source document has not been generated")?;
-    if document.integrity.status != "verified" {
-        return Err("source document integrity verification failed".into());
-    }
+    validate_source_document_export(&document)?;
     let data_dir = runtime_data_dir(app)?;
     verified_artifact_path(&data_dir, task_id, &document.artifact_relative_path)
+}
+
+fn validate_source_document_export(document: &SourceDocumentArtifact) -> Result<(), String> {
+    if document.integrity.status != "verified" {
+        return Err("源代码文档完整性检查未通过，请重新生成后导出。".into());
+    }
+    if document.quality.status != "passed" {
+        return Err(if document.quality.status == "outdated" {
+            "源代码文档的生成或质检规则已更新，请重新生成并完成逐页质量检查后导出。".into()
+        } else {
+            "源代码文档尚未通过逐页质量检查，请先完成检查并修复问题后导出。".into()
+        });
+    }
+    Ok(())
 }
 
 fn validate_task_id(task_id: &str) -> Result<(), String> {
@@ -1913,6 +1910,48 @@ mod tests {
         assert!(validate_docx_destination("result.docx").is_err());
         assert!(validate_docx_destination("/tmp/软著材料.docx").is_ok());
         assert!(validate_docx_destination("/tmp/result.pdf").is_err());
+    }
+
+    #[test]
+    fn source_export_requires_current_quality_and_intact_document() {
+        let mut document = SourceDocumentArtifact {
+            artifact_relative_path: "artifacts/source-code/source-code.v1.docx".into(),
+            integrity: ArtifactIntegrity { status: "verified".into() },
+            quality: ArtifactQuality { status: "passed".into() },
+        };
+        assert!(validate_source_document_export(&document).is_ok());
+        for status in ["not_checked", "failed", "outdated"] {
+            document.quality.status = status.into();
+            assert!(validate_source_document_export(&document).is_err());
+        }
+        document.quality.status = "passed".into();
+        document.integrity.status = "mismatch".into();
+        assert!(validate_source_document_export(&document).is_err());
+    }
+
+    #[test]
+    fn verified_document_export_replaces_existing_bytes_without_temporary_residue() {
+        let directory = std::env::temp_dir().join(format!("source-export-test-{}", random_token()));
+        fs::create_dir(&directory).unwrap();
+        let destination = directory.join("源码 材料.docx");
+        fs::write(&destination, b"previous document").unwrap();
+        let body = b"PK\x03\x04new source document bytes";
+        assert_eq!(write_verified_export(&destination, body).unwrap(), body.len() as u64);
+        assert_eq!(fs::read(&destination).unwrap(), body);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn verified_export_never_moves_an_existing_directory() {
+        let directory = std::env::temp_dir().join(format!("source-export-test-{}", random_token()));
+        let destination = directory.join("existing.docx");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("keep.txt"), b"existing user content").unwrap();
+        assert!(write_verified_export(&destination, b"new document").is_err());
+        assert_eq!(fs::read(destination.join("keep.txt")).unwrap(), b"existing user content");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

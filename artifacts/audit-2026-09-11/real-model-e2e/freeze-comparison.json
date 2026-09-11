@@ -1,0 +1,13 @@
+{
+  "snapshot_entries": 190,
+  "matching_entries": 185,
+  "changed_paths": [
+    "ui/App.tsx",
+    "ui/ManualWorkspace.tsx",
+    "ui/Settings.tsx",
+    "ui/SourceMaterials.tsx"
+  ],
+  "missing_paths": [
+    "src-tauri/binaries/.gitkeep"
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "label": "before",
+  "preview_pages": 59,
+  "render_pages": 89,
+  "docx": "/tmp/copyright-source-audit/before.docx",
+  "render": "/tmp/copyright-source-audit/before",
+  "qa": {
+    "passed": false,
+    "check_count": 19,
+    "failed_check_count": 2,
+    "rendered_pages": 89,
+    "blank_pages": [],
+    "minimum_body_fill_ratio": 0.1072,
+    "underfilled_pages": [
+      3,
+      6,
+      9,
+      12,
+      15,
+      18,
+      21,
+      24,
+      27,
+      30,
+      33,
+      36,
+      39,
+      42,
+      45,
+      48,
+      51,
+      54,
+      57,
+      60,
+      63,
+      66,
+      69,
+      72,
+      75,
+      79,
+      82,
+      85,
+      88
+    ],
+    "page_dimensions": [
+      621,
+      877
+    ],
+    "document_sha256": "e77524bd9bdd7dba57ec1f75167560391a0e2ccd2d541ed4e9662ef26340e404",
+    "visual_review_required": true,
+    "cjk_font": {
+      "families": [
+        "Noto Sans CJK SC",
+        "Noto Sans Symbols 2"
+      ],
+      "fonts": [
+        {
+          "family": "Noto Sans CJK SC",
+          "path": "/Users/zhouwei5/Documents/ChatGPT/软著Agent/src/software_copyright_agent/assets/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+          "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+          "required_codepoints": 0,
+          "missing_codepoints": 0,
+          "license": "SIL Open Font License 1.1"
+        },
+        {
+          "family": "Noto Sans Symbols 2",
+          "path": "/Users/zhouwei5/Documents/ChatGPT/软著Agent/src/software_copyright_agent/assets/fonts/noto-cjk/NotoSansSymbols2-Regular.ttf",
+          "sha256": "630846d528dbe4c4981370a4d0a9475a1fd1491a129bb411f8e157cdb5de13c6",
+          "required_codepoints": 0,
+          "missing_codepoints": 0,
+          "license": "SIL Open Font License 1.1"
+        }
+      ],
+      "required_codepoints": 25,
+      "missing_codepoints": 0,
+      "system_fallback_codepoints": 0,
+      "system_fallback_sample": ""
+    }
+  },
+  "failed_checks": [
+    {
+      "key": "render.page_count",
+      "passed": false,
+      "expected": 60,
+      "actual": 89,
+      "message": "Expected 60, got 89"
+    },
+    {
+      "key": "render.minimum_body_fill_ratio",
+      "passed": false,
+      "expected": ">= 0.86",
+      "actual": 0.1072,
+      "message": "Expected >= 0.86, got 0.1072"
+    }
+  ]
+}

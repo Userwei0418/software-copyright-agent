@@ -1,0 +1,51 @@
+{
+  "label": "after",
+  "preview_pages": 59,
+  "render_pages": 60,
+  "docx": "/tmp/copyright-source-audit/after.docx",
+  "render": "/tmp/copyright-source-audit/after",
+  "qa": {
+    "passed": true,
+    "check_count": 19,
+    "failed_check_count": 0,
+    "rendered_pages": 60,
+    "blank_pages": [],
+    "minimum_body_fill_ratio": 0.8985,
+    "underfilled_pages": [],
+    "page_dimensions": [
+      621,
+      877
+    ],
+    "document_sha256": "6e991168e77c9f5e888a342fe9698b505209beb23dbdfe97f65c145c402929bf",
+    "visual_review_required": true,
+    "cjk_font": {
+      "families": [
+        "Noto Sans CJK SC",
+        "Noto Sans Symbols 2"
+      ],
+      "fonts": [
+        {
+          "family": "Noto Sans CJK SC",
+          "path": "/Users/zhouwei5/Documents/ChatGPT/软著Agent/src/software_copyright_agent/assets/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+          "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+          "required_codepoints": 0,
+          "missing_codepoints": 0,
+          "license": "SIL Open Font License 1.1"
+        },
+        {
+          "family": "Noto Sans Symbols 2",
+          "path": "/Users/zhouwei5/Documents/ChatGPT/软著Agent/src/software_copyright_agent/assets/fonts/noto-cjk/NotoSansSymbols2-Regular.ttf",
+          "sha256": "630846d528dbe4c4981370a4d0a9475a1fd1491a129bb411f8e157cdb5de13c6",
+          "required_codepoints": 0,
+          "missing_codepoints": 0,
+          "license": "SIL Open Font License 1.1"
+        }
+      ],
+      "required_codepoints": 25,
+      "missing_codepoints": 0,
+      "system_fallback_codepoints": 0,
+      "system_fallback_sample": ""
+    }
+  },
+  "failed_checks": []
+}

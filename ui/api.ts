@@ -167,7 +167,8 @@ export type QuickStartRun = {
   current_stage: string; safe_error_message: string | null;
   created_at: string; started_at: string | null; finished_at: string | null; updated_at: string;
   config: { software_name: string; version: string; project_path: string;
-    screenshot_folder: string; concurrency: number; retry_limit: number };
+    screenshot_folder: string; concurrency: number; retry_limit: number;
+    manual_model_id?: string; diagram_model_id?: string; vision_model_id?: string };
   stages: QuickStartStage[];
   outputs: Record<string, unknown>;
   manual_job: FormalManualJob | null;
@@ -267,7 +268,7 @@ export type ScreenshotInterpretation = {
   workflow_steps: string[]; success_state: string; failure_and_recovery: string;
   related_backend_actions: string[]; route_guess: string; related_evidence_refs: string[];
   suggested_group: string; suggested_order: number; suggested_caption: string;
-  confidence: number; warnings: string[];
+  confidence: number; warnings: string[]; unresolved_claims?: string[];
 };
 
 export type ProjectScreenshotAsset = {
@@ -283,6 +284,7 @@ export type ProjectScreenshotAsset = {
   interpretation_id: string | null; interpretation_version: number | null;
   interpretation_reviewed: boolean; interpretation_model: string | null;
   interpretation_elapsed_ms: number | null; interpretation_attempts: number | null;
+  unresolved_claims?: string[];
   archived: boolean; created_at: string; updated_at: string;
 };
 
@@ -291,6 +293,8 @@ export type ScreenshotProjectProfile = { id: string; task_id: string; version: n
 
 export type ScreenshotEvidenceWorkspace = {
   profile: ScreenshotProjectProfile; assets: ProjectScreenshotAsset[];
+  preferred_vision_model_id?: string | null;
+  quick_start_status?: QuickStartRun["status"] | null;
   vision_models: Array<{ id: string; name: string; model_name: string; status: "supported";
     confirmed: boolean; message: string }>;
   batches: Array<{ id: string; source: string; status: string; input_count: number;
@@ -372,6 +376,18 @@ export async function connectSidecar(): Promise<SidecarConnection> {
   return invoke<SidecarConnection>("start_sidecar");
 }
 
+export async function checkSidecarHealth(connection: SidecarConnection): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 3000);
+  try {
+    const response = await fetch(`${connection.baseUrl}/api/v1/health`, {
+      headers: { "X-Session-Token": connection.sessionToken }, signal: controller.signal,
+    });
+    return response.ok;
+  } catch { return false; }
+  finally { window.clearTimeout(timeout); }
+}
+
 async function localFetch(connection: SidecarConnection, path: string, init?: RequestInit) {
   const execute = () => {
     const headers = new Headers(init?.headers);
@@ -383,6 +399,11 @@ async function localFetch(connection: SidecarConnection, path: string, init?: Re
   try { return await execute(); }
   catch (error) {
     if (!(error instanceof TypeError)) throw error;
+    // A lost response does not prove a write failed. Replaying POST/PUT/DELETE
+    // can create another paid job or document version; let the UI refresh first.
+    if (!["GET", "HEAD"].includes((init?.method || "GET").toUpperCase())) {
+      throw new Error("本地服务通信中断，操作结果尚未确认。请重新连接并刷新状态，再决定是否继续。");
+    }
     try {
       const refreshed = await connectSidecar();
       Object.assign(connection, refreshed);

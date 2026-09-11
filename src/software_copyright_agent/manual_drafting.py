@@ -105,7 +105,10 @@ class ManualDraftingService:
             database, data_root
         )._call_model
 
-    def generate_all(self, job_id: str, on_section_completed=None) -> dict:
+    def resume_all(self, job_id: str, on_section_completed=None) -> dict:
+        return self.generate_all(job_id, on_section_completed, resume=True)
+
+    def generate_all(self, job_id: str, on_section_completed=None, *, resume=False) -> dict:
         self._database.initialize()
         context = self._context(job_id)
         research = self._research(job_id, context["task_id"])
@@ -117,6 +120,11 @@ class ManualDraftingService:
         )
         state_lock = Lock()
         execution = ManualExecutionNodeService(self._database)
+        prior_nodes = {item["key"]: item for item in execution.list(job_id)}
+        saved = {item["section_key"]: item for item in self.list_sections(job_id)} if resume else {}
+        reusable = {key: section for key, section in saved.items()
+                    if prior_nodes.get("section:" + key, {}).get("status") in
+                    {"completed", "completed_with_warnings"}}
         completed = 0
         states = {
             section_key: {"key": section_key, "title": title, "status": "queued",
@@ -140,6 +148,8 @@ class ManualDraftingService:
 
         def run_section(blueprint: tuple) -> dict:
             section_key, title, ordinal = blueprint
+            if section_key in reusable:
+                return reusable[section_key]
             node_key = "section:{0}".format(section_key)
             with manual_job_slot(job_id, concurrency):
                 execution.running(job_id, node_key, 1)
@@ -171,12 +181,13 @@ class ManualDraftingService:
                 try:
                     result = future.result()
                     generated.append(result)
-                    execution.complete(
-                        job_id, "section:{0}".format(section_key),
-                        {"version": result["version"], "elapsed_ms": result["elapsed_ms"],
-                         "figure_request_count": len(result.get("figure_requests", [])),
-                         "next_action": "审阅正文；本章图表请求已立即进入独立队列"},
-                    )
+                    if section_key not in reusable:
+                        execution.complete(
+                            job_id, "section:{0}".format(section_key),
+                            {"version": result["version"], "elapsed_ms": result["elapsed_ms"],
+                             "figure_request_count": len(result.get("figure_requests", [])),
+                             "next_action": "审阅正文；本章图表请求已立即进入独立队列"},
+                        )
                     if on_section_completed:
                         on_section_completed(result)
                 except Exception as error:
@@ -306,18 +317,41 @@ class ManualDraftingService:
     def save_edit(self, job_id: str, section_key: str, title: str, blocks: list) -> dict:
         self._database.initialize()
         context = self._context(job_id)
-        research = self._research(job_id, context["task_id"])
         current = self._current(job_id, section_key)
         if current is None:
             raise ManualDraftingError("章节尚未生成，不能保存人工修改")
-        normalized = self._normalize_payload(
-            {"title": title, "blocks": blocks}, research, expected_key=section_key
-        )
+        evidence, snapshot = None, None
+        if section_key == "ui_operations":
+            from .manual_screenshot_evidence import ScreenshotEvidenceService
+            evidence = ScreenshotEvidenceService(self._database, self._data_root)
+            snapshot = evidence.snapshot_for_job(job_id)
+            refs = ["screenshot:{0}:v{1}".format(item["id"], item["interpretation_version"])
+                    for item in snapshot["screenshots"]]
+            normalized = self._normalize_ui_payload({"title": title, "blocks": blocks}, refs)
+        else:
+            research = self._research(job_id, context["task_id"])
+            normalized = self._normalize_payload(
+                {"title": title, "blocks": blocks}, research, expected_key=section_key
+            )
         normalized["status"] = "confirmed"
-        return self._persist_section(
+        result = self._persist_section(
             context, section_key, title.strip(), current["ordinal"], normalized,
             origin="user", prompt_fingerprint=None, elapsed_ms=0,
         )
+        if evidence is not None:
+            sources = evidence.record_ui_sources(job_id, result["id"], snapshot["profile"]["id"],
+                                                 snapshot["screenshots"])
+            from .manual_execution import ManualExecutionNodeService
+            execution = ManualExecutionNodeService(self._database)
+            for node in execution.list(job_id):
+                if node["key"] in {"section:ui_operations", "ui_section_update"}:
+                    execution.complete(job_id, node["key"], {
+                        "version": result["version"], "origin": "user",
+                        "adopted_set_hash": sources["adopted_set_hash"],
+                        "source_count": len(snapshot["screenshots"]),
+                        "next_action": "人工修订已保存，请重新装配并检查说明书",
+                    })
+        return result
 
     def list_sections(self, job_id: str) -> list:
         self._database.initialize()
@@ -652,6 +686,7 @@ class ManualDraftingService:
 10. 除非输入中存在明确的测试报告、运行日志或验收记录，不得声称“指标达到预期、均通过验证、通过验收、具备上线条件、可直接上线、已全面验证”。只能客观描述源码中存在的测试文件、校验逻辑、部署配置和可验证检查点。
 11. 不得根据框架惯例补写实现细节。TTL、端口、盐值、重试次数、设备上限、角色名、缓存策略、审计日志、备份恢复、预签名有效期等精确参数或安全机制，只有在 evidence excerpt 直接出现时才能写入；否则明确写“当前代码证据未显示该配置”，不要猜测。
 12. “存在测试文件”不等于“测试已验证业务正确”。没有测试运行结果时，只能描述测试对象、断言目标和可执行检查点，禁止使用“测试确认了、测试验证了、用例覆盖并证明了”等完成性结论。
+13. 不得把某个服务或代码片段的机制推广成“所有写入”“任何失败”“只有合法前端”等全系统保证。描述异常信息、事务、凭证和接口限制时，应限定到证据覆盖的具体流程。静态扫描的测试文件数或建表声明数不等于运行时用例数或业务表数；无法明确统计口径时描述组成，不输出精确总数。
 
 研究证据：
 {3}

@@ -1,5 +1,5 @@
 import { save } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   assembleFormalManualDocument, editFormalManualSection, exportManualDocument,
   deferFormalManualQaCheck,
@@ -11,6 +11,7 @@ import {
   regenerateFormalManualFigure, regenerateFormalManualSection, revealExportedDocument,
   retryScreenshotAnalysisNode, runFormalManualQa, SidecarConnection,
 } from "./api";
+import { Dialog } from "./Dialog";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
 export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagrams,
@@ -19,6 +20,12 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   trackedJob: FormalManualJob | null;
   onOpenDiagrams: () => void; onOpenScreenshots: () => void;
 }) {
+  const previewRequest = useRef(0);
+  const previewIntent = useRef(0);
+  const taskRequest = useRef(0);
+  const nodeActionPending = useRef(false);
+  const generationPending = useRef(false);
+  const editorActionPending = useRef(false);
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [modelId, setModelId] = useState("");
   const [jobs, setJobs] = useState<FormalManualJob[]>([]);
@@ -63,15 +70,21 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
     ["failed", "completed_with_warnings", "waiting_for_authorization", "waiting_for_review",
       "waiting_for_screenshots", "outdated"].includes(node.status) ||
     (node.kind === "screenshot" && node.status === "skipped")) : [];
+  const nextIssue = terminalIssues.find((node) => node.status === "failed" && visibleJob &&
+    nodeActionLabel(node, documents, visibleJob.id, false)) || terminalIssues.find((node) => visibleJob &&
+    nodeActionLabel(node, documents, visibleJob.id, false));
   const isCheckpoint = selectedDocument?.document_kind === "review_checkpoint";
   const isFinalDocument = selectedDocument?.document_kind === "final_document";
   const selectedJob = selectedDocument ? jobs.find((item) => item.id === selectedDocument.job_id) : null;
   const readyFigureCount = selectedJob?.nodes.filter((node) =>
     node.kind === "figure" && node.status === "completed").length || 0;
   const exportBusy = exportState?.state === "choosing" || exportState?.state === "working";
+  const canExportFinal = !!selectedDocument && isFinalDocument &&
+    selectedDocument.integrity.status === "verified" && selectedDocument.freshness.status === "current" &&
+    selectedDocument.quality.status === "passed";
   const canFinalize = !!selectedDocument && selectedDocument.document_kind === "formal_candidate" &&
     selectedDocument.integrity.status === "verified" && selectedDocument.freshness.status === "current" &&
-    ["passed", "failed"].includes(selectedDocument.quality.status);
+    selectedDocument.quality.status === "passed";
 
   useEffect(() => {
     if (!connection) return;
@@ -100,6 +113,11 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   }, [connection]);
 
   useEffect(() => {
+    const request = ++taskRequest.current;
+    previewRequest.current += 1;
+    previewIntent.current += 1;
+    nodeActionPending.current = false; generationPending.current = false; editorActionPending.current = false;
+    setBusyNodeKey(""); setGenerating(false); setChecking(false); setEditorBusy(false);
     setJobs(trackedJob?.task_id === taskId ? [trackedJob] : []);
     setDocuments([]); setSelectedDocument(null); setQuality(null); setQualityAction(null);
     setFinalization(null); setExportState(null);
@@ -111,11 +129,15 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
     if (!connection || !taskId) return;
     setMessage("正在读取正式说明书版本…");
     loadVersions(connection, taskId).then(({ jobItems, documentItems }) => {
+      if (request !== taskRequest.current) return;
       setJobs(jobItems); setDocuments(documentItems);
       setSelectedDocument(documentItems[0] || null);
       const running = jobItems.find((item) => item.status === "queued" || item.status === "running");
       setMessage(running ? `已恢复生成任务 v${running.version}，正在${stepLabel(running.current_step)}…` : "");
-    }).catch((error) => setMessage(error instanceof Error ? error.message : "说明书版本读取失败"));
+    }).catch((error) => {
+      if (request === taskRequest.current) setMessage(error instanceof Error ? error.message : "说明书版本读取失败");
+    });
+    return () => { taskRequest.current += 1; previewRequest.current += 1; previewIntent.current += 1; };
   }, [connection, taskId]);
 
   useEffect(() => {
@@ -131,13 +153,18 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
 
   useEffect(() => {
     if (!connection || !taskId || !activeJobId) return;
+    let disposed = false;
+    let refreshing = false;
     const timer = window.setInterval(async () => {
+      if (refreshing || disposed) return;
+      refreshing = true;
       setClock(Date.now());
       try {
         const versions = await loadVersions(connection, taskId);
+        if (disposed) return;
         setJobs(versions.jobItems); setDocuments(versions.documentItems);
-        setSelectedDocument((current) => current && versions.documentItems.some(
-          (item) => item.id === current.id) ? current : versions.documentItems[0] || null);
+        setSelectedDocument((current) => versions.documentItems.find(
+          (item) => item.id === current?.id) || versions.documentItems[0] || null);
         const running = versions.jobItems.find((item) => item.status === "queued" || item.status === "running");
         if (running) {
           setMessage(`生成任务 v${running.version}正在${stepLabel(running.current_step)}…`);
@@ -150,25 +177,29 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
             : latest ? `生成任务已完成，审阅稿 v${latest.version}已恢复。` : "生成任务已结束。");
         }
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : "生成进度读取失败");
-      }
+        if (!disposed) setMessage(error instanceof Error ? error.message : "生成进度读取失败");
+      } finally { refreshing = false; }
     }, 1500);
-    return () => window.clearInterval(timer);
+    return () => { disposed = true; window.clearInterval(timer); };
   }, [connection, taskId, activeJobId]);
 
   useEffect(() => () => releasePreviewPage(previewPageUrl), [previewPageUrl]);
 
   async function generate() {
-    if (!connection || !taskId || !modelId || activeJob) return;
-    setGenerating(true); setQuality(null); setExportedPath(null); setExportReceipt(null);
+    if (!connection || !taskId || !modelId || activeJob || generationPending.current) return;
+    generationPending.current = true;
+    const request = taskRequest.current;
+    setGenerating(true); closePreview(); setExportedPath(null); setExportReceipt(null);
     setMessage("AI 正在研究证据、撰写正文和生成图表，随后将装配 Word 并逐页质检…");
     try {
       const job = await generateFormalManual(connection, taskId, modelId);
+      if (request !== taskRequest.current) return;
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
       setMessage(`生成任务 v${job.version}已创建，正在${stepLabel(
         job.current_step)}…切换页面不会中断。`);
       await new Promise((resolve) => window.setTimeout(resolve, 300));
       const started = await loadVersions(connection, taskId);
+      if (request !== taskRequest.current) return;
       setJobs(started.jobItems); setDocuments(started.documentItems);
       const running = started.jobItems.find((item) =>
         item.status === "queued" || item.status === "running");
@@ -179,57 +210,80 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
         setMessage(`审阅候选稿 v${started.documentItems[0].version} 已生成。`);
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "正式说明书生成失败");
-    } finally { setGenerating(false); }
+      if (request === taskRequest.current) setMessage(error instanceof Error ? error.message : "正式说明书生成失败");
+    } finally { if (request === taskRequest.current) { generationPending.current = false; setGenerating(false); } }
   }
 
-  async function openPreview(document = selectedDocument) {
+  function closePreview() {
+    previewRequest.current += 1;
+    previewIntent.current += 1;
+    setQuality(null); setPreviewPageUrl(null); setPreviewLoading(false);
+    setPreviewError(""); setQualityAction(null);
+  }
+
+  async function openPreview(document = selectedDocument, expectedIntent?: number, suppliedQuality?: FormalManualQa) {
     if (!connection || !document) return;
-    setPreviewLoading(true); setPreviewError("");
+    // Completing a background operation may refresh data, but cannot undo a later close or open.
+    if (expectedIntent !== undefined && expectedIntent !== previewIntent.current) return;
+    if (expectedIntent === undefined) previewIntent.current += 1;
+    const request = ++previewRequest.current;
+    setPreviewLoading(true); setPreviewError(""); setPreviewPageUrl(null);
     setQualityAction(null);
-    setMessage("正在载入逐页质量检查预览…");
+    if (!suppliedQuality) setMessage("正在载入逐页质量检查预览…");
     try {
-      const value = await loadFormalManualQa(connection, document.job_id, document.version);
+      const value = suppliedQuality || await loadFormalManualQa(connection, document.job_id, document.version);
+      if (request !== previewRequest.current) return;
       setQuality(value); setSelectedDocument(document); setPreviewPage(1);
       const url = await loadFormalManualQaPage(connection, document.job_id, document.version, 1);
-      releasePreviewPage(previewPageUrl); setPreviewPageUrl(url); setPreviewPage(1);
-      setMessage("");
+      if (request !== previewRequest.current) { releasePreviewPage(url); return; }
+      setPreviewPageUrl(url); setPreviewPage(1);
+      if (!suppliedQuality) setMessage("");
     } catch (error) {
+      if (request !== previewRequest.current) return;
       const detail = error instanceof Error ? error.message : "说明书预览失败";
       setPreviewPageUrl(null); setPreviewError(detail); setMessage(detail);
-    } finally { setPreviewLoading(false); }
+    } finally { if (request === previewRequest.current) setPreviewLoading(false); }
   }
 
   async function changePreviewPage(page: number) {
-    if (!connection || !selectedDocument || !quality || page < 1 || page > quality.page_count) return;
-    setPreviewLoading(true); setPreviewError("");
+    if (!connection || !selectedDocument || !quality || previewLoading ||
+      page < 1 || page > quality.page_count) return;
+    const request = ++previewRequest.current;
+    setPreviewLoading(true); setPreviewError(""); setPreviewPage(page);
     setMessage(`正在载入第 ${page} 页…`);
     try {
       const url = await loadFormalManualQaPage(
         connection, selectedDocument.job_id, selectedDocument.version, page);
-      releasePreviewPage(previewPageUrl); setPreviewPageUrl(url); setPreviewPage(page); setMessage("");
-    } catch (error) { const detail = error instanceof Error ? error.message : "说明书预览页读取失败";
+      if (request !== previewRequest.current) { releasePreviewPage(url); return; }
+      setPreviewPageUrl(url); setMessage("");
+    } catch (error) {
+      if (request !== previewRequest.current) return;
+      const detail = error instanceof Error ? error.message : "说明书预览页读取失败";
       setPreviewPageUrl(null); setPreviewError(detail); setMessage(detail);
-    } finally { setPreviewLoading(false); }
+    } finally { if (request === previewRequest.current) setPreviewLoading(false); }
   }
 
   async function runQualityCheck() {
-    if (!connection || !selectedDocument) return;
+    if (!connection || !selectedDocument || checking) return;
+    if (selectedDocument.freshness.status !== "current") {
+      setMessage("正文或资产已有更新，请先重新装配最新内容，再执行质量检查。"); return;
+    }
+    const request = taskRequest.current;
+    const intent = previewIntent.current;
     setChecking(true); setMessage("正在逐页渲染并检查说明书…");
     try {
       const result = await runFormalManualQa(
         connection, selectedDocument.job_id, selectedDocument.version);
-      setSelectedDocument(result.document);
+      if (request !== taskRequest.current) return;
+      setSelectedDocument((current) => current?.id === selectedDocument.id ? result.document : current);
       setDocuments((current) => current.map((item) => item.id === result.document.id
         ? result.document : item));
-      setQuality(result.qa_run);
-      const url = await loadFormalManualQaPage(
-        connection, result.document.job_id, result.document.version, 1);
-      releasePreviewPage(previewPageUrl); setPreviewPageUrl(url); setPreviewPage(1);
       setMessage(result.qa_run.passed ? "逐页质量检查通过，请人工确认是否生成终稿。" :
         "质量检查未通过，请查看检查结果后重新生成或修订。");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "说明书质量检查失败"); }
-    finally { setChecking(false); }
+      await openPreview(result.document, intent, result.qa_run);
+    } catch (error) {
+      if (request === taskRequest.current) setMessage(error instanceof Error ? error.message : "说明书质量检查失败");
+    } finally { if (request === taskRequest.current) setChecking(false); }
   }
 
   async function exportDocument(reviewDraft = false) {
@@ -242,6 +296,9 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
     }
     if (!reviewDraft && selectedDocument.freshness.status !== "current") {
       setExportState({ state: "error", message: "终稿引用的正文或资产已有更新，请重新定稿后导出。" }); return;
+    }
+    if (!reviewDraft && !canExportFinal) {
+      setExportState({ state: "error", message: "终稿尚未通过当前质量检查，请重新装配并复检；可先导出审阅稿。" }); return;
     }
     const defaultName = reviewDraft && selectedDocument.document_kind !== "review_checkpoint"
       ? selectedDocument.filename.replace(/\.docx$/i, "-审阅稿.docx")
@@ -271,11 +328,10 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
 
   async function generateFinalDocument() {
     if (!connection || !selectedDocument || !canFinalize || checking) return;
-    const warning = selectedDocument.quality.status === "failed"
-      ? "当前审阅稿仍有未通过质量项。系统会保留检查记录，但最终决定由你承担。\n\n"
-      : "";
-    if (!window.confirm(`${warning}将以当前审阅稿 v${selectedDocument.version} 生成人工终稿。` +
+    if (!window.confirm(`将以当前已通过质量检查的审阅稿 v${selectedDocument.version} 生成人工终稿。` +
       "终稿会删除审阅提示语并形成独立版本，继续吗？")) return;
+    const request = taskRequest.current;
+    const intent = previewIntent.current;
     const workingMessage = "正在清理审阅措辞、生成独立终稿并执行最终逐页质检，请不要关闭应用。";
     setChecking(true); setMessage(workingMessage);
     setFinalization({ state: "working", message: workingMessage });
@@ -283,18 +339,20 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
       const result = await finalizeFormalManualDocument(
         connection, selectedDocument.job_id, selectedDocument.version);
       const versions = await loadVersions(connection, taskId);
+      if (request !== taskRequest.current) return;
       setJobs(versions.jobItems); setDocuments(versions.documentItems);
-      setSelectedDocument(result.document); setQuality(result.qa_run);
+      setSelectedDocument((current) => current?.id === selectedDocument.id ? result.document : current);
       setExportedPath(null); setExportReceipt(null);
-      const url = await loadFormalManualQaPage(
-        connection, result.document.job_id, result.document.version, 1);
-      releasePreviewPage(previewPageUrl); setPreviewPageUrl(url); setPreviewPage(1);
-      const successMessage = `终稿 v${result.document.version} 已按人工决定生成，可以直接导出。`;
-      setMessage(successMessage); setFinalization({ state: "success", message: successMessage });
+      const successMessage = result.qa_run.passed
+        ? `终稿 v${result.document.version} 已通过最终质量检查，可以导出。`
+        : `终稿 v${result.document.version} 已生成，但最终检查未通过。请处理检查项并重新装配后再导出。`;
+      setMessage(successMessage); setFinalization({ state: result.qa_run.passed ? "success" : "error", message: successMessage });
+      await openPreview(result.document, intent, result.qa_run);
     } catch (error) {
+      if (request !== taskRequest.current) return;
       const detail = error instanceof Error ? error.message : "终稿生成失败";
       setMessage(detail); setFinalization({ state: "error", message: detail });
-    } finally { setChecking(false); }
+    } finally { if (request === taskRequest.current) setChecking(false); }
   }
 
   async function showExport() {
@@ -330,36 +388,42 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
         onClick={() => setExportState(null)}>×</button>}</section>;
   }
 
-  async function openEditor(initialSectionKey = "") {
+  async function openEditor(initialSectionKey = "", expectedIntent = previewIntent.current) {
     if (!connection || !selectedDocument) return;
+    const request = taskRequest.current;
     setMessage("正在载入当前章节内容…");
     try {
       const value = await loadFormalManualPreview(
         connection, selectedDocument.job_id, selectedDocument.version);
+      if (request !== taskRequest.current || expectedIntent !== previewIntent.current) return;
       setEditor(structuredClone(value));
       setActiveSectionKey(value.sections.some((item) => item.section_key === initialSectionKey)
         ? initialSectionKey : value.sections[0]?.section_key || "");
-      setQuality(null); releasePreviewPage(previewPageUrl); setPreviewPageUrl(null);
+      closePreview();
       setFiguresDirty(false); setDirtySections([]); setMessage("");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "章节内容读取失败"); }
+    } catch (error) { if (request === taskRequest.current) setMessage(error instanceof Error ? error.message : "章节内容读取失败"); }
   }
 
   async function openSectionViewer(node: FormalManualJob["nodes"][number]) {
-    if (!connection || !cockpitJob) return;
+    if (!connection || !cockpitJob || nodeActionPending.current || checking || editorBusy) return;
+    nodeActionPending.current = true;
+    const request = taskRequest.current;
     const sectionKey = node.key === "ui_section_update"
       ? "ui_operations" : node.key.replace(/^section:/, "");
     setBusyNodeKey(node.key); setMessage(`正在读取“${node.title}”正文…`);
     try {
       const sections = await listFormalManualSections(connection, cockpitJob.id);
+      if (request !== taskRequest.current) return;
       const section = sections.find((item) => item.section_key === sectionKey);
       if (!section) throw new Error("本章尚无可浏览正文，请等待生成完成或重试失败节点");
       setSectionViewer(section); setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "章节正文读取失败");
-    } finally { setBusyNodeKey(""); }
+      if (request === taskRequest.current) setMessage(error instanceof Error ? error.message : "章节正文读取失败");
+    } finally { if (request === taskRequest.current) { nodeActionPending.current = false; setBusyNodeKey(""); } }
   }
 
   function closeEditor() {
+    if (editorBusy) return;
     if (dirtySections.length && !window.confirm(
       `还有 ${dirtySections.length} 个章节未保存，确定放弃这些修改吗？`)) return;
     setEditor(null); setDirtySections([]); setFiguresDirty(false);
@@ -367,6 +431,7 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
 
   function updateSection(sectionKey: string, update: (section: FormalManualPreview["sections"][number]) =>
     FormalManualPreview["sections"][number], markDirty = true) {
+    if (markDirty && editorActionPending.current) return;
     setEditor((current) => current ? { ...current, sections: current.sections.map((section) =>
       section.section_key === sectionKey ? update(section) : section) } : current);
     if (markDirty) setDirtySections((current) => current.includes(sectionKey)
@@ -374,9 +439,10 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
   }
 
   async function saveSection() {
-    if (!connection || !selectedDocument || !editor) return;
+    if (!connection || !selectedDocument || !editor || editorActionPending.current) return;
     const section = editor.sections.find((item) => item.section_key === activeSectionKey);
     if (!section) return;
+    editorActionPending.current = true;
     setEditorBusy(true); setMessage(`正在保存“${section.title}”的新修订…`);
     try {
       const saved = await editFormalManualSection(connection, selectedDocument.job_id,
@@ -386,13 +452,14 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
       setDirtySections((current) => current.filter((key) => key !== section.section_key));
       setMessage(`“${saved.title}”已保存为人工修订 v${saved.version}，原版本仍保留。`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "章节保存失败"); }
-    finally { setEditorBusy(false); }
+    finally { editorActionPending.current = false; setEditorBusy(false); }
   }
 
   async function regenerateSection() {
-    if (!connection || !selectedDocument || !editor) return;
+    if (!connection || !selectedDocument || !editor || editorActionPending.current) return;
     const section = editor.sections.find((item) => item.section_key === activeSectionKey);
     if (!section) return;
+    editorActionPending.current = true;
     setEditorBusy(true); setMessage(`AI 正在根据项目证据重新撰写“${section.title}”…`);
     try {
       const generated = await regenerateFormalManualSection(
@@ -403,11 +470,14 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
       setFiguresDirty(true);
       setMessage(`“${generated.title}”已生成 AI 修订 v${generated.version}，请审阅后再装配。`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "AI 章节生成失败"); }
-    finally { setEditorBusy(false); }
+    finally { editorActionPending.current = false; setEditorBusy(false); }
   }
 
   async function assembleRevision() {
-    if (!connection || !selectedDocument || !editor) return;
+    if (!connection || !selectedDocument || !editor || editorActionPending.current) return;
+    const request = taskRequest.current;
+    const intent = previewIntent.current;
+    editorActionPending.current = true;
     setEditorBusy(true); setMessage(figuresDirty ? "正在同步章节图表、装配 Word 并逐页质检…" :
       "正在装配修订版 Word 并逐页质检…");
     try {
@@ -416,6 +486,7 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
         if (section) {
           await editFormalManualSection(connection, selectedDocument.job_id,
             section.section_key, section.title, section.blocks);
+          if (request !== taskRequest.current) return;
           setDirtySections((current) => current.filter((key) => key !== sectionKey));
         }
       }
@@ -423,30 +494,40 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
       const document = await assembleFormalManualDocument(connection, selectedDocument.job_id);
       const result = await runFormalManualQa(connection, document.job_id, document.version);
       const versions = await loadVersions(connection, taskId);
+      if (request !== taskRequest.current) return;
       setJobs(versions.jobItems); setDocuments(versions.documentItems);
-      setSelectedDocument(result.document); setEditor(null); setFiguresDirty(false); setDirtySections([]);
+      setSelectedDocument((current) => current?.id === selectedDocument.id ? result.document : current);
+      setEditor(null); setFiguresDirty(false); setDirtySections([]);
       setExportedPath(null);
       setMessage(result.qa_run.passed ? `修订版 v${document.version} 已装配并通过逐页质检。` :
         `修订版 v${document.version} 已装配，但未通过逐页质检。`);
-      await openPreview(result.document);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "修订版装配失败"); }
-    finally { setEditorBusy(false); }
+      await openPreview(result.document, intent, result.qa_run);
+    } catch (error) {
+      if (request === taskRequest.current) setMessage(error instanceof Error ? error.message : "修订版装配失败");
+    } finally {
+      if (request === taskRequest.current) { editorActionPending.current = false; setEditorBusy(false); }
+    }
   }
 
   async function reassembleLatestAssets() {
-    if (!connection || !selectedDocument) return;
+    if (!connection || !selectedDocument || checking) return;
+    const request = taskRequest.current;
+    const intent = previewIntent.current;
     setChecking(true); setMessage("正在把最新正文、图表和截图重新装配为新的 Word 版本…");
     try {
       const document = await assembleFormalManualDocument(connection, selectedDocument.job_id);
       const result = await runFormalManualQa(connection, document.job_id, document.version);
       const versions = await loadVersions(connection, taskId);
+      if (request !== taskRequest.current) return;
       setJobs(versions.jobItems); setDocuments(versions.documentItems);
-      setSelectedDocument(result.document); setExportedPath(null);
+      setSelectedDocument((current) => current?.id === selectedDocument.id ? result.document : current);
+      setExportedPath(null);
       setMessage(result.qa_run.passed ? `最新资产已装配为 v${document.version}，并通过逐页质检。` :
         `最新资产已装配为 v${document.version}，但逐页质检未通过。`);
-      await openPreview(result.document);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "最新资产装配失败"); }
-    finally { setChecking(false); }
+      await openPreview(result.document, intent, result.qa_run);
+    } catch (error) {
+      if (request === taskRequest.current) setMessage(error instanceof Error ? error.message : "最新资产装配失败");
+    } finally { if (request === taskRequest.current) setChecking(false); }
   }
 
   async function qualityRepairContext(check: FormalManualQa["checks"][number]) {
@@ -485,70 +566,82 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
 
   async function repairQualityCheck(check: FormalManualQa["checks"][number]) {
     if (!connection || !selectedDocument || checking) return;
+    const request = taskRequest.current;
+    const intent = previewIntent.current;
+    const updateAction = (value: NonNullable<typeof qualityAction>) => {
+      if (request === taskRequest.current && intent === previewIntent.current) setQualityAction(value);
+    };
     setChecking(true);
-    setQualityAction({ checkKey: check.key, kind: "repair", state: "working", message: "正在定位该问题对应的章节和产物…" });
+    updateAction({ checkKey: check.key, kind: "repair", state: "working", message: "正在定位该问题对应的章节和产物…" });
     try {
       const context = await qualityRepairContext(check);
+      if (request !== taskRequest.current || intent !== previewIntent.current) return;
       if (check.key === "content.figure_coverage") {
         if (!context.figureKeys.length) throw new Error("正文中没有找到缺失图表请求，无法定向恢复");
         if (!window.confirm(`将单项生成 ${context.figureKeys.length} 张缺失图表并重新装配说明书，继续吗？`)) {
-          setQualityAction({ checkKey: check.key, kind: "repair", state: "info", message: "已取消，本次没有修改图表或文档。" });
+          updateAction({ checkKey: check.key, kind: "repair", state: "info", message: "已取消，本次没有修改图表或文档。" });
           return;
         }
         setMessage(`正在恢复 ${context.figureKeys.length} 张缺失图表…`);
         for (const [index, figureKey] of context.figureKeys.entries()) {
-          setQualityAction({ checkKey: check.key, kind: "repair", state: "working",
+          updateAction({ checkKey: check.key, kind: "repair", state: "working",
             message: `正在生成缺失图表 ${index + 1}/${context.figureKeys.length}…` });
           await regenerateFormalManualFigure(connection, selectedDocument.job_id, figureKey);
+          if (request !== taskRequest.current) return;
         }
       } else {
         if (!context.sectionKeys.length) throw new Error("没有定位到需要修复的章节");
         const titles = context.preview?.sections.filter((item) =>
           context.sectionKeys.includes(item.section_key)).map((item) => item.title) || context.sectionKeys;
         if (!window.confirm(`AI 将根据项目证据重新生成“${titles.join("、")}”并替换当前章节版本；历史修订仍保留。继续吗？`)) {
-          setQualityAction({ checkKey: check.key, kind: "repair", state: "info", message: "已取消，本次没有修改章节或文档。" });
+          updateAction({ checkKey: check.key, kind: "repair", state: "info", message: "已取消，本次没有修改章节或文档。" });
           return;
         }
         setMessage(`正在定向修复 ${context.sectionKeys.length} 个章节…`);
         for (const [index, sectionKey] of context.sectionKeys.entries()) {
-          setQualityAction({ checkKey: check.key, kind: "repair", state: "working",
+          updateAction({ checkKey: check.key, kind: "repair", state: "working",
             message: `AI 正在修复命中章节 ${index + 1}/${context.sectionKeys.length}：${titles[index] || sectionKey}` });
           await regenerateFormalManualSection(connection, selectedDocument.job_id, sectionKey);
+          if (request !== taskRequest.current) return;
         }
       }
       setMessage("修复完成，正在使用当前可用资产重新装配并复检…");
-      setQualityAction({ checkKey: check.key, kind: "repair", state: "working", message: "定向修复已完成，正在重新装配 Word…" });
+      updateAction({ checkKey: check.key, kind: "repair", state: "working", message: "定向修复已完成，正在重新装配 Word…" });
       const document = await assembleFormalManualDocument(connection, selectedDocument.job_id);
-      setQualityAction({ checkKey: check.key, kind: "repair", state: "working", message: `Word v${document.version} 已装配，正在逐页复检…` });
+      updateAction({ checkKey: check.key, kind: "repair", state: "working", message: `Word v${document.version} 已装配，正在逐页复检…` });
       const result = await runFormalManualQa(connection, document.job_id, document.version);
       const versions = await loadVersions(connection, taskId);
+      if (request !== taskRequest.current) return;
       setJobs(versions.jobItems); setDocuments(versions.documentItems);
-      setSelectedDocument(result.document); setQuality(result.qa_run); setExportedPath(null);
-      const url = await loadFormalManualQaPage(
-        connection, result.document.job_id, result.document.version, 1);
-      releasePreviewPage(previewPageUrl); setPreviewPageUrl(url); setPreviewPage(1);
+      setSelectedDocument((current) => current?.id === selectedDocument.id ? result.document : current);
+      setExportedPath(null);
       setMessage(result.qa_run.passed ? "定向修复已闭环，新的候选稿通过逐页质检。" :
         "定向修复和重新装配已完成；仍有未通过项，请继续逐项处理。");
-      setQualityAction({ checkKey: check.key, kind: "repair", state: "success", message: result.qa_run.passed
+      await openPreview(result.document, intent, result.qa_run);
+      updateAction({ checkKey: check.key, kind: "repair", state: "success", message: result.qa_run.passed
         ? `处理完成：新候选稿 v${document.version} 已生成并通过质检。`
         : `处理完成：新候选稿 v${document.version} 已生成；报告已刷新，仍有未通过项。` });
     } catch (error) {
+      if (request !== taskRequest.current) return;
       const detail = error instanceof Error ? error.message : "质量问题定向修复失败";
       setMessage(detail);
-      setQualityAction({ checkKey: check.key, kind: "repair", state: "error", message: `处理失败：${detail}` });
+      updateAction({ checkKey: check.key, kind: "repair", state: "error", message: `处理失败：${detail}` });
       const versions = await loadVersions(connection, taskId).catch(() => null);
-      if (versions) { setJobs(versions.jobItems); setDocuments(versions.documentItems); }
-    } finally { setChecking(false); }
+      if (versions && request === taskRequest.current) { setJobs(versions.jobItems); setDocuments(versions.documentItems); }
+    } finally { if (request === taskRequest.current) setChecking(false); }
   }
 
   async function editQualityCheck(check: FormalManualQa["checks"][number]) {
+    const request = taskRequest.current;
+    const intent = previewIntent.current;
     try {
       const context = await qualityRepairContext(check);
+      if (request !== taskRequest.current || intent !== previewIntent.current) return;
       if (!context.sectionKeys.length) throw new Error("没有定位到可手动编辑的章节");
-      await openEditor(context.sectionKeys[0]);
-      setMessage(`已定位到相关章节；修改后点击“装配修订版并质检”完成闭环。`);
+      await openEditor(context.sectionKeys[0], intent);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "章节定位失败");
+      if (request === taskRequest.current && intent === previewIntent.current)
+        setMessage(error instanceof Error ? error.message : "章节定位失败");
     }
   }
 
@@ -559,43 +652,55 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
       "已人工复核并接受当前结果"
     );
     if (!reason) return;
+    const request = taskRequest.current;
+    const intent = previewIntent.current;
     setChecking(true);
     setQualityAction({ checkKey: check.key, kind: "defer", state: "working", message: "正在保存本轮忽略原因和审计留痕…" });
     try {
       const updated = await deferFormalManualQaCheck(
         connection, selectedDocument.job_id, selectedDocument.version, check.key, reason);
       const versions = await loadVersions(connection, taskId);
+      if (request !== taskRequest.current) return;
       setJobs(versions.jobItems); setDocuments(versions.documentItems);
       const refreshed = versions.documentItems.find((item) => item.id === selectedDocument.id);
-      if (refreshed) setSelectedDocument(refreshed);
-      setQuality(updated); setMessage(updated.passed
+      if (refreshed) setSelectedDocument((current) => current?.id === selectedDocument.id ? refreshed : current);
+      setMessage(updated.passed
         ? "已忽略并留痕；当前没有剩余阻断项，请人工确认是否生成终稿。"
         : "已忽略并留痕；该项已从待处理列表移除，请继续处理其余问题。");
+      if (intent !== previewIntent.current) return;
+      setQuality(updated);
       setQualityAction({ checkKey: check.key, kind: "defer", state: "success",
         message: updated.passed ? "豁免已保存：质量门槛按剩余未豁免项重新计算，当前已可交付。"
           : "豁免已保存：该项已移出待处理列表，原始检查结果和原因仍保留。" });
     } catch (error) {
+      if (request !== taskRequest.current) return;
       const detail = error instanceof Error ? error.message : "质量问题留痕失败";
-      setMessage(detail); setQualityAction({ checkKey: check.key, kind: "defer", state: "error", message: `留痕失败：${detail}` });
-    } finally { setChecking(false); }
+      setMessage(detail);
+      if (intent === previewIntent.current) setQualityAction({ checkKey: check.key, kind: "defer", state: "error", message: `留痕失败：${detail}` });
+    } finally { if (request === taskRequest.current) setChecking(false); }
   }
 
   async function retryNode(node: FormalManualJob["nodes"][number]) {
-    if (!connection || !cockpitJob || busyNodeKey) return;
+    if (!connection || !cockpitJob || nodeActionPending.current || checking || editorBusy || generating) return;
+    nodeActionPending.current = true;
+    const request = taskRequest.current;
     setBusyNodeKey(node.key);
     try {
       if (node.kind === "screenshot_analysis" && node.status === "failed") {
         await retryScreenshotAnalysisNode(connection, cockpitJob.id, node.key);
+        if (request !== taskRequest.current) return;
         setMessage(`“${node.title}”已重新排队；只会重试这一张截图。`);
       } else if (["screenshot", "screenshot_import", "screenshot_review"].includes(node.kind)) {
         onOpenScreenshots(); return;
       } else if (node.kind === "figure") {
         await regenerateFormalManualFigure(connection, cockpitJob.id, node.key.replace(/^figure:/, ""));
+        if (request !== taskRequest.current) return;
         setMessage(`“${node.title}”已单项重试完成；请装配当前可用资产生成新候选稿。`);
       } else if (node.kind === "section") {
         const sectionKey = node.key === "ui_section_update"
           ? "ui_operations" : node.key.replace(/^section:/, "");
         await regenerateFormalManualSection(connection, cockpitJob.id, sectionKey);
+        if (request !== taskRequest.current) return;
         setMessage(`“${node.title}”已单项重试完成；阶段正文与关联资产已标记更新。`);
       } else if (node.kind === "assemble" && selectedDocument) {
         await reassembleLatestAssets();
@@ -603,18 +708,20 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
         await runQualityCheck();
       }
       const versions = await loadVersions(connection, taskId);
+      if (request !== taskRequest.current) return;
       setJobs(versions.jobItems); setDocuments(versions.documentItems);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "节点重试失败");
-    } finally { setBusyNodeKey(""); }
+      if (request === taskRequest.current) setMessage(error instanceof Error ? error.message : "节点重试失败");
+    } finally { if (request === taskRequest.current) { nodeActionPending.current = false; setBusyNodeKey(""); } }
   }
 
   async function actOnNode(node: FormalManualJob["nodes"][number]) {
+    if (nodeActionPending.current || checking || editorBusy || generating) return;
     const artifactVersion = Number(node.output.version || 0);
     const artifact = documents.find((item) => item.job_id === cockpitJob?.id &&
       item.version === artifactVersion);
     if (artifact && node.kind === "assemble" && node.status !== "failed") {
-      setSelectedDocument(artifact); setQuality(null); setExportedPath(null);
+      setSelectedDocument(artifact); closePreview(); setExportedPath(null);
       setMessage(`${artifact.document_kind === "review_checkpoint" ? "阶段审阅稿" :
         artifact.document_kind === "final_document" ? "人工终稿" : "审阅候选稿"} v${
         artifact.version} 已切换到产物区，可查看正文或真实落盘导出。`);
@@ -644,7 +751,7 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
         typeof node.output.artifact_path === "string" && <small className="node-artifact">产物：{
           String(node.output.artifact_path)}</small>}{node.safe_error_message && <small className="node-error">{
           node.safe_error_message}</small>}{node.next_action && <small className="node-next">下一动作：{
-          node.next_action}</small>}</div>{action && <button disabled={busyNodeKey === node.key}
+          node.next_action}</small>}</div>{action && <button disabled={Boolean(busyNodeKey) || checking || editorBusy || generating}
         onClick={() => actOnNode(node)}>{busyNodeKey === node.key ? "处理中…" : action}</button>}
     </article>;
   }
@@ -657,7 +764,7 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
       <header><i /><strong>{node.title}</strong><span>{nodeStatusLabel(node.status)}</span></header>
       <small>{nodeDurationLabel(node, clock)} · {nodeAttemptLabel(node)}</small>
       {node.safe_error_message && <p className="node-error">{node.safe_error_message}</p>}
-      <div className="flow-node-actions">{action && <button disabled={busyNodeKey === node.key}
+      <div className="flow-node-actions">{action && <button disabled={Boolean(busyNodeKey) || checking || editorBusy || generating}
         onClick={() => actOnNode(node)}>{busyNodeKey === node.key ? "处理中…" : action}</button>}
         <details><summary>详情</summary><div>{node.dependencies.length > 0 &&
           <small>依赖：{node.dependencies.map(dependencyLabel).join("、")}</small>}
@@ -727,11 +834,14 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
     {!taskId ? <section className="overview-placeholder source-empty"><span>DOC</span>
       <h2>请先选择项目</h2><p>说明书将复用项目扫描得到的事实、源码证据和确认信息。</p></section> :
       <section className="manual-content">{message && <div className="source-notice">{message}</div>}
-        <div className="ai-generation-card"><div><span>AI</span><div><strong>一键生成正式软件说明书</strong>
-          <p>自动完成证据研究、结构化正文、章节图表、截图决策与 DOCX 装配；内部步骤可独立追踪和重试。</p></div></div>
-          <button disabled={!modelId || generating || !!activeJob} onClick={generate}>{activeJob
-            ? `${stepLabel(activeJob.current_step)} ${activeJob.progress.percent}%` : generating ? "正在创建生成任务…" :
-            !modelId ? "请先验证可用模型" : documents.length ? "生成新版本" : "生成正式说明书"}</button></div>
+        {!visibleJob && !documents.length ? <div className="ai-generation-card"><div><span>AI</span><div>
+          <strong>生成软件说明书</strong><p>基于已确认的项目证据生成正文、图表与审阅稿，再检查文档并生成终稿。</p></div></div>
+          <button disabled={!modelId || generating} onClick={generate}>{generating ? "正在创建任务…" :
+            !modelId ? "请先在设置中验证模型" : "开始生成说明书"}</button></div> :
+          <details className="manual-new-version"><summary>高级操作：重新研究并生成一份说明书</summary>
+            <p>仅在项目内容或生成目标改变时使用。当前任务的失败项可在下方单独处理，已完成的内容继续保留。</p>
+            <button disabled={!modelId || generating || !!activeJob || checking || !!busyNodeKey} onClick={generate}>{generating ?
+              "正在创建新任务…" : "创建独立生成任务"}</button></details>}
 
         <section className="manual-flow-guide"><header><div><strong>从项目到正式稿，只走 5 步</strong>
           <small>正文预览可以提前生成；图表与截图就绪后装配审阅稿，终稿必须由人工确认生成。</small></div>
@@ -747,6 +857,7 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
             formatElapsed(clock - Date.parse(cockpitJob.started_at || cockpitJob.created_at))}</small></div><div>
           <b>{cockpitJob.progress.percent}%</b><small>预计剩余 {estimateJobEta(cockpitJob)}</small></div></header>
           <div className="manual-progress-track"><i style={{ width: `${cockpitJob.progress.percent}%` }} /></div>
+          <details className="cockpit-technical-details"><summary>查看模型、并发与执行节点</summary>
           <div className="cockpit-metrics"><span><b>模型</b>{activeModel
             ? `${activeModel.name} · ${activeModel.model_name}` : cockpitJob.model_config_id.slice(0, 8)}</span>
             <span><b>并发</b>{jobConcurrency(cockpitJob)} 路</span><span><b>心跳</b>{
@@ -764,22 +875,30 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
             {renderExecutionGraph(cockpitJob)}</details>{
             activeJobs.length > 1 && <p className="duplicate-job-warning">检测到 {
                 activeJobs.length} 个早先重复启动的任务；已禁止继续重复创建，当前展示最新任务。</p>}
+          </details>
         </section>}
 
         {!activeJob && visibleJob && <section className={`manual-run-summary ${terminalIssues.length ? "attention" : "clear"}`}>
           <header><div><span>{terminalIssues.length ? "待处理" : "已结束"}</span><div>
             <strong>最近任务 v{visibleJob.version} · {jobStatusLabel(visibleJob)}</strong>
-            <small>已产出内容不等于通过产品验收；请先处理失败、截图与 QA 问题。</small></div></div>
+            <small>{nextIssue ? "先完成下一项处理；其余已完成内容会保留。" :
+              selectedDocument ? "请在下方审阅文档并按质量检查结果继续。" : "请查看任务结果与运行详情。"}</small></div></div>
             <time>{visibleJob.finished_at ? visibleJob.finished_at.replace("T", " ").slice(0, 19) :
               visibleJob.updated_at.replace("T", " ").slice(0, 19)}</time></header>
-          {terminalIssues.length > 0 ? <div className="manual-run-issues">{terminalIssues.map((node) => {
+          {nextIssue && <div className="manual-next-action"><div><strong>下一步：{nextIssue.title}</strong>
+            <p>{nextIssue.safe_error_message || nextIssue.next_action || nodeStatusLabel(nextIssue.status)}</p>
+            <small>仅处理这一项；不会重新生成整份说明书。</small></div>
+            <button className="primary" disabled={!!busyNodeKey || checking || editorBusy || generating}
+              onClick={() => actOnNode(nextIssue)}>{busyNodeKey === nextIssue.key ? "正在处理…" :
+                nodeActionLabel(nextIssue, documents, visibleJob.id, false)}</button></div>}
+          {terminalIssues.length > 0 ? <details className="manual-other-issues"><summary>查看全部 {terminalIssues.length} 项待处理事项</summary><div className="manual-run-issues">{terminalIssues.map((node) => {
             const action = nodeActionLabel(node, documents, visibleJob.id, false);
             return <article className={node.status} key={node.key}><i /><div><strong>{node.title}</strong>
               <small>{nodeStatusLabel(node.status)}{node.safe_error_message ? ` · ${node.safe_error_message}` : ""}</small>
               {node.next_action && <p>{node.next_action}</p>}</div>{action && <button
-                disabled={busyNodeKey === node.key} onClick={() => actOnNode(node)}>{busyNodeKey === node.key
+                disabled={Boolean(busyNodeKey) || checking || editorBusy || generating} onClick={() => actOnNode(node)}>{busyNodeKey === node.key
                   ? "处理中…" : action}</button>}</article>;
-          })}</div> : <p className="manual-run-clear">执行节点没有遗留错误；文档内容质量仍需人工确认后才能视为完成。</p>}
+          })}</div></details> : <p className="manual-run-clear">执行节点没有遗留错误；文档内容质量仍需人工确认后才能视为完成。</p>}
         </section>}
 
         {selectedDocument && <><section className={`manual-result ${isCheckpoint ? "checkpoint" : ""} ${
@@ -797,11 +916,13 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
             {!isFinalDocument && <button onClick={() => openEditor()}>{isCheckpoint ? "预览正文" : "编辑内容"}</button>}{!isCheckpoint && <button disabled={checking} onClick={selectedDocument.quality.status === "not_checked"
             ? runQualityCheck : () => openPreview()}>{checking ? "正在质检…" :
               selectedDocument.quality.status === "not_checked" ? "执行逐页质检" : "逐页预览"}</button>}
-            {!isCheckpoint && !isFinalDocument && <button disabled={exportBusy}
+            {!isCheckpoint && (!isFinalDocument || !canExportFinal) && <button disabled={exportBusy}
               onClick={() => exportDocument(true)}>{exportBusy ? "正在导出…" : "导出审阅稿…"}</button>}
             {canFinalize && <button className="primary" disabled={checking} onClick={generateFinalDocument}>{
               checking ? "正在生成终稿…" : "生成终稿"}</button>}
-            {(isCheckpoint || isFinalDocument) && <button className="primary"
+            {isFinalDocument && !canExportFinal && <button className="primary" disabled={checking}
+              onClick={reassembleLatestAssets}>{checking ? "正在重新装配…" : "重新装配并复检"}</button>}
+            {(isCheckpoint || canExportFinal) && <button className="primary"
             disabled={selectedDocument.integrity.status !== "verified" || exportBusy}
             onClick={exportedPath ? showExport : () => exportDocument(isCheckpoint)}>{exportedPath ? "在文件夹中显示" :
               exportState?.state === "choosing" ? "请选择保存位置…" :
@@ -832,7 +953,7 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
           <small>默认显示最近 {Math.min(6, documents.length)} 个 · 共 {documents.length} 个</small></header><div>{(
             showAllDocuments ? documents : documents.slice(0, 6)).map((item) => <button
             className={selectedDocument?.id === item.id ? "active" : ""} key={item.id}
-            onClick={() => { setSelectedDocument(item); setQuality(null); setFinalization(null); setExportState(null); setExportedPath(null);
+            onClick={() => { setSelectedDocument(item); closePreview(); setFinalization(null); setExportState(null); setExportedPath(null);
               setExportReceipt(null); }}>
             <b>v{item.version}</b><span>{item.document_kind === "review_checkpoint" ? "正文预览快照" :
               item.document_kind === "final_document" ? "人工终稿" :
@@ -860,18 +981,18 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
 
       </section>}
 
-    {quality && selectedDocument && <div className="document-viewer manual-document-viewer" role="dialog" aria-modal="true">
+    {quality && selectedDocument && <Dialog className="document-viewer manual-document-viewer" label="说明书预览与质量检查" onClose={closePreview}>
       <div className="document-viewer-shell manual-document-shell"><header><div><strong>{selectedDocument.project_name} 软件说明书</strong>
         <small>{selectedDocument.project_version} · 文档 v{selectedDocument.version} · {
-          isFinalDocument ? "人工已定稿" : quality.passed ? "质量检查通过" : "质量检查未通过"}</small></div><div>
-        {isFinalDocument ? <button disabled={selectedDocument.integrity.status !== "verified" || exportBusy}
+          isFinalDocument ? canExportFinal ? "终稿检查通过" : "终稿检查未通过" : quality.passed ? "质量检查通过" : "质量检查未通过"}</small></div><div>
+        {canExportFinal ? <button disabled={exportBusy}
           onClick={exportedPath ? showExport : () => exportDocument(false)}>{exportedPath ? "在文件夹中显示" :
             exportState?.state === "choosing" ? "请选择保存位置…" :
               exportState?.state === "working" ? "正在导出终稿…" : "导出终稿…"}</button> : <>{canFinalize && <button className="primary" disabled={checking}
               onClick={generateFinalDocument}>{checking ? "正在生成终稿…" : "生成终稿"}</button>}
-            <button onClick={() => exportDocument(true)}>导出审阅稿…</button></>}
-        <button onClick={() => { setQuality(null); releasePreviewPage(previewPageUrl);
-          setPreviewPageUrl(null); setPreviewError(""); setQualityAction(null); }}>关闭</button></div></header>
+            {isFinalDocument && !canExportFinal && <button disabled={checking} onClick={reassembleLatestAssets}>重新装配并复检</button>}
+            <button disabled={exportBusy} onClick={() => exportDocument(true)}>导出审阅稿…</button></>}
+        <button data-dialog-close onClick={closePreview}>关闭</button></div></header>
         {renderFinalizationStatus()}
         {renderExportStatus()}
         {!isFinalDocument && qualityAction && <div className={`manual-qa-action ${qualityAction.state}`} role="status" aria-live="polite">
@@ -909,6 +1030,13 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
               return <li className={item.severity} key={item.key}><b>{qaCheckLabel(item.key)}</b>
                 <span>{item.message}{decision && <small className="qa-decision">已留痕忽略：{
                   decision.reason}</small>}</span><div className="qa-issue-actions">
+                  {["content.screenshot_description_complete", "content.screenshot_sensitive_review",
+                    "content.screenshot_unresolved_claims", "content.screenshot_analysis_warnings"].includes(item.key) &&
+                    <button disabled={checking} onClick={() => { closePreview(); onOpenScreenshots(); }}>完善并确认截图</button>}
+                  {item.key === "structure.caption_prefixes" && <button disabled={checking} onClick={reassembleLatestAssets}>
+                    {checking ? "正在重新装配…" : "重新装配图表编号"}</button>}
+                  {item.key === "structure.toc_page_numbers" && <button disabled={checking} onClick={runQualityCheck}>
+                    {checking ? "正在校正并复检…" : "校正目录页码并复检"}</button>}
                   {canRepair && <button disabled={checking} onClick={() => repairQualityCheck(item)}>{
                     acting && qualityAction?.kind === "repair" ? "正在处理…" : item.key === "content.figure_coverage" ?
                       "生成缺失图表并装配" : "AI 修复命中章节并装配"}</button>}
@@ -920,7 +1048,7 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
                 </div></li>;
             })}</ul>
             {quality.checks.some((item) => item.key === "content.ui_screenshot" && !item.passed) && <button
-              onClick={() => { setQuality(null); onOpenScreenshots(); }}>导入真实界面截图</button>}</details>}
+              onClick={() => { closePreview(); onOpenScreenshots(); }}>导入真实界面截图</button>}</details>}
           <div className="source-docx-pager"><button disabled={previewPage <= 1 || previewLoading}
             onClick={() => changePreviewPage(previewPage - 1)}>上一页</button><strong>第 {previewPage} / {
               quality.page_count} 页</strong><button disabled={previewPage >= quality.page_count || previewLoading}
@@ -931,32 +1059,32 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
             <p>{previewError}</p><button onClick={() => changePreviewPage(previewPage)}>重新加载本页</button></div>}
           {!previewLoading && previewPageUrl && <img className="manual-qa-page"
           src={previewPageUrl} alt={`说明书第 ${previewPage} 页`} />}</section></div>
-      </div></div>}
+      </div></Dialog>}
 
-    {sectionViewer && <div className="document-viewer manual-section-viewer" role="dialog" aria-modal="true">
+    {sectionViewer && <Dialog className="document-viewer manual-section-viewer" label={sectionViewer.title} onClose={() => setSectionViewer(null)}>
       <div className="document-viewer-shell manual-section-viewer-shell"><header><div>
         <strong>{sectionViewer.title}</strong><small>只读正文浏览 · {sectionStatusLabel(sectionViewer.status)}</small>
-      </div><button onClick={() => setSectionViewer(null)}>关闭</button></header>
+      </div><button data-dialog-close onClick={() => setSectionViewer(null)}>关闭</button></header>
       <section className="manual-section-reader">{sectionViewer.blocks.map((block, index) =>
-        <ReadOnlyBlock block={block} key={`${block.type}-${index}`} />)}</section></div></div>}
+        <ReadOnlyBlock block={block} key={`${block.type}-${index}`} />)}</section></div></Dialog>}
 
-    {editor && selectedDocument && <div className="document-viewer manual-editor" role="dialog" aria-modal="true">
+    {editor && selectedDocument && <Dialog className="document-viewer manual-editor" label="编辑说明书正文" onClose={closeEditor}>
       <div className="document-viewer-shell manual-editor-shell"><header><div><strong>编辑说明书正文</strong>
         <small>{selectedDocument.project_name} · 文档 v{selectedDocument.version} · 修改保留历史版本</small></div><div>
         {dirtySections.length > 0 && <span className="editor-dirty-count">{dirtySections.length} 章未保存</span>}
-        <button disabled={editorBusy} onClick={closeEditor}>关闭</button></div></header>
+        <button data-dialog-close disabled={editorBusy} onClick={closeEditor}>关闭</button></div></header>
         <div className="manual-editor-layout"><nav>{editor.sections.map((section, index) => <button
-          className={activeSectionKey === section.section_key ? "active" : ""}
+          className={activeSectionKey === section.section_key ? "active" : ""} disabled={editorBusy}
           onClick={() => setActiveSectionKey(section.section_key)} key={section.section_key}>
           <b>{String(index + 1).padStart(2, "0")}</b><span>{section.title}</span>
           <small>{dirtySections.includes(section.section_key) ? "未保存" : sectionStatusLabel(section.status)}</small></button>)}</nav>
           <section className="manual-section-editor">{editor.sections.filter((section) =>
             section.section_key === activeSectionKey).map((section) => <div key={section.section_key}>
-              <label>章节标题<input value={section.title} onChange={(event) => updateSection(
+              <label>章节标题<input disabled={editorBusy} value={section.title} onChange={(event) => updateSection(
                 section.section_key, (current) => ({ ...current, title: event.target.value }))} /></label>
               <p className="editor-hint">段落、列表和表格可直接修改；图表请求保持只读，避免正文与可编辑 Draw.io 资产失去关联。</p>
               <div className="manual-block-list">{section.blocks.map((block, index) => <BlockEditor
-                block={block} index={index} key={`${block.type}-${index}`} onChange={(next) => updateSection(
+                block={block} index={index} disabled={editorBusy} key={`${block.type}-${index}`} onChange={(next) => updateSection(
                   section.section_key, (current) => ({ ...current, blocks: current.blocks.map(
                     (item, itemIndex) => itemIndex === index ? next : item) }))} />)}</div>
             </div>)}</section></div>
@@ -967,7 +1095,7 @@ export function ManualWorkspace({ connection, taskId, onTaskChange, onOpenDiagra
           onClick={saveSection}>保存本章修订</button></div><button className="primary" disabled={editorBusy}
           onClick={assembleRevision}>{figuresDirty ? "保存修改、同步图表并装配" : dirtySections.length ?
             `保存 ${dirtySections.length} 章并装配新版本` : "装配新版本并质检"}</button></footer>
-      </div></div>}
+      </div></Dialog>}
   </main>;
 }
 
@@ -983,34 +1111,40 @@ function ReadOnlyBlock({ block }: { block: ManualSectionBlock }) {
     <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>)}</tbody></table></figure>;
 }
 
-function BlockEditor({ block, index, onChange }: { block: ManualSectionBlock; index: number;
+function BlockEditor({ block, index, disabled, onChange }: { block: ManualSectionBlock; index: number; disabled: boolean;
   onChange: (block: ManualSectionBlock) => void }) {
   if (block.type === "subheading") return <article className="manual-block-editor"><header>
-    <b>小节标题 {index + 1}</b><span>自动编号</span></header><label>标题<input value={block.title}
+    <b>小节标题 {index + 1}</b><span>自动编号</span></header><label>标题<input disabled={disabled} value={block.title}
       onChange={(event) => onChange({ ...block, title: event.target.value })} /></label></article>;
   if (block.type === "figure_request") return <article className="manual-block-editor figure-readonly">
     <header><b>图表 {index + 1}</b><span>保持资产关联</span></header><strong>{block.title}</strong>
     <p>{block.purpose}</p><small>{block.figure_type || "diagram"} · {block.figure_key}</small></article>;
   if (block.type === "paragraph") return <article className="manual-block-editor"><header>
-    <b>段落 {index + 1}</b>{block.inference && <span>合理推断</span>}</header><textarea rows={5}
+    <b>段落 {index + 1}</b>{block.inference && <span>合理推断</span>}</header><textarea disabled={disabled} rows={5}
     value={block.text} onChange={(event) => onChange({ ...block, text: event.target.value })} /></article>;
   if (block.type === "list") return <article className="manual-block-editor"><header><b>列表 {index + 1}</b>
-    {block.inference && <span>合理推断</span>}</header><label>引导句<input value={block.lead || ""}
+    {block.inference && <span>合理推断</span>}</header><label>引导句<input disabled={disabled} value={block.lead || ""}
       onChange={(event) => onChange({ ...block, lead: event.target.value })} /></label><label>列表项（每行一项）
-      <textarea rows={5} value={block.items.join("\n")} onChange={(event) => onChange({ ...block,
+      <textarea disabled={disabled} rows={5} value={block.items.join("\n")} onChange={(event) => onChange({ ...block,
         items: event.target.value.split("\n").map((item) => item.trim()).filter(Boolean) })} /></label></article>;
   return <article className="manual-block-editor"><header><b>表格 {index + 1}</b>
-    {block.inference && <span>合理推断</span>}</header><label>表名<input value={block.title}
+    {block.inference && <span>合理推断</span>}</header><label>表名<input disabled={disabled} value={block.title}
       onChange={(event) => onChange({ ...block, title: event.target.value })} /></label>
-    <label>表头（Tab 分列）<input value={block.headers.join("\t")}
+    <label>表头（Tab 分列）<input disabled={disabled} value={block.headers.join("\t")}
       onChange={(event) => onChange({ ...block, headers: event.target.value.split("\t") })} /></label>
-    <label>数据（每行一条，Tab 分列）<textarea rows={6} value={block.rows.map((row) => row.join("\t")).join("\n")}
+    <label>数据（每行一条，Tab 分列）<textarea disabled={disabled} rows={6} value={block.rows.map((row) => row.join("\t")).join("\n")}
       onChange={(event) => onChange({ ...block, rows: event.target.value.split("\n").filter(Boolean)
         .map((row) => row.split("\t")) })} /></label></article>;
 }
 
 function qaCheckLabel(key: string) {
-  return ({ "content.section_depth": "章节内容深度", "content.ui_screenshot": "真实界面截图",
+  return ({ "content.section_depth": "章节内容深度",
+    "content.screenshot_description_complete": "截图操作说明完整性",
+    "content.screenshot_sensitive_review": "截图敏感信息确认",
+    "content.screenshot_unresolved_claims": "截图事实仍需核实",
+    "content.screenshot_analysis_warnings": "截图分析提醒",
+    "structure.caption_prefixes": "图表标题编号",
+    "structure.toc_page_numbers": "目录页码准确性", "content.ui_screenshot": "真实界面截图",
     "content.required_sections": "必要章节完整性", "content.figure_coverage": "必要章节图表覆盖",
     "content.placeholders": "待确认内容", "render.page_density": "页面内容密度",
     "content.inference_claims": "AI 推断内容", "content.evidence_coverage": "证据覆盖",
@@ -1212,9 +1346,9 @@ function nodeActionLabel(node: ExecutionNode, documents: FormalManualDocument[],
     item.job_id === jobId && item.version === Number(node.output.version || 0))) return "查看产物";
   if (node.kind === "screenshot_analysis" && node.status === "failed") return "重试此截图";
   if (["screenshot", "screenshot_import", "screenshot_analysis", "screenshot_review"].includes(node.kind)) return ["waiting_for_authorization", "waiting_for_review", "waiting_for_screenshots", "outdated", "completed_with_warnings", "skipped"]
-    .includes(node.status) ? "补截图 / 授权" : node.status === "failed" ? "进入截图页" : null;
+    .includes(node.status) ? "检查并确认截图" : node.status === "failed" ? "进入截图页" : null;
   if (node.status === "failed" && ["figure", "section"].includes(node.kind)) {
-    return "重试此项";
+    return node.kind === "figure" ? "重新生成这张图" : "重新生成这一章";
   }
   if (node.status === "failed" && node.kind === "assemble") return jobActive ? null : "重新装配";
   if (node.status === "failed" && node.kind === "qa") return jobActive ? null : "重跑质检";

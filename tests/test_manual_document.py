@@ -9,13 +9,39 @@ from uuid import uuid4
 from docx import Document
 from PIL import Image, ImageDraw
 
-from software_copyright_agent.manual_document import ManualDocumentService
+from software_copyright_agent.manual_document import (
+    FormalManualBuilder, ManualDocumentError, ManualDocumentService,
+)
 from software_copyright_agent.manual_pipeline import ManualPipelineService
-from software_copyright_agent.manual_qa import QA_POLICY_VERSION
+from software_copyright_agent.manual_qa import QA_POLICY_VERSION, ManualQaError, ManualQaService
 from software_copyright_agent.storage import Database
 
 
 class ManualDocumentServiceTests(unittest.TestCase):
+    def test_caption_labels_are_owned_by_document_and_absent_backend_is_explicit(self):
+        document = Document()
+        builder = FormalManualBuilder()
+        for index, title in enumerate(("表1 接口列表", "表 2-1：接口列表", "Table 4.2 接口列表"), 1):
+            builder._table(document, {"title": title, "headers": ["接口"], "rows": [["查询"]]}, index)
+        self.assertEqual([p.text for p in document.paragraphs if p.style.name == "Caption"],
+                         ["表 1  接口列表", "表 2  接口列表", "表 3  接口列表"])
+        self.assertEqual(builder._clean_caption_number("图像识别界面"), "图像识别界面")
+        self.assertEqual(builder._clean_caption_number("图 7 系统架构"), "系统架构")
+        description = ManualDocumentService._interpretation_description({"related_backend_actions": []})
+        self.assertEqual(description["backend_interactions"], "当前截图未展示后台接口或数据写入过程。")
+        description = ManualDocumentService._interpretation_description({
+            "success_state": "当前为0个连接。", "failure_and_recovery": "本图未显示错误。",
+            "warnings": ["本图未显示恢复操作。"]})
+        self.assertNotIn("。；", description["result_validation_recovery"])
+        self.assertIn("分析提醒", description["result_validation_recovery"])
+        figure = {"purpose": "旧请求要求展示SQLite", "semantic": {
+            "nodes": [{"label": "本地服务"}, {"label": "桌面壳"}]}}
+        note = builder._figure_description(figure)
+        self.assertIn("本地服务", note)
+        self.assertNotIn("SQLite", note)
+        figure["qa"] = {"editor_managed": True}
+        self.assertNotIn("本地服务", builder._figure_description(figure))
+
     def test_internal_screenshot_workflow_text_and_generic_heading_never_ship(self) -> None:
         service = ManualDocumentService.__new__(ManualDocumentService)
         self.assertTrue(service._internal_ui_delivery_block({
@@ -252,7 +278,9 @@ class ManualDocumentServiceTests(unittest.TestCase):
             self.assertEqual(ui_headings, ["7.1  项目工作台"])
             self.assertFalse(screenshot_headings[0].paragraph_format.page_break_before)
             self.assertIn("对应操作界面见图 3", "\n".join(p.text for p in doc.paragraphs))
-            self.assertIn("该功能模块主要用于", "\n".join(p.text for p in doc.paragraphs))
+            document_text = "\n".join(p.text for p in doc.paragraphs)
+            self.assertEqual(document_text.count(interpretation["purpose"]), 1)
+            self.assertNotIn("该功能模块主要用于", document_text)
             with zipfile.ZipFile(artifact) as archive:
                 document_xml = archive.read("word/document.xml").decode("utf-8")
                 numbering_xml = archive.read("word/numbering.xml").decode("utf-8")
@@ -284,6 +312,24 @@ class ManualDocumentServiceTests(unittest.TestCase):
             self.assertIn("03    功能与模块设计\t5", toc_text)
             self.assertEqual(service.read(job["id"], 2), artifact.read_bytes())
             self.assertEqual(result["freshness"]["status"], "current")
+            # Renaming/versioning the project must not relabel the bytes of an
+            # older document or let current metadata re-certify that old file.
+            with database.connect() as connection:
+                connection.execute(
+                    "UPDATE facts SET value_json=? WHERE task_id='task' AND fact_key='project.version'",
+                    (json.dumps("V3.0"),),
+                )
+            historical_identity = service.get(job["id"], 2)
+            self.assertEqual(historical_identity["project_version"], "V2.0")
+            self.assertEqual(historical_identity["filename"], "证据化系统-V2.0-软件说明书-审阅稿.docx")
+            self.assertEqual(historical_identity["freshness"]["status"], "outdated")
+            with self.assertRaisesRegex(ManualQaError, "重新装配"):
+                ManualQaService(database, root).execute(job["id"], 2)
+            with database.connect() as connection:
+                connection.execute(
+                    "UPDATE facts SET value_json=? WHERE task_id='task' AND fact_key='project.version'",
+                    (json.dumps("V2.0"),),
+                )
             with database.connect() as connection:
                 connection.execute(
                     "UPDATE manual_document_artifacts SET status='qa_passed' WHERE id=?",
@@ -297,6 +343,16 @@ class ManualDocumentServiceTests(unittest.TestCase):
                     '[]','{}','report-current.json','render-current','preview-current.pdf',?)""",
                     (str(uuid4()), result["id"], job["id"], QA_POLICY_VERSION, now),
                 )
+            with database.connect() as connection:
+                connection.execute("UPDATE manual_document_qa_runs SET passed=0 WHERE document_artifact_id=?",
+                                   (result["id"],))
+            with self.assertRaisesRegex(ManualDocumentError, "阻断问题"):
+                service.finalize(job["id"], 2)
+            self.assertEqual(len(service.list(job["id"])), 2)
+            self.assertTrue(service.read(job["id"], 2).startswith(b"PK"))
+            with database.connect() as connection:
+                connection.execute("UPDATE manual_document_qa_runs SET passed=1 WHERE document_artifact_id=?",
+                                   (result["id"],))
             final = service.finalize(job["id"], 2)
             self.assertEqual(final["document_kind"], "final_document")
             self.assertEqual(final["filename"], "证据化系统-V2.0-软件说明书.docx")

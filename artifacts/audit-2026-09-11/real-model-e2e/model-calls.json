@@ -1,0 +1,178 @@
+[
+  {
+    "sequence": 1,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:21:21.799505Z",
+    "thread": "quick-deliverable_1",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:21:41.775781Z",
+    "elapsed_seconds": 19.976
+  },
+  {
+    "sequence": 2,
+    "model": "senseaudio-vl-1.0-260319",
+    "stream": false,
+    "started_at": "2026-09-10T18:21:42.848001Z",
+    "thread": "screenshot-analysis_1",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:21:51.047304Z",
+    "elapsed_seconds": 8.199
+  },
+  {
+    "sequence": 3,
+    "model": "senseaudio-vl-1.0-260319",
+    "stream": false,
+    "started_at": "2026-09-10T18:21:42.866988Z",
+    "thread": "screenshot-analysis_0",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:21:49.562248Z",
+    "elapsed_seconds": 6.695
+  },
+  {
+    "sequence": 4,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:21:52.770522Z",
+    "thread": "manual-draft-plan_2",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:21:59.947289Z",
+    "elapsed_seconds": 7.177
+  },
+  {
+    "sequence": 5,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:21:52.995530Z",
+    "thread": "manual-section_0",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:21:59.206636Z",
+    "elapsed_seconds": 6.211
+  },
+  {
+    "sequence": 6,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:21:53.016696Z",
+    "thread": "manual-section_2",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:17.438060Z",
+    "elapsed_seconds": 24.421
+  },
+  {
+    "sequence": 7,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:21:53.037808Z",
+    "thread": "manual-section_1",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:37.999312Z",
+    "elapsed_seconds": 44.961
+  },
+  {
+    "sequence": 8,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:21:59.357691Z",
+    "thread": "manual-section_0",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:28.444554Z",
+    "elapsed_seconds": 29.087
+  },
+  {
+    "sequence": 9,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:22:17.615325Z",
+    "thread": "manual-section_2",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:28.683340Z",
+    "elapsed_seconds": 11.068
+  },
+  {
+    "sequence": 10,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:22:28.466897Z",
+    "thread": "manual-section_0",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:40.108646Z",
+    "elapsed_seconds": 11.642
+  },
+  {
+    "sequence": 11,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:22:28.747192Z",
+    "thread": "manual-section_2",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:39.999536Z",
+    "elapsed_seconds": 11.252
+  },
+  {
+    "sequence": 12,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:22:38.021744Z",
+    "thread": "manual-section_1",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:46.744399Z",
+    "elapsed_seconds": 8.723
+  },
+  {
+    "sequence": 13,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:22:40.032361Z",
+    "thread": "manual-section-figure_1",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:44.948110Z",
+    "elapsed_seconds": 4.916
+  },
+  {
+    "sequence": 14,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:22:40.128980Z",
+    "thread": "manual-section-figure_0",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:44.668731Z",
+    "elapsed_seconds": 4.54
+  },
+  {
+    "sequence": 15,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:22:46.753551Z",
+    "thread": "manual-section-figure_2",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:50.165582Z",
+    "elapsed_seconds": 3.412
+  },
+  {
+    "sequence": 16,
+    "model": "senseaudio-s2",
+    "stream": false,
+    "started_at": "2026-09-10T18:22:46.866451Z",
+    "thread": "manual-section-figure_3",
+    "outcome": "completed",
+    "http_status": 200,
+    "finished_at": "2026-09-10T18:22:51.005548Z",
+    "elapsed_seconds": 4.139
+  }
+]

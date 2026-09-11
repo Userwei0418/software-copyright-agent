@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/build_frontend.mjs",
+    "test:ui": "node tests/ui/interaction-behavior.cjs && node tests/ui/connection-behavior.cjs",
     "tauri": "tauri",
     "sidecar:build": "python3 scripts/build_sidecar.py",
     "sidecar:ensure": "python3 scripts/build_sidecar.py --if-stale",

@@ -11,9 +11,54 @@ from software_copyright_agent.manual_figures import (
 )
 from software_copyright_agent.manual_pipeline import ManualPipelineService
 from software_copyright_agent.storage import Database
+from software_copyright_agent.app_settings import AppSettingsService
+from software_copyright_agent.model_config import ModelConfigInput, ModelConfigService
+from software_copyright_agent.service import ScanProjectService
 
 
 class ManualFigureServiceTests(unittest.TestCase):
+    def test_figure_model_uses_role_selection_and_quick_run_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            project.mkdir()
+            (project / "package.json").write_text('{"name":"roles","version":"1.0"}')
+            database = Database(root / "data" / "app.db")
+            task = ScanProjectService(database, root / "data").execute(project)
+            configs = ModelConfigService(database)
+            for role in ("manual", "diagram", "later-default", "explicit"):
+                configs.upsert(ModelConfigInput(
+                    role, role, "ollama", "http://127.0.0.1:11434", role + "-model",
+                ))
+            job = ManualPipelineService(database).create(task.task_id, "manual")
+            service = ManualFigureService(database, root / "data")
+            self.assertEqual(service._context(job["id"])["model_id"], "manual")
+
+            settings = AppSettingsService(database)
+            selected = settings.get()
+            selected["diagram_model_id"] = "diagram"
+            settings.save(selected)
+            self.assertEqual(service._context(job["id"])["model_id"], "diagram")
+
+            with database.connect() as connection:
+                connection.execute(
+                    """INSERT INTO quick_start_runs(id,task_id,manual_job_id,status,current_stage,
+                    config_json,stages_json,created_at,updated_at)
+                    VALUES ('quick', ?, ?, 'running', 'manual_draft', ?, '{}', 'now', 'now')""",
+                    (task.task_id, job["id"], json.dumps({"diagram_model_id": "diagram"})),
+                )
+            selected["diagram_model_id"] = "later-default"
+            settings.save(selected)
+            self.assertEqual(service._context(job["id"])["model_id"], "diagram")
+            self.assertEqual(service._context(job["id"], "explicit")["model_id"], "explicit")
+
+            # A deleted/disabled chosen role must be actionable, not quietly
+            # rerouted to the text model and charged against another selection.
+            with database.connect() as connection:
+                connection.execute("UPDATE model_configs SET enabled = 0 WHERE id = 'diagram'")
+            with self.assertRaisesRegex(ManualFigureError, "图表模型不存在或已停用"):
+                service._context(job["id"])
+
     def test_semantic_generation_repairs_at_most_once(self) -> None:
         calls = []
         service = ManualFigureService.__new__(ManualFigureService)
@@ -50,9 +95,9 @@ class ManualFigureServiceTests(unittest.TestCase):
             "layout": "flow-left-right",
             "nodes": [
                 {"key": "page", "label": "UserAuthPage", "kind": "component",
-                 "evidence_refs": ["ref"]},
+                 "layer_label": "用户界面", "evidence_refs": ["ref"]},
                 {"key": "api", "label": "userLoginBySessionUsingPost", "kind": "service",
-                 "evidence_refs": ["ref"]},
+                 "layer_label": "第 5 层", "evidence_refs": ["ref"]},
                 {"key": "store", "label": "loginUserStore", "kind": "datastore",
                  "evidence_refs": ["ref"]},
             ],
@@ -66,6 +111,8 @@ class ManualFigureServiceTests(unittest.TestCase):
         page = semantic["nodes"][0]
         self.assertEqual(page["label"], "UserAuthPage")
         self.assertEqual(page["display_label"], "用户认证页面")
+        self.assertEqual(page["layer_label"], "用户界面")
+        self.assertNotIn("layer_label", semantic["nodes"][1])
 
     def test_generates_versioned_drawio_svg_and_png_from_section_requests(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -103,6 +150,9 @@ class ManualFigureServiceTests(unittest.TestCase):
                     'figure-model-alt', '{}', 1, ?, ?)""", (now, now),
                 )
             job = ManualPipelineService(database).create("task", "model-config")
+            preferences = AppSettingsService(database).get()
+            preferences["diagram_model_id"] = "model-alt"
+            AppSettingsService(database).save(preferences)
             ref = "source:service.py:L1-L80"
             blocks = [{"type": "paragraph", "text": "入口调用业务服务，业务服务持久化任务状态。",
                        "evidence_refs": [ref], "inference": False}]
@@ -128,8 +178,10 @@ class ManualFigureServiceTests(unittest.TestCase):
                 )
 
             ai_prompts = []
+            generation_models = []
 
             def fake_call(config, mode, api_key, prompt):
+                generation_models.append(config["id"])
                 if "白名单动作" in prompt:
                     ai_prompts.append(prompt)
                     return json.dumps({"operations": [{
@@ -157,7 +209,14 @@ class ManualFigureServiceTests(unittest.TestCase):
             service = ManualFigureService(database, data_root, model_call=fake_call)
             result = service.generate_all(job["id"])
             self.assertEqual(result["status"], "completed")
+            self.assertTrue(generation_models)
+            self.assertEqual(set(generation_models), {"model-alt"})
             self.assertEqual(len(result["figures"]), 2)
+            call_count = len(generation_models)
+            resumed = service.generate_for_section(job["id"], "architecture")
+            self.assertEqual(len(generation_models), call_count,
+                             "An unchanged completed diagram must be reused without a model call")
+            self.assertTrue(resumed["generated"])
             architecture = next(item for item in result["figures"]
                                 if item["figure_key"] == "system_architecture")
             self.assertIn("artifacts/manual/jobs/job-v1/diagrams/",
@@ -173,6 +232,7 @@ class ManualFigureServiceTests(unittest.TestCase):
                 self.assertGreater(png.width, 1500)
             regenerated = service.regenerate(job["id"], "system_architecture")
             self.assertEqual(regenerated["version"], 2)
+            self.assertEqual(generation_models[-1], "model-alt")
             edited = service.create_revision(job["id"], "system_architecture", [{
                 "action": "node.move", "target": "entry", "payload": {"x": 220, "y": 88},
             }])

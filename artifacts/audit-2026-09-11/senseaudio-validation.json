@@ -1,0 +1,451 @@
+{
+  "checked_at": "2026-09-10T18:17:20.899687Z",
+  "official_model_list": "https://docs.senseaudio.cn/guides/account/model-list",
+  "official_chat_api": "https://docs.senseaudio.cn/api-reference/endpoint/llm/chat",
+  "probe_scope": "15 configured text models initially capped at 32 output tokens per request, concurrency 3, timeout 45 seconds; one later MiniMax recheck capped at 1024 output tokens to allow reasoning before a visible answer; no project content transmitted",
+  "text_results": [
+    {
+      "model": "senseaudio-s2",
+      "config_id": "2142c5d5-0de4-4b07-802e-f6b5f6281a4d",
+      "passed": true,
+      "endpoint_mode": "messages",
+      "elapsed_ms": 917,
+      "attempts": [
+        {
+          "endpoint_mode": "messages",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "input_tokens": 209,
+            "output_tokens": 4
+          },
+          "status": "passed",
+          "elapsed_ms": 917
+        }
+      ]
+    },
+    {
+      "model": "senseaudio-s2-flash",
+      "config_id": "0eee5d65-6675-4166-b7c6-3e9c2c278437",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 777,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 225,
+            "completion_tokens": 2,
+            "total_tokens": 227
+          },
+          "status": "passed",
+          "elapsed_ms": 777
+        }
+      ]
+    },
+    {
+      "model": "senseaudio-s2-lite",
+      "config_id": "fe3d0b66-00c8-4f9a-aba6-6c70a14c3398",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 826,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 225,
+            "completion_tokens": 2,
+            "total_tokens": 227
+          },
+          "status": "passed",
+          "elapsed_ms": 825
+        }
+      ]
+    },
+    {
+      "model": "senseaudio-s1",
+      "config_id": "13ccd18f-d3ec-45df-91af-ba52d1f6f54f",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 411,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 225,
+            "completion_tokens": 2,
+            "total_tokens": 227
+          },
+          "status": "passed",
+          "elapsed_ms": 411
+        }
+      ]
+    },
+    {
+      "model": "senseaudio-vl-1.0-260319",
+      "config_id": "0f0fa721-459e-4b45-b583-47c543815992",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 407,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 225,
+            "completion_tokens": 2,
+            "total_tokens": 227
+          },
+          "status": "passed",
+          "elapsed_ms": 407
+        }
+      ]
+    },
+    {
+      "model": "senseaudio-vl-lite-1.0-260319",
+      "config_id": "e9aaa5c4-ae15-468d-b0ee-e3efd061f55c",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 420,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 398,
+            "completion_tokens": 2,
+            "total_tokens": 400
+          },
+          "status": "passed",
+          "elapsed_ms": 420
+        }
+      ]
+    },
+    {
+      "model": "sensenova-6.8-flash-lite",
+      "config_id": "d1c1aea8-ce59-49fd-b90d-196477dd53c8",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 1478,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 93,
+            "completion_tokens": 24,
+            "total_tokens": 117
+          },
+          "status": "passed",
+          "elapsed_ms": 1477
+        }
+      ]
+    },
+    {
+      "model": "qwen3.8-27b",
+      "config_id": "10c69100-64dd-46aa-8866-3480c293da45",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 384,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 23,
+            "completion_tokens": 2,
+            "total_tokens": 25
+          },
+          "status": "passed",
+          "elapsed_ms": 384
+        }
+      ]
+    },
+    {
+      "model": "qwen3.6-35b-a3b",
+      "config_id": "00459b38-57a3-4699-85cb-f6a2cfe81aff",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 409,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 23,
+            "completion_tokens": 2,
+            "total_tokens": 25
+          },
+          "status": "passed",
+          "elapsed_ms": 409
+        }
+      ]
+    },
+    {
+      "model": "deepseek-v4-flash-0731",
+      "config_id": "4c2838b8-3d5f-4e1b-9c1c-9b4dac8ad423",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 437,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 15,
+            "completion_tokens": 2,
+            "total_tokens": 17
+          },
+          "status": "passed",
+          "elapsed_ms": 437
+        }
+      ]
+    },
+    {
+      "model": "kimi-k2.6",
+      "config_id": "f4db280c-87a5-42c3-ac7f-0c0279c14c57",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 1730,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 19,
+            "completion_tokens": 35,
+            "total_tokens": 54
+          },
+          "status": "passed",
+          "elapsed_ms": 1730
+        }
+      ]
+    },
+    {
+      "model": "glm-5.3-flash",
+      "config_id": "1281b4e4-1b98-4b1c-8a3b-b35772e4e449",
+      "passed": true,
+      "endpoint_mode": "messages",
+      "elapsed_ms": 481,
+      "attempts": [
+        {
+          "endpoint_mode": "messages",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "input_tokens": 23,
+            "output_tokens": 18
+          },
+          "status": "passed",
+          "elapsed_ms": 481
+        }
+      ]
+    },
+    {
+      "model": "glm-5.2",
+      "config_id": "b2aa93e9-dd52-4938-ab12-2f77f62f8596",
+      "passed": true,
+      "endpoint_mode": "messages",
+      "elapsed_ms": 995,
+      "attempts": [
+        {
+          "endpoint_mode": "messages",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "input_tokens": 23,
+            "output_tokens": 18
+          },
+          "status": "passed",
+          "elapsed_ms": 995
+        }
+      ]
+    },
+    {
+      "model": "minimax-m2.7",
+      "config_id": "3828de5d-2589-43e5-979b-95a6ab356370",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 1941,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": false,
+          "content_chars": 0,
+          "exact_ok": false,
+          "usage": {
+            "prompt_tokens": 52,
+            "completion_tokens": 32,
+            "total_tokens": 84
+          },
+          "status": "empty_response",
+          "elapsed_ms": 1685
+        },
+        {
+          "endpoint_mode": "messages",
+          "max_output_tokens": 32,
+          "http_status": 400,
+          "status": "http_error",
+          "elapsed_ms": 257
+        },
+        {
+          "checked_at": "2026-09-10T18:29:21.384051Z",
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 1024,
+          "attempt_kind": "single_larger_budget_followup",
+          "http_status": 200,
+          "status": "passed",
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "prompt_tokens": 54,
+            "completion_tokens": 175,
+            "total_tokens": 229
+          },
+          "elapsed_ms": 4246
+        }
+      ],
+      "followup_note": "Initial 32-token cap produced empty content; one 1024-token followup returned actual content."
+    },
+    {
+      "model": "doubao-seed-2-0-pro-260215",
+      "config_id": "ff93cfcc-4154-4660-90c6-ce70ccae3a94",
+      "passed": true,
+      "endpoint_mode": "chat_completions",
+      "elapsed_ms": 2195,
+      "attempts": [
+        {
+          "endpoint_mode": "chat_completions",
+          "max_output_tokens": 32,
+          "http_status": 200,
+          "nonempty_content": true,
+          "content_chars": 2,
+          "exact_ok": true,
+          "usage": {
+            "completion_tokens": 33,
+            "prompt_tokens": 60,
+            "total_tokens": 93
+          },
+          "status": "passed",
+          "elapsed_ms": 2195
+        }
+      ]
+    }
+  ],
+  "text_passed": 15,
+  "text_total": 15,
+  "vision_results": [
+    {
+      "model": "senseaudio-vl-1.0-260319",
+      "config_id": "0f0fa721-459e-4b45-b583-47c543815992",
+      "scope": "installed_application",
+      "method": "ScreenshotEvidenceService.verify_vision_capability",
+      "challenge": "random hidden 4-character image",
+      "max_output_tokens": 128,
+      "timeout_seconds": 45,
+      "passed": true,
+      "elapsed_ms": 706
+    },
+    {
+      "model": "qwen3.8-27b",
+      "config_id": "10c69100-64dd-46aa-8866-3480c293da45",
+      "scope": "installed_application",
+      "method": "ScreenshotEvidenceService.verify_vision_capability",
+      "challenge": "random hidden 4-character image",
+      "max_output_tokens": 128,
+      "timeout_seconds": 45,
+      "passed": true,
+      "elapsed_ms": 656
+    },
+    {
+      "model": "senseaudio-vl-1.0-260319",
+      "config_id": "0f0fa721-459e-4b45-b583-47c543815992",
+      "scope": "isolated_application",
+      "method": "ScreenshotEvidenceService.verify_vision_capability",
+      "challenge": "random hidden 4-character image",
+      "max_output_tokens": 128,
+      "timeout_seconds": 45,
+      "passed": true,
+      "elapsed_ms": 649
+    }
+  ],
+  "default_models": {
+    "manual": "senseaudio-s2",
+    "diagram": "glm-5.3-flash",
+    "vision": "senseaudio-vl-1.0-260319",
+    "ids": {
+      "manual_model_id": "2142c5d5-0de4-4b07-802e-f6b5f6281a4d",
+      "diagram_model_id": "1281b4e4-1b98-4b1c-8a3b-b35772e4e449",
+      "vision_model_id": "0f0fa721-459e-4b45-b583-47c543815992"
+    },
+    "previous_ids": {
+      "manual_model_id": null,
+      "diagram_model_id": null,
+      "vision_model_id": null
+    },
+    "other_settings_preserved": true
+  },
+  "isolated_data_root": "/tmp/copyright-audit-20260911",
+  "completed_at": "2026-09-10T18:18:16.864360Z",
+  "limitations": [
+    "Tiny OK responses validate transport and parsing only; not long-form documentation or diagram quality.",
+    "Vision tests read randomized synthetic images through the actual application service; no user project screenshots were sent.",
+    "Per-request token limits were requested; provider-reported completion usage may include additional reasoning tokens."
+  ],
+  "followup_completed_at": "2026-09-10T18:29:25.647410Z"
+}

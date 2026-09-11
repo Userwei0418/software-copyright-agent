@@ -59,7 +59,7 @@ from .run_diagnostics import RunDiagnosticsService
 
 
 SIDECAR_PROTOCOL_VERSION = 1
-SIDECAR_VERSION = "0.1.0"
+SIDECAR_VERSION = "0.1.1"
 MAX_REQUEST_BYTES = 1024 * 1024
 MAX_DRAWIO_EDITOR_REQUEST_BYTES = 16 * 1024 * 1024
 SESSION_HEADER = "X-Session-Token"
@@ -396,6 +396,15 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
 
     def schedule_auto_ui_update(task_id: str) -> None:
         """Debounce screenshot review changes into one durable chapter/document update."""
+        # An unfinished Quick Start owns its chapter/assembly lifecycle. Review
+        # saves must not race it or wait forever on its paused manual job.
+        with database.connect() as connection:
+            owner = connection.execute(
+                "SELECT status FROM quick_start_runs WHERE task_id=? ORDER BY created_at DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        if owner and owner["status"] != "completed":
+            return
         with auto_ui_lock:
             auto_ui_pending.add(task_id)
             if task_id in auto_ui_running:
@@ -1446,10 +1455,18 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                     """SELECT * FROM manual_screenshot_import_batches WHERE task_id=?
                     ORDER BY created_at DESC LIMIT 30""", (task_id,),
                 ).fetchall()
+                owner = connection.execute(
+                    "SELECT status,config_json FROM quick_start_runs WHERE task_id=? ORDER BY created_at DESC LIMIT 1",
+                    (task_id,),
+                ).fetchone()
+            preferred = (json.loads(owner["config_json"]).get("vision_model_id") if owner
+                         else app_settings_service.get().get("vision_model_id"))
             return {
                 "profile": profile,
                 "assets": screenshot_evidence_service.list_assets(task_id, include_archived),
                 "vision_models": screenshot_evidence_service.list_vision_models(),
+                "preferred_vision_model_id": preferred,
+                "quick_start_status": owner["status"] if owner else None,
                 "batches": [{**dict(row), "summary": json.loads(row["summary_json"] or "{}")}
                             for row in batches],
                 "ui_evidence_decision": screenshot_evidence_service.get_ui_decision(task_id),
@@ -2152,6 +2169,11 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 return JSONResponse(status_code=409, content={
                     "error": {"code": "manual_document_outdated",
                               "message": "正文、图表或截图已有更新，请重新装配并质检后导出"}
+                })
+            if not review and item["quality"]["status"] != "passed":
+                return JSONResponse(status_code=409, content={
+                    "error": {"code": "manual_document_quality_required",
+                              "message": "终稿尚未通过当前质量检查；请处理检查项后重试，仍可导出审阅稿"}
                 })
             return Response(
                 content=manual_document_service.read(job_id, version),

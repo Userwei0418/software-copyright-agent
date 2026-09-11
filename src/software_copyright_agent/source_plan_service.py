@@ -40,7 +40,7 @@ class SourcePlanService:
         self._database.initialize()
         with self._database.connect() as connection:
             row = connection.execute(
-                """SELECT t.status, ps.manifest_relative_path, ps.scan_root_mode,
+                """SELECT t.status, t.failure_category, ps.manifest_relative_path, ps.scan_root_mode,
                 ps.scan_root_path FROM tasks t
                 JOIN project_snapshots ps ON ps.id = t.snapshot_id
                 WHERE t.id = ?""",
@@ -48,8 +48,12 @@ class SourcePlanService:
             ).fetchone()
             if row is None:
                 raise SourcePlanError("Task or snapshot not found: {0}".format(task_id))
+            retryable_failure = (
+                row["status"] == TaskStatus.FAILED.value
+                and row["failure_category"] == "source_plan_error"
+            )
             if row["status"] not in {TaskStatus.COMPLETED.value,
-                                     TaskStatus.COMPLETED_WITH_WARNINGS.value}:
+                                     TaskStatus.COMPLETED_WITH_WARNINGS.value} and not retryable_failure:
                 raise SourcePlanError(
                     "Task metadata must be completed before source planning: {0}".format(
                         row["status"]

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 
@@ -23,7 +24,7 @@ def verify(sidecar: Path) -> dict:
     if not sidecar.is_file():
         raise RuntimeError(f"Sidecar does not exist: {sidecar}")
     parent = subprocess.Popen([
-        sys.executable, "-c", "import time; time.sleep(60)"
+        sys.executable, "-c", "import time; time.sleep(90)"
     ])
     child = None
     try:
@@ -31,6 +32,7 @@ def verify(sidecar: Path) -> dict:
             environment = os.environ.copy()
             environment["COPYRIGHT_AGENT_SESSION_TOKEN"] = "parent-exit-verify-" + "x" * 32
             environment["COPYRIGHT_AGENT_PARENT_PID"] = str(parent.pid)
+            started = time.monotonic()
             child = subprocess.Popen(
                 [str(sidecar), "--data-dir", temporary],
                 env=environment,
@@ -42,15 +44,17 @@ def verify(sidecar: Path) -> dict:
             output: queue.Queue = queue.Queue(maxsize=1)
             threading.Thread(target=read_line, args=(child.stdout, output), daemon=True).start()
             try:
-                line = output.get(timeout=20)
+                # Match the desktop shell's 45-second cold-start allowance.
+                line = output.get(timeout=45)
             except queue.Empty as error:
-                raise RuntimeError("Sidecar did not emit a startup handshake") from error
+                raise RuntimeError("Sidecar did not emit a startup handshake within 45 seconds") from error
             if not line.strip():
                 detail = child.stderr.read() if child.stderr else ""
                 raise RuntimeError(f"Sidecar exited before startup: {detail[:300]}")
             handshake = json.loads(line)
             if handshake.get("event") != "sidecar.ready":
                 raise RuntimeError("Sidecar emitted an invalid startup handshake")
+            startup_seconds = round(time.monotonic() - started, 3)
             parent.terminate()
             parent.wait(timeout=5)
             try:
@@ -61,7 +65,8 @@ def verify(sidecar: Path) -> dict:
                 detail = child.stderr.read() if child.stderr else ""
                 raise RuntimeError(f"Sidecar parent monitor exited with {exit_code}: {detail[:300]}")
             return {"status": "ok", "sidecar_pid": handshake.get("pid"),
-                    "parent_pid": parent.pid, "exit_code": exit_code}
+                    "parent_pid": parent.pid, "exit_code": exit_code,
+                    "startup_seconds": startup_seconds}
     finally:
         if parent.poll() is None:
             parent.terminate()

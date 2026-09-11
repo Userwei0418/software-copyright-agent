@@ -1,18 +1,22 @@
 """Build a deterministic formal-manual fixture for render regression review."""
 
 import argparse
+import json
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
+from software_copyright_agent.font_assets import FontAsset
 from software_copyright_agent.manual_document import FormalManualBuilder
-from software_copyright_agent.manual_qa import ManualCompanionRenderer
+from software_copyright_agent.manual_qa import LibreOfficeManualRenderer, ManualCompanionRenderer, ManualQaService
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
     parser.add_argument("--companion-dir", type=Path)
+    parser.add_argument("--render-dir", type=Path,
+                        help="Render the actual DOCX with the product LibreOffice renderer")
     args = parser.parse_args()
     output = args.output.expanduser().resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -32,7 +36,7 @@ def main() -> None:
         {"section_key": "introduction", "title": "引言", "ordinal": 1, "status": "generated", "blocks": base_blocks},
         {"section_key": "architecture", "title": "总体设计", "ordinal": 2, "status": "generated", "blocks": base_blocks + [{"type": "figure_request", "figure_key": "architecture", "title": "系统总体架构图"}]},
         {"section_key": "modules", "title": "功能与模块设计", "ordinal": 3, "status": "generated", "blocks": base_blocks},
-        {"section_key": "ui_operations", "title": "用户界面与操作说明", "ordinal": 4, "status": "generated", "blocks": base_blocks},
+        {"section_key": "ui_operations", "title": "用户界面与操作说明", "ordinal": 7, "status": "generated", "blocks": base_blocks},
     ]
     figures = [{"figure_key": "architecture", "section_key": "architecture", "title": "系统总体架构图", "png_relative_path": diagram.relative_to(output.parent).as_posix()}]
     description = {
@@ -43,31 +47,54 @@ def main() -> None:
         "backend_interactions": "前端通过本地 Sidecar API 创建版本任务，依次调用研究、正文、图表、截图决策和文档装配服务。",
         "result_validation_recovery": "成功后显示文档完整性与版本；任一阶段失败时保留既有产物，并在阶段留痕中提供安全错误信息。",
     }
-    screenshots = [{"screenshot_key": "workspace", "section_key": "ui_operations", "title": "说明书工作台", "source": "user", "image_relative_path": screenshot.relative_to(output.parent).as_posix(), "description": description}]
-    context = {"software_name": "软著材料助手", "software_version": "V1.0"}
+    screenshots = [{"screenshot_key": "workspace", "section_key": "ui_operations", "title": "说明书工作台排版样例", "source": "synthetic_fixture", "image_relative_path": screenshot.relative_to(output.parent).as_posix(), "description": description}]
+    context = {"software_name": "软著材料助手排版回归样本", "software_version": "V1.0"}
+    (output.parent / "fixture-inputs.json").write_text(json.dumps({
+        "disclosure": "合成排版样本，不代表真实项目事实、用户截图或正式材料。",
+        "context": context, "sections": sections, "figures": figures, "screenshots": screenshots,
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     FormalManualBuilder().build(output, context, sections, figures, screenshots, output.parent)
+    render_context = {"project_name": context["software_name"],
+                      "project_version": context["software_version"]}
     if args.companion_dir:
         companion_dir = args.companion_dir.expanduser().resolve()
         result = ManualCompanionRenderer().render(
-            companion_dir,
-            {"project_name": context["software_name"],
-             "project_version": context["software_version"]},
+            output, companion_dir, render_context,
             sections, figures, screenshots, output.parent,
         )
         print("companion_pages={0} companion_pdf={1}".format(
             len(result.page_paths), result.pdf_path
         ))
+    if args.render_dir:
+        result = LibreOfficeManualRenderer().render(
+            output, args.render_dir.expanduser().resolve(), render_context,
+            sections, figures, screenshots, output.parent,
+        )
+        report = {
+            "fixture_kind": "synthetic_layout_regression",
+            "disclosure": "合成排版样本，不代表真实界面证据或正式材料 QA 通过。",
+            "renderer_kind": "libreoffice_word", "pages": len(result.page_paths),
+            "chapter_pages": ManualQaService._rendered_toc_pages(result.pdf_path, sections),
+            "underfilled_pages": list(result.underfilled_pages),
+            "page_fill_ratios": list(result.fill_ratios),
+        }
+        (output.parent / "render-report.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        print("word_pages={0} word_pdf={1}".format(len(result.page_paths), result.pdf_path))
     print(output)
 
 
 def make_diagram(path: Path) -> None:
     image = Image.new("RGB", (1600, 900), "#f7fafc")
     draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(str(FontAsset.bundled_cjk().path), 31)
     boxes = [(90, 330, 360, 530, "桌面界面"), (500, 170, 850, 370, "本地 Sidecar"),
              (500, 510, 850, 710, "SQLite 与资产目录"), (1010, 330, 1460, 530, "模型协议适配器")]
     for left, top, right, bottom, label in boxes:
         draw.rounded_rectangle((left, top, right, bottom), 24, fill="#ffffff", outline="#4f7893", width=5)
-        draw.text((left + 60, top + 82), label, fill="#183247")
+        draw.text(((left + right) / 2, (top + bottom) / 2), label,
+                  font=font, anchor="mm", fill="#183247")
     for start, end in [((360, 430), (500, 270)), ((360, 430), (500, 610)), ((850, 270), (1010, 430))]:
         draw.line((start, end), fill="#d87840", width=7)
     image.save(path, "PNG")
@@ -76,12 +103,21 @@ def make_diagram(path: Path) -> None:
 def make_screenshot(path: Path) -> None:
     image = Image.new("RGB", (1600, 1000), "#f2f5f7")
     draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(str(FontAsset.bundled_cjk().path), 32)
     draw.rectangle((0, 0, 260, 1000), fill="#182531")
     draw.rectangle((300, 70, 1530, 220), fill="#ffffff", outline="#dce3e7", width=3)
     draw.rounded_rectangle((300, 260, 1530, 410), 20, fill="#263c4c")
     draw.rounded_rectangle((300, 450, 1530, 590), 20, fill="#ffffff", outline="#b9ddca", width=4)
     for top in (640, 740, 840):
         draw.rounded_rectangle((300, top, 1530, top + 70), 14, fill="#ffffff", outline="#dce3e7", width=3)
+    draw.text((30, 50), "材料工作台", font=font, fill="white")
+    for y, label, color in (
+        (105, "合成界面 · 仅用于排版回归", "#172331"),
+        (305, "生成说明书", "white"), (495, "文档结果与版本", "#172331"),
+        (655, "项目资料", "#172331"), (755, "截图说明", "#172331"),
+        (855, "质量检查", "#172331"),
+    ):
+        draw.text((335, y), label, font=font, fill=color)
     image.save(path, "PNG")
 
 

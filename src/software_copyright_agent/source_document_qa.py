@@ -150,11 +150,12 @@ class LibreOfficeRenderer:
                         (converted.stderr or converted.stdout or "no diagnostic output").strip()[-500:]
                     )
                 )
-            pdf_path = output_dir / (document_path.stem + ".pdf")
-            shutil.copyfile(converted_pdf, pdf_path)
-            prefix = output_dir / "page"
+            # A failed QA attempt reuses its version directory on retry. Render
+            # into a fresh directory first so leftover pages from a longer or
+            # interrupted attempt cannot masquerade as pages in this document.
+            prefix = Path(convert_dir) / "page"
             rasterized = subprocess.run(
-                [pdftoppm, "-png", "-r", str(self.dpi), str(pdf_path), str(prefix)],
+                [pdftoppm, "-png", "-r", str(self.dpi), str(converted_pdf), str(prefix)],
                 capture_output=True, text=True, timeout=self.timeout_seconds,
                 check=False,
             )
@@ -162,6 +163,15 @@ class LibreOfficeRenderer:
                 raise SourceDocumentQaError(
                     "PDF rasterization failed: {0}".format(rasterized.stderr.strip()[-500:])
                 )
+            rendered_pages = sorted(Path(convert_dir).glob("page-*.png"))
+            if not rendered_pages:
+                raise SourceDocumentQaError("Renderer produced no page images")
+            pdf_path = output_dir / (document_path.stem + ".pdf")
+            shutil.copyfile(converted_pdf, pdf_path)
+            for previous_page in output_dir.glob("page-*.png"):
+                previous_page.unlink()
+            for page in rendered_pages:
+                shutil.copyfile(page, output_dir / page.name)
         pages = sorted(
             output_dir.glob("page-*.png"),
             key=lambda item: int(item.stem.rsplit("-", 1)[1]),

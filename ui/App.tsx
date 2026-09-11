@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  connectSidecar, FormalManualJob, listFormalManualJobs, listRecentTasks,
+  checkSidecarHealth, connectSidecar, FormalManualJob, listFormalManualJobs, listRecentTasks,
   SidecarConnection,
 } from "./api";
 import { ProjectOverview } from "./ProjectOverview";
@@ -18,30 +18,40 @@ export type AppPage = "quick" | "overview" | "source" | "manual" | "screenshots"
 
 export function App() {
   const [connection, setConnection] = useState<SidecarConnection | null>(null);
+  const [online, setOnline] = useState(false);
   const [taskId, setTaskId] = useState("");
   const [message, setMessage] = useState("正在启动本地服务…");
-  const [page, setPage] = useState<AppPage>("overview");
-  const [previewRequested, setPreviewRequested] = useState(0);
+  const [page, setPage] = useState<AppPage>("quick");
+  const [workspacesOpen, setWorkspacesOpen] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [previewRequest, setPreviewRequest] = useState<{ taskId: string; sequence: number } | null>(null);
   const [manualJob, setManualJob] = useState<FormalManualJob | null>(null);
   const connectionAttempt = useRef<Promise<SidecarConnection> | null>(null);
 
   async function ensureConnection(): Promise<SidecarConnection> {
-    if (connection) return connection;
+    if (connection && online) return connection;
     if (connectionAttempt.current) return connectionAttempt.current;
+    setConnecting(true);
     setMessage("正在连接本地服务…");
     connectionAttempt.current = (async () => { try {
       const value = await connectSidecar();
-      setConnection(value);
+      if (!await checkSidecarHealth(value)) throw new Error("本地服务尚未响应，请稍后重连");
+      // Keep the same connection identity across reconnects. Workspace effects
+      // use it to select data; replacing it would discard unsaved chapter/XML edits.
+      const current = connection ? Object.assign(connection, value) : value;
+      setConnection(current);
+      setOnline(true);
       setMessage(`本地服务已连接 · v${value.version}`);
       listRecentTasks(value).then((recent) => {
         if (recent.length) setTaskId((current) => current || recent[0].task_id);
       }).catch(() => setMessage("本地服务已连接，但最近项目读取失败"));
-      return value;
+      return current;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      setOnline(false);
       setMessage(`本地服务连接失败 · ${detail}`);
       throw new Error(`本地服务连接失败：${detail}`);
-    } finally { connectionAttempt.current = null; } })();
+    } finally { connectionAttempt.current = null; setConnecting(false); } })();
     return connectionAttempt.current;
   }
 
@@ -65,10 +75,33 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!connection) return;
+    let disposed = false, checking = false, failures = 0;
+    const check = async () => {
+      if (disposed || checking) return;
+      checking = true;
+      const healthy = await checkSidecarHealth(connection);
+      checking = false;
+      if (disposed) return;
+      if (healthy && failures >= 2) setMessage(`本地服务已连接 · v${connection.version}`);
+      failures = healthy ? 0 : failures + 1;
+      if (healthy) setOnline(true);
+      if (failures < 2) return;
+      setOnline(false);
+      setMessage("本地服务连接已中断。重新连接后可继续查看原任务。");
+    };
+    const timer = window.setInterval(check, 8000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [connection]);
+
+  useEffect(() => {
     setManualJob(null);
     if (!connection || !taskId) return;
     let disposed = false;
+    let refreshing = false;
     const refresh = async () => {
+      if (disposed || refreshing) return;
+      refreshing = true;
       try {
         const jobs = await listFormalManualJobs(connection, taskId);
         if (!disposed) setManualJob(
@@ -77,71 +110,94 @@ export function App() {
       } catch {
         // Detailed errors remain in the active workspace. A transient global
         // poll must not replace the user's useful connection status.
-      }
+      } finally { refreshing = false; }
     };
     void refresh();
     const timer = window.setInterval(refresh, 1800);
     return () => { disposed = true; window.clearInterval(timer); };
   }, [connection, taskId]);
 
+  const workspaces: Array<{ page: AppPage; label: string }> = [
+    { page: "overview", label: "项目概览" }, { page: "source", label: "源码材料" },
+    { page: "manual", label: "说明书" }, { page: "screenshots", label: "界面截图" },
+    { page: "diagrams", label: "图表资产" },
+  ];
+  const isWorkspace = workspaces.some((item) => item.page === page);
+  const navigate = (next: AppPage) => {
+    if (workspaces.some((item) => item.page === next)) setWorkspacesOpen(true);
+    setPage(next);
+  };
+
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">著</span><div>
-        <strong>软著材料助手</strong><small>本地证据化工作台</small>
+        <strong>软著材料助手</strong><small>从项目到申请材料</small>
       </div></div>
-      <nav>
+      <nav aria-label="主要导航">
         <button className={`nav-item quick-nav ${page === "quick" ? "active" : ""}`}
-          onClick={() => setPage("quick")}><span>快速开始</span><small>AUTO</small></button>
-        <button className={`nav-item ${page === "overview" ? "active" : ""}`}
-          onClick={() => setPage("overview")}>项目概览</button>
-        <button className={`nav-item ${page === "source" ? "active" : ""}`}
-          onClick={() => setPage("source")}>源码材料</button>
-        <button className={`nav-item ${page === "manual" ? "active" : ""}`}
-          onClick={() => setPage("manual")}>说明书{manualJob && ["queued", "running"].includes(
-            manualJob.status) && <small className="nav-progress-badge">{manualJob.progress.percent}%</small>}</button>
-        <button className={`nav-item ${page === "screenshots" ? "active" : ""}`}
-          onClick={() => setPage("screenshots")}>界面截图</button>
-        <button className={`nav-item ${page === "diagrams" ? "active" : ""}`}
-          onClick={() => setPage("diagrams")}>图表资产</button>
+          aria-current={page === "quick" ? "page" : undefined}
+          onClick={() => navigate("quick")}><span>快速开始</span></button>
         <button className={`nav-item ${page === "assets" ? "active" : ""}`}
-          onClick={() => setPage("assets")}>我的资产</button>
+          aria-current={page === "assets" ? "page" : undefined}
+          onClick={() => navigate("assets")}>我的资产</button>
+        <p className="nav-help">制作与继续 → 快速开始<br />查看与导出 → 我的资产</p>
+        <details className="workspace-navigation" open={workspacesOpen || isWorkspace}
+          onToggle={(event) => setWorkspacesOpen(event.currentTarget.open)}>
+          <summary>专业工作台 <span>修订与检查</span></summary>
+          <div>{workspaces.map((item) => <button key={item.page}
+            className={`nav-item ${page === item.page ? "active" : ""}`}
+            aria-current={page === item.page ? "page" : undefined}
+            onClick={() => navigate(item.page)}>{item.label}
+            {item.page === "manual" && manualJob && ["queued", "running"].includes(manualJob.status)
+              && <small className="nav-progress-badge">{manualJob.progress.percent}%</small>}
+          </button>)}</div>
+        </details>
+      </nav>
+      <nav aria-label="应用设置" className="utility-navigation">
         <button className={`nav-item ${page === "logs" ? "active" : ""}`}
-          onClick={() => setPage("logs")}>运行日志</button>
+          aria-current={page === "logs" ? "page" : undefined}
+          onClick={() => navigate("logs")}>运行日志</button>
         <button className={`nav-item ${page === "settings" ? "active" : ""}`}
-          onClick={() => setPage("settings")}>设置</button>
+          aria-current={page === "settings" ? "page" : undefined}
+          onClick={() => navigate("settings")}>设置</button>
       </nav>
       {manualJob && ["queued", "running"].includes(manualJob.status) &&
-        <button className="global-manual-progress" onClick={() => setPage("manual")}>
+        <button className="global-manual-progress" onClick={() => navigate("manual")}>
           <span><b>说明书 v{manualJob.version}</b><em>{globalStepLabel(
             manualJob.current_step)} · {manualJob.progress.percent}%</em></span>
           <i><b style={{ width: `${manualJob.progress.percent}%` }} /></i>
           <small>后台持续生成 · 点击查看详情</small>
         </button>}
-      <div className="side-status"><i className={connection ? "online" : "offline"} />
+      <div className="side-status" role="status"><i className={online ? "online" : "offline"} />
         <span>{message}</span></div>
+      {!online && <button className="reconnect-button" disabled={connecting}
+        onClick={() => void ensureConnection().catch(() => {})}>
+        {connecting ? "正在连接…" : "重新连接本地服务"}</button>}
     </aside>
 
     {page === "quick" ? <QuickStart connection={connection} ensureConnection={ensureConnection}
       onTaskChange={setTaskId} onOpenAssets={() => setPage("assets")}
-      onOpenSettings={() => setPage("settings")} onNavigate={setPage} /> : page === "overview" ? <ProjectOverview connection={connection}
+      onOpenSettings={() => navigate("settings")} onNavigate={navigate} /> : page === "overview" ? <ProjectOverview connection={connection}
       ensureConnection={ensureConnection} onTaskCreated={(value) => setTaskId(value)} /> : page === "source" ?
-      <SourceMaterials connection={connection} taskId={taskId}
+      <SourceMaterials key={taskId || "empty"} connection={connection} taskId={taskId}
         onTaskCreated={setTaskId} onBackToOverview={() => setPage("overview")}
-        previewRequested={previewRequested} /> : page === "manual" ?
-      <ManualWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId}
+        previewRequested={previewRequest?.taskId === taskId ? previewRequest.sequence : 0}
+        onPreviewConsumed={() => setPreviewRequest(null)} /> : page === "manual" ?
+      <ManualWorkspace key={taskId || "empty"} connection={connection} taskId={taskId} onTaskChange={setTaskId}
         trackedJob={manualJob}
-        onOpenDiagrams={() => setPage("diagrams")}
-        onOpenScreenshots={() => setPage("screenshots")} /> : page === "assets" ?
+        onOpenDiagrams={() => navigate("diagrams")}
+        onOpenScreenshots={() => navigate("screenshots")} /> : page === "assets" ?
       <AssetLibrary connection={connection} onOpen={(value) => { setTaskId(value); setPage("source"); }}
-        onPreview={(value) => { setTaskId(value); setPreviewRequested((count) => count + 1); setPage("source"); }}
+        onPreview={(value) => { setTaskId(value); setPreviewRequest({ taskId: value, sequence: Date.now() }); setPage("source"); }}
         onPreviewManual={(value) => { setTaskId(value); setPage("manual"); }}
         onDeleted={(value) => { if (taskId === value) { setTaskId(""); setManualJob(null); } }} /> :
       page === "logs" ? <RunLogs connection={connection} /> :
       page === "settings" ? <Settings connection={connection} /> : page === "diagrams" ?
-      <FormalDiagramWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId}
+      <FormalDiagramWorkspace key={taskId || "empty"} connection={connection} taskId={taskId} onTaskChange={setTaskId}
         onOpenManual={() => setPage("manual")} /> : page === "screenshots" ?
-      <ScreenshotAssetWorkspace connection={connection} taskId={taskId} onTaskChange={setTaskId}
-        onOpenManual={() => setPage("manual")} onOpenSettings={() => setPage("settings")} /> : null}
+      <ScreenshotAssetWorkspace key={taskId || "empty"} connection={connection} taskId={taskId} onTaskChange={setTaskId}
+        onOpenManual={() => setPage("manual")} onOpenSettings={() => setPage("settings")}
+        onOpenQuickStart={() => setPage("quick")} /> : null}
   </div>;
 }
 

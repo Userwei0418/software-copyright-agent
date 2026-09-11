@@ -277,8 +277,21 @@ class ManualFigureService:
             context["model_id"]
         )
         execution = ManualExecutionNodeService(self._database)
+        prior_nodes = {item["key"]: item for item in execution.list(job_id)}
+        saved = {item["figure_key"]: item for item in self.list(job_id)}
+        section_updated = sections[0].get("updated_at", "") if sections else ""
         for request in requests:
             node_key = "figure:{0}".format(request["figure_key"])
+            existing = saved.get(request["figure_key"])
+            if (existing and existing["available"]
+                    and prior_nodes.get(node_key, {}).get("status") in {"completed", "completed_with_warnings"}
+                    and existing["updated_at"] >= section_updated
+                    and all((self._data_root / "tasks" / context["task_id"] / existing[field]).is_file()
+                            for field in ("drawio_relative_path", "svg_relative_path", "png_relative_path")
+                            if existing.get(field))
+                    and existing.get("png_relative_path")):
+                generated.append(existing)
+                continue
             execution.prepare(
                 job_id, node_key, "diagrams", "figure", request["title"],
                 dependencies=["section:{0}".format(request["section_key"])],
@@ -311,6 +324,13 @@ class ManualFigureService:
         return {"generated": generated, "errors": errors}
 
     def finish_incremental(self, job_id: str, stream: dict, results: list) -> dict:
+        active_keys = {"figure:" + item["figure_key"] for item in self._requests(self._sections(job_id))}
+        execution = ManualExecutionNodeService(self._database)
+        for node in execution.list(job_id):
+            if node["kind"] == "figure" and node["key"] not in active_keys:
+                execution.skip(job_id, node["key"], {
+                    "next_action": "当前章节已不再引用此图表，旧版本保留在历史记录中",
+                })
         generated = [item for result in results for item in result.get("generated", [])]
         errors = [item for result in results for item in result.get("errors", [])]
         self._finish_step(job_id, stream["step_id"], generated, errors)
@@ -1295,6 +1315,7 @@ edge.route 使用正交折点 points:[{{"x":数值,"y":数值}}]，每条线最�
         return path.read_bytes(), media
 
     def _context(self, job_id: str, model_config_id: Optional[str] = None) -> dict:
+        diagram_default = AppSettingsService(self._database).get().get("diagram_model_id")
         with self._database.connect() as connection:
             row = connection.execute(
                 """SELECT j.id job_id, j.task_id, j.version job_version,
@@ -1303,14 +1324,28 @@ edge.route 使用正交折点 points:[{{"x":数值,"y":数值}}]，每条线最�
                 JOIN project_sources ps ON ps.id = t.source_id
                 WHERE j.id = ?""", (job_id,),
             ).fetchone()
-            chosen_model_id = model_config_id or (row["default_model_id"] if row else None)
+            # A quick run owns its role selections even if global defaults change
+            # while chapters are still generating. Explicit editor overrides take
+            # precedence; older/manual jobs use the configured diagram default.
+            quick_run = connection.execute(
+                """SELECT config_json FROM quick_start_runs WHERE manual_job_id = ?
+                ORDER BY created_at DESC LIMIT 1""", (job_id,),
+            ).fetchone()
+            quick_diagram = (
+                json.loads(quick_run["config_json"] or "{}").get("diagram_model_id")
+                if quick_run else None
+            )
+            chosen_model_id = (model_config_id or quick_diagram or diagram_default
+                               or (row["default_model_id"] if row else None))
             model = connection.execute(
                 """SELECT id model_id, protocol_id, base_url, model_name,
                 credential_ref, settings_json FROM model_configs
                 WHERE id=? AND enabled=1""", (chosen_model_id,),
             ).fetchone() if chosen_model_id else None
-        if row is None or model is None:
-            raise ManualFigureError("说明书任务或模型配置不存在")
+        if row is None:
+            raise ManualFigureError("说明书任务不存在，请返回项目重新选择任务")
+        if model is None:
+            raise ManualFigureError("图表模型不存在或已停用，请在图表编辑器重新选择可用模型后重试")
         result = {**dict(row), **dict(model)}
         result.pop("default_model_id", None)
         settings = json.loads(result.pop("settings_json") or "{}")
@@ -1325,7 +1360,7 @@ edge.route 使用正交折点 points:[{{"x":数值,"y":数值}}]，每条线最�
         with self._database.connect() as connection:
             rows = connection.execute(
                 """SELECT section_key, title, content_json, evidence_refs_json,
-                figure_requests_json FROM manual_section_artifacts
+                figure_requests_json, updated_at FROM manual_section_artifacts
                 WHERE job_id = ? ORDER BY ordinal""", (job_id,),
             ).fetchall()
         if not rows:
@@ -1333,7 +1368,8 @@ edge.route 使用正交折点 points:[{{"x":数值,"y":数值}}]，每条线最�
         return [{"section_key": row["section_key"], "title": row["title"],
                  "blocks": json.loads(row["content_json"]),
                  "evidence_refs": json.loads(row["evidence_refs_json"]),
-                 "figure_requests": json.loads(row["figure_requests_json"])} for row in rows]
+                 "figure_requests": json.loads(row["figure_requests_json"]),
+                 "updated_at": row["updated_at"]} for row in rows]
 
     @staticmethod
     def _requests(sections: list) -> list:
@@ -1613,7 +1649,7 @@ edge.route 使用正交折点 points:[{{"x":数值,"y":数值}}]，每条线最�
 {4}
 
 只返回 JSON：{{"layout":"layered-vertical|flow-left-right|flow-top-down|collaboration-horizontal",
-"nodes":[{{"key":"英文稳定标识","label":"简洁中文标签","kind":"actor|component|service|module|datastore|external|decision|process","layer":0,"evidence_refs":["ref"]}}],
+"nodes":[{{"key":"英文稳定标识","label":"简洁中文标签","kind":"actor|component|service|module|datastore|external|decision|process","layer":0,"layer_label":"有证据支持的实际分组名称","evidence_refs":["ref"]}}],
 "edges":[{{"key":"英文稳定标识","source":"节点 key","target":"节点 key","label":"短关系名","evidence_refs":["ref"]}}]}}。
 要求：
 1. 使用 4 至 10 个真正有区分度的节点；只表达正文和证据支持的关系，不得为了丰富画面编造模块。
@@ -1622,6 +1658,7 @@ edge.route 使用正交折点 points:[{{"x":数值,"y":数值}}]，每条线最�
 4. 主阅读方向明确。相邻主流程使用短边；回路、异常或跨层关系必须走外侧通道，减少交叉和穿越节点。
 5. 边标签使用 2 至 8 个汉字的动作或数据名；所有证据引用只能来自允许列表。
 6. 节点与关系使用稳定、可复用的英文语义 key；无关元素不因重试而随意改名。输出只包含可见业务语义，本地构建器负责完整 mxGraph XML 外壳、转义、引用和几何校验。
+7. 架构、部署、模块图的同层节点使用一致的 layer_label，采用正文支持的实际层或模块名称，建议 2 至 8 个汉字；不得使用“第1层”“第5层”等编号占位名称，也不得无依据补上缓存、会话或基础设施层。
 章节输入：{3}""".format(project_name, request["title"], request["figure_type"],
                               json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
                               custom_style or "使用系统默认的专业技术图风格。")
@@ -1677,6 +1714,9 @@ edge.route 使用正交折点 points:[{{"x":数值,"y":数值}}]，每条线最�
             display_label = _reader_label(label, kind)
             if display_label != label:
                 node["display_label"] = display_label[:40]
+            layer_label = str(item.get("layer_label") or "").strip()
+            if layer_label and not re.fullmatch(r"第\s*[0-9一二三四五六七八九十]+\s*层", layer_label):
+                node["layer_label"] = layer_label[:24]
             nodes.append(node)
         if len(nodes) < 3:
             raise FigureGenerationFailure(

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Dialog } from "./Dialog";
 import { save } from "@tauri-apps/plugin-dialog";
 import { CodePagePreview, loadCodePagePreview, loadSourceMaterials,
   exportSourceDocument, loadAppSettings, rescanProject, revealExportedDocument,
@@ -10,11 +11,11 @@ import { ProjectSwitcher } from "./ProjectSwitcher";
 
 type Props = { connection: SidecarConnection | null; taskId: string;
   onTaskCreated: (taskId: string) => void; onBackToOverview: () => void;
-  previewRequested?: number };
+  previewRequested?: number; onPreviewConsumed?: () => void };
 type Action = "source-plan" | "code-preview" | "source-docx";
 
 export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOverview,
-  previewRequested = 0 }: Props) {
+  previewRequested = 0, onPreviewConsumed }: Props) {
   const [snapshot, setSnapshot] = useState<SourceMaterialsSnapshot | null>(null);
   const [working, setWorking] = useState<Action | null>(null);
   const [message, setMessage] = useState("");
@@ -33,10 +34,20 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
   const [candidateQuery, setCandidateQuery] = useState("");
   const [candidateGrade, setCandidateGrade] = useState<"all" | "A" | "B" | "C">("all");
   const [candidateLimit, setCandidateLimit] = useState(30);
+  const actionLock = useRef(false);
+  const previewRequest = useRef(0);
+  const pageRequest = useRef(0);
+  const taskRequest = useRef(0);
+  const sourceIntegrityValid = snapshot?.source_document?.integrity.status === "verified";
+  const canExportSource = sourceIntegrityValid && snapshot?.source_document?.quality.status === "passed";
+  useEffect(() => { setExportedPath(null); }, [snapshot?.source_document?.version]);
   useEffect(() => { if (connection) loadAppSettings(connection).then((settings) => {
     setStrategy(settings.source_strategy); setAutoPreview(settings.auto_preview);
   }).catch(() => undefined); }, [connection]);
   useEffect(() => {
+    const request = ++taskRequest.current;
+    actionLock.current = false;
+    setWorking(null);
     setSnapshot(null);
     setPagePreview(null);
     setDocumentPreview(null);
@@ -48,14 +59,20 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
     if (!connection || !taskId) return;
     setMessage("正在读取源码材料状态…");
     loadSourceMaterials(connection, taskId).then((value) => {
+      if (request !== taskRequest.current) return;
       setSnapshot(value); setMessage("");
-    }).catch((error) => setMessage(error instanceof Error ? error.message : "读取失败"));
-    loadSourceDocumentQaCapability(connection, taskId).then(setQaCapability)
-      .catch(() => setQaCapability(null));
+    }).catch((error) => {
+      if (request === taskRequest.current) setMessage(error instanceof Error ? error.message : "读取失败");
+    });
+    loadSourceDocumentQaCapability(connection, taskId).then((value) => {
+      if (request === taskRequest.current) setQaCapability(value);
+    }).catch(() => { if (request === taskRequest.current) setQaCapability(null); });
+    return () => { taskRequest.current += 1; };
   }, [connection, taskId]);
 
   async function run(action: Action) {
-    if (!connection || !taskId) return;
+    if (!connection || !taskId || actionLock.current) return;
+    actionLock.current = true;
     setWorking(action);
     setMessage({ "source-plan": "正在分析源码并生成 A/B/C 筛选计划…",
       "code-preview": "正在进行 59 页代码分页预检…", "source-docx": "正在生成源代码 DOCX…" }[action]);
@@ -80,12 +97,16 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
           setMessage(`DOCX 已生成；${qaCapability?.message || "当前设备无法执行真实逐页质检"}。`);
         }
       } else setMessage("本步已完成，结果已持久化。");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "操作失败"); }
-    finally { setWorking(null); setQaWorking(false); }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "操作失败");
+      await loadSourceMaterials(connection, taskId).then(setSnapshot).catch(() => {});
+    }
+    finally { actionLock.current = false; setWorking(null); setQaWorking(false); }
   }
 
   async function runQualityCheck() {
-    if (!connection || !taskId || !qaCapability?.available) return;
+    if (!connection || !taskId || !qaCapability?.available || actionLock.current) return;
+    actionLock.current = true;
     setQaWorking(true);
     setMessage("正在真实渲染 DOCX 并逐页检查，通常需要几十秒，请勿退出应用…");
     try {
@@ -97,18 +118,22 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
       } else setMessage("逐页质检未通过，请在真实预览中检查问题页后重新生成 DOCX。");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "逐页质检失败");
-    } finally { setQaWorking(false); }
+      await loadSourceMaterials(connection, taskId).then(setSnapshot).catch(() => {});
+    } finally { actionLock.current = false; setQaWorking(false); }
   }
 
   async function openDocumentPreview() {
     if (!connection || !taskId) return;
+    const request = ++previewRequest.current;
     setMessage("正在载入真实 DOCX 渲染页…");
     try {
       const preview = await loadSourceDocumentPreview(connection, taskId);
+      if (request !== previewRequest.current) return;
       setDocumentPreview(preview);
       await openDocumentPage(preview.pages[0]);
       setMessage("");
     } catch (error) {
+      if (request !== previewRequest.current) return;
       setDocumentPreview(null);
       setMessage(error instanceof Error ? error.message : "真实 DOCX 预览失败");
     }
@@ -116,39 +141,55 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
 
   async function openDocumentPage(pageNumber: number) {
     if (!connection || !taskId) return;
+    const request = ++pageRequest.current;
     setDocumentPageNumber(pageNumber);
     setDocumentPageLoading(true);
     setDocumentPageError("");
     try {
       const url = await loadSourceDocumentPreviewPage(connection, taskId, pageNumber);
+      if (request !== pageRequest.current) { URL.revokeObjectURL(url); return; }
       setDocumentPageUrl((previous) => { if (previous) URL.revokeObjectURL(previous); return url; });
     } catch (error) {
+      if (request !== pageRequest.current) return;
       setDocumentPageUrl(null);
       setDocumentPageError(error instanceof Error ? error.message : "真实 DOCX 预览页读取失败");
-    } finally { setDocumentPageLoading(false); }
+    } finally { if (request === pageRequest.current) setDocumentPageLoading(false); }
   }
 
   function closeDocumentPreview() {
+    previewRequest.current += 1;
+    pageRequest.current += 1;
     if (documentPageUrl) URL.revokeObjectURL(documentPageUrl);
     setDocumentPreview(null);
     setDocumentPageUrl(null);
     setDocumentPageError("");
   }
 
-  useEffect(() => () => { if (documentPageUrl) URL.revokeObjectURL(documentPageUrl); }, []);
+  useEffect(() => () => { if (documentPageUrl) URL.revokeObjectURL(documentPageUrl); }, [documentPageUrl]);
+  useEffect(() => () => { previewRequest.current += 1; pageRequest.current += 1; }, []);
 
-  useEffect(() => { if (previewRequested && connection && taskId) openDocumentPreview(); },
-    [previewRequested]);
+  useEffect(() => {
+    if (previewRequested && connection && taskId) {
+      onPreviewConsumed?.();
+      void openDocumentPreview();
+    }
+  }, [previewRequested, connection, taskId]);
 
   async function exportDocument() {
     if (!snapshot?.source_document) return;
+    if (!canExportSource) {
+      setMessage(!sourceIntegrityValid ? "源代码文档文件缺失或校验异常，请重新生成后再导出。" :
+        "源代码文档尚未通过当前质量检查，请完成检查后再导出。");
+      return;
+    }
     const project = safeFilename(snapshot.project.name || "项目");
     const version = safeFilename(snapshot.project.version || "未标版本");
+    try {
     const destination = await save({ title: "导出源代码文档",
       defaultPath: `${project}-${version}-源代码文档.docx`,
       filters: [{ name: "Word 文档", extensions: ["docx"] }] });
     if (!destination) return;
-    try { await exportSourceDocument(taskId, destination); setExportedPath(destination);
+    await exportSourceDocument(taskId, destination); setExportedPath(destination);
       setMessage(`文档已导出到 ${destination}`); }
     catch (error) { setMessage(error instanceof Error ? error.message : "DOCX 导出失败"); }
   }
@@ -169,15 +210,21 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
   }
 
   async function rescan() {
-    if (!connection || !taskId) return;
+    if (!connection || !taskId || actionLock.current) return;
+    const request = taskRequest.current;
+    actionLock.current = true;
     setMessage("正在重新扫描当前项目…");
     setWorking("source-plan");
     try {
       const result = await rescanProject(connection, taskId);
+      if (request !== taskRequest.current) return;
       onTaskCreated(result.task_id);
       setMessage(`重新扫描完成 · 新任务 ${result.task_id.slice(0, 8)}…`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "重新扫描失败"); }
-    finally { setWorking(null); }
+    } catch (error) {
+      if (request === taskRequest.current) setMessage(error instanceof Error ? error.message : "重新扫描失败");
+    } finally {
+      if (request === taskRequest.current) { actionLock.current = false; setWorking(null); }
+    }
   }
 
   const filteredCandidates = useMemo(() => {
@@ -188,8 +235,12 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
         (item.language ?? "").toLowerCase().includes(normalized)));
   }, [snapshot?.source_plan?.candidates, candidateGrade, candidateQuery]);
   const visibleCandidates = filteredCandidates.slice(0, candidateLimit);
-  const sourceDocumentRetryable = snapshot?.task.status === "failed" &&
-    snapshot.task.failure_category === "source_document_error";
+  const retryStep = snapshot?.task.status === "failed" ? ({
+    source_plan_error: { action: "source-plan", title: "源码筛选未完成", button: "重新筛选源码" },
+    code_preview_error: { action: "code-preview", title: "源码分页未完成", button: "重新检查分页" },
+    source_document_error: { action: "source-docx", title: "源代码文档生成未完成", button: "重试生成 DOCX" },
+    source_document_qa_error: { action: "qa", title: "源代码文档检查未完成", button: "重新检查文档" },
+  } as Record<string, { action: Action | "qa"; title: string; button: string }>)[snapshot.task.failure_category || ""] : null;
 
   return <main className="source-page">
     <header className="topbar"><div><p className="eyebrow">SOURCE MATERIALS</p><h1>源码材料</h1>
@@ -198,17 +249,19 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
     {!taskId ? <section className="overview-placeholder source-empty"><span>01</span>
       <h2>请先选择项目</h2><p>到“项目概览”扫描新项目，或从最近任务恢复。</p></section> :
       <section className="source-content">
-        {message && <div className={`source-notice ${working ? "working" : ""}`}>{message}</div>}
-        {sourceDocumentRetryable && <div className="source-retry-panel"><div>
-          <strong>源代码文档生成未完成</strong>
-          <span>{snapshot?.task.safe_error_message || "已保留分页结果，可直接重试当前步骤。"}</span>
+        {message && <div role="status" className={`source-notice ${working ? "working" : ""}`}>{message}</div>}
+        {retryStep && <div className="source-retry-panel" role="status"><div>
+          <strong>{retryStep.title}</strong>
+          <span>{snapshot?.task.safe_error_message || "已保留完成的结果，可以从当前步骤继续。"}</span>
         </div><button className="primary"
-          disabled={!snapshot?.actions.source_docx || !!working || qaWorking}
-          onClick={() => run("source-docx")}>
-          {working === "source-docx" ? "正在重试…" : "重试生成 DOCX"}
+          disabled={!!working || qaWorking || (retryStep.action === "qa" && !qaCapability?.available)}
+          onClick={() => retryStep.action === "qa" ? runQualityCheck() : run(retryStep.action)}>
+          {working || qaWorking ? "正在恢复…" : retryStep.button}
         </button></div>}
-        {snapshot?.source_document && <div className="artifact-success"><div><span>✓</span><div>
-          <strong>源代码文档已生成</strong><small>DOCX v{snapshot.source_document.version} · {
+        {snapshot?.source_document && <div className={`artifact-success${sourceIntegrityValid ? "" : " error"}`}><div><span>{sourceIntegrityValid ? "✓" : "!"}</span><div>
+          <strong>{sourceIntegrityValid ? "源代码文档已生成" : "源代码文档需要重新生成"}</strong><small>DOCX v{snapshot.source_document.version} · {
+            !sourceIntegrityValid ? snapshot.source_document.integrity.status === "missing" ?
+              "文件已缺失，请重新生成" : "文件校验异常，请重新生成" :
             snapshot.source_document.quality.status === "passed" ?
               `逐页质量检查通过（${snapshot.source_document.quality.summary?.rendered_pages || 60} 页）` :
             snapshot.source_document.quality.status === "failed" ? "逐页质量检查未通过，请重新生成" :
@@ -219,12 +272,15 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
           {qaWorking ? "正在逐页质检…" : qaCapability?.available ? "执行逐页质检" : "缺少渲染组件"}</button>}
           <button disabled={snapshot.source_document.quality.status === "not_checked" || qaWorking}
             onClick={openDocumentPreview}>程序内查看</button>
-          <button className="primary" disabled={snapshot.source_document.quality.status !== "passed" || qaWorking}
+          <button className="primary" disabled={!canExportSource || qaWorking}
             onClick={exportedPath ? showExport : exportDocument}>
-            {snapshot.source_document.quality.status === "failed" ? "质检未通过" :
+            {!sourceIntegrityValid ? "重新生成后导出" : snapshot.source_document.quality.status === "failed" ? "质检未通过" :
               snapshot.source_document.quality.status === "outdated" ? "按新标准重新生成" :
               snapshot.source_document.quality.status === "not_checked" ? "质检后导出" :
               exportedPath ? "在文件夹中显示" : "导出…"}</button></div></div>}
+        {snapshot?.source_document && !sourceIntegrityValid && <div className="manual-stale-notice" role="status">
+          文档文件与生成记录不一致，历史质检结果已不能证明当前文件可用。请在下方重新生成源代码 DOCX。
+        </div>}
         {snapshot?.source_document?.quality.status === "outdated" && <div className="manual-stale-notice">
           当前文件来自旧版 Word 生成器或旧版质检标准，只作为历史版本保留。请点击“生成源代码 DOCX”生成新版本，
           系统随后会自动按当前标准逐页检查。</div>}
@@ -232,6 +288,8 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
           <div className={`qa-capability-note ${qaCapability.available ? "available" : "unavailable"}`}>
             <strong>{qaCapability.available ? "可执行真实逐页质检" : "尚不能执行真实逐页质检"}</strong>
             <span>{qaCapability.message}。未质检版本不会被标记为可交付，也不能导出。</span></div>}
+        <details className="source-generation-tools" open={!snapshot?.source_document || !sourceIntegrityValid}>
+        <summary>{snapshot?.source_document ? "调整取样或重新生成" : "分步制作源码文档"}</summary>
         <div className="pipeline-grid">
           <Stage index="01" title="源码筛选计划" ready={!!snapshot?.source_plan}
             description="按业务价值分为 A/B/C 级，排除依赖、构建产物和敏感文件。"
@@ -244,7 +302,7 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
           <Stage index="03" title="生成源代码 DOCX" ready={!!snapshot?.source_document}
             description="仅当项目信息已确认且代码足够时可生成，文件与摘要写入本地任务目录。"
             disabled={!snapshot?.actions.source_docx || !!working || qaWorking} onClick={() => run("source-docx")}
-            button={sourceDocumentRetryable ? "重试生成 DOCX" :
+            button={retryStep?.action === "source-docx" ? "重试生成 DOCX" :
               snapshot?.source_document ? "重新生成 DOCX" : "生成 DOCX"} />
         </div>
         <div className="strategy-panel"><div><strong>源码筛选严格度</strong>
@@ -252,6 +310,7 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
           <div>{(["standard", "relaxed", "maximum"] as const).map((value) => <button
             className={strategy === value ? "active" : ""} onClick={() => setStrategy(value)} key={value}>
             {{ standard: "标准", relaxed: "宽松", maximum: "最大覆盖" }[value]}</button>)}</div></div>
+        </details>
         {snapshot && <><div className="material-metrics">
           <Metric label="入选文件" value={snapshot.source_plan?.summary.selected_files ?? "—"} />
           <Metric label="实际取样文件" value={snapshot.code_preview?.summary.included_files ?? "—"} />
@@ -282,7 +341,7 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
               <CodePage page={pagePreview.pages[previewPageIndex]} total={pagePreview.total_pages} /></> :
               <div className="no-code-pages">当前预检没有可显示的代码页。</div>}</div>}
           {snapshot.source_plan && <div className="candidate-panel"><div className="section-title">
-            <span>入选源码</span><em>共 {snapshot.source_plan.candidates.length} 个 · A {snapshot.source_plan.summary.grades.A} · B {snapshot.source_plan.summary.grades.B} · C {snapshot.source_plan.summary.grades.C}</em></div>
+            <span>入选源码</span><em>共 {snapshot.source_plan.candidates.length} 个 · 当前显示 {visibleCandidates.length} 个</em></div>
             <div className="candidate-tools"><input value={candidateQuery}
               onChange={(event) => { setCandidateQuery(event.target.value); setCandidateLimit(30); }}
               placeholder="搜索文件路径或语言" aria-label="搜索入选源码" />
@@ -300,7 +359,7 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
               再显示 30 个（剩余 {filteredCandidates.length - candidateLimit}）</button>}</div>}
         </>}
       </section>}
-    {documentPreview && <div className="document-viewer" role="dialog" aria-modal="true">
+    {documentPreview && <Dialog className="document-viewer" label="源代码文档预览" onClose={closeDocumentPreview}>
       <div className="document-viewer-shell"><header><div><strong>源代码文档预览</strong>
         <small>DOCX v{documentPreview.version} · 真实渲染 {documentPreview.total_pages} 页 · {
           documentPreview.quality_status === "passed" ? "逐页质检通过" :
@@ -308,7 +367,7 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
           <button disabled={documentPreview.quality_status !== "passed"}
             onClick={exportedPath ? showExport : exportDocument}>
             {documentPreview.quality_status === "outdated" ? "重新生成后导出" :
-              exportedPath ? "在文件夹中显示" : "导出 DOCX…"}</button><button onClick={closeDocumentPreview}>关闭</button>
+              exportedPath ? "在文件夹中显示" : "导出 DOCX…"}</button><button data-dialog-close onClick={closeDocumentPreview}>关闭</button>
         </div></header><div className="document-viewer-body"><aside className="source-page-nav">
           <label>跳转页码<input aria-label="源代码文档跳转页码" type="number" min={1}
             max={documentPreview.total_pages} value={documentPageNumber}
@@ -330,7 +389,7 @@ export function SourceMaterials({ connection, taskId, onTaskCreated, onBackToOve
             <p>{documentPageError}</p><button onClick={() => openDocumentPage(documentPageNumber)}>重新加载本页</button></div>}
           {!documentPageLoading && documentPageUrl && <img src={documentPageUrl}
             alt={`源代码文档第 ${documentPageNumber} 页真实渲染`} />}</section>
-        </div></div></div>}
+        </div></div></Dialog>}
   </main>;
 }
 

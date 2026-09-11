@@ -48,6 +48,19 @@ class ManualExportService:
             )
             if export_kind == "formal" and document_kind != "final_document":
                 raise ManualExportError("审阅稿不能登记为终稿，请先由人工生成终稿")
+            if export_kind == "formal":
+                from .manual_document import GENERATOR_VERSION
+                from .manual_qa import QA_POLICY_VERSION
+                latest_qa = connection.execute(
+                    """SELECT passed,policy_version FROM manual_document_qa_runs
+                    WHERE document_artifact_id=? ORDER BY qa_version DESC LIMIT 1""",
+                    (document["id"],),
+                ).fetchone()
+                generator = json.loads(document["qa_json"] or "{}").get("generator_version")
+                if (not latest_qa or not latest_qa["passed"] or
+                        latest_qa["policy_version"] != QA_POLICY_VERSION or
+                        generator != GENERATOR_VERSION):
+                    raise ManualExportError("终稿尚未通过当前质量检查，不能登记为正式导出")
             record_id, created_at = str(uuid4()), utc_now()
             connection.execute(
                 """INSERT INTO manual_export_records(

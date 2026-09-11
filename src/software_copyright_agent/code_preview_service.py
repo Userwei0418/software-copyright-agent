@@ -45,7 +45,7 @@ class CodePreviewService:
         self._database.initialize()
         with self._database.connect() as connection:
             task_row = connection.execute(
-                """SELECT t.status, ps.manifest_relative_path, ps.scan_root_mode,
+                """SELECT t.status, t.failure_category, ps.manifest_relative_path, ps.scan_root_mode,
                 ps.scan_root_path FROM tasks t
                 JOIN project_snapshots ps ON ps.id = t.snapshot_id
                 WHERE t.id = ?""",
@@ -58,10 +58,16 @@ class CodePreviewService:
             ).fetchone()
             if task_row is None or plan_row is None:
                 raise CodePreviewError("Completed source plan not found for task")
+            retryable_failure = (
+                task_row["status"] == TaskStatus.FAILED.value
+                and task_row["failure_category"] in {
+                    "code_preview_error", "source_document_error", "source_document_qa_error",
+                }
+            )
             if task_row["status"] not in {
                 TaskStatus.COMPLETED.value,
                 TaskStatus.COMPLETED_WITH_WARNINGS.value,
-            }:
+            } and not retryable_failure:
                 raise CodePreviewError(
                     "Task must be completed before code preview: {0}".format(
                         task_row["status"]
