@@ -81,7 +81,7 @@ class SourceMaterialsService:
                     """SELECT relative_path, grade, score, code_lines, language
                     FROM source_candidates WHERE plan_run_id = ? AND selected = 1
                     ORDER BY CASE grade WHEN 'A' THEN 0 WHEN 'B' THEN 1 ELSE 2 END,
-                    score DESC, relative_path LIMIT 30""",
+                    score DESC, relative_path""",
                     (plan["id"],),
                 ).fetchall()
                 candidates = [dict(row) for row in rows]
@@ -141,15 +141,19 @@ class SourceMaterialsService:
         retryable_document = (
             status == "failed" and task["failure_category"] == "source_document_error"
         )
+        retryable_preview = status == "failed" and task["failure_category"] in {
+            "code_preview_error", "source_document_error", "source_document_qa_error",
+        }
         actions = {
-            "source_plan": status in {"completed", "completed_with_warnings"},
+            "source_plan": status in {"completed", "completed_with_warnings"}
+            or (status == "failed" and task["failure_category"] == "source_plan_error"),
             "code_preview": plan_payload is not None
-            and status in {"completed", "completed_with_warnings"},
+            and (status in {"completed", "completed_with_warnings"} or retryable_preview),
             "source_docx": preview_sufficient and preview_representative and preview_current
             and (status in {"completed", "completed_with_warnings"}
                  or retryable_document),
         }
-        blockers = self._blockers(status, plan_payload, preview_payload)
+        blockers = self._blockers(status, plan_payload, preview_payload, task["failure_category"])
         return {
             "task": {key: task[key] for key in (
                 "id", "status", "current_stage_key", "failure_category", "safe_error_message"
@@ -324,10 +328,16 @@ class SourceMaterialsService:
         return payload
 
     @staticmethod
-    def _blockers(status: str, plan, preview) -> list:
+    def _blockers(status: str, plan, preview, failure_category=None) -> list:
         blockers = []
         if status == "waiting_for_user":
             blockers.append("请先在项目概览完成必填信息确认。")
+        elif status == "failed" and failure_category == "source_plan_error":
+            blockers.append("源码筛选未完成；扫描成果已保留，可重试源码筛选。")
+        elif status == "failed" and failure_category in {
+            "code_preview_error", "source_document_error", "source_document_qa_error",
+        }:
+            blockers.append("源码材料步骤未完成；已有成果已保留，可重试分页预检后继续生成。")
         elif status not in {"completed", "completed_with_warnings"}:
             blockers.append("当前任务状态为 {0}，暂不能生成源码材料。".format(status))
         if plan is None:

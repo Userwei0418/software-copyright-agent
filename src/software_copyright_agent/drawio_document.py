@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple
 from PIL import Image, ImageDraw, ImageFont
 
 
-DRAWIO_GENERATOR_VERSION = "drawio-generator-v11"
+DRAWIO_GENERATOR_VERSION = "drawio-generator-v12"
 
 
 class DrawioDocumentError(RuntimeError):
@@ -411,6 +411,7 @@ class DrawioDocumentInspector:
             )
             unrelated = [rectangle for cell_id, rectangle in rectangles
                          if cell_id not in {edge.get("source"), edge.get("target")}]
+            unrelated += title_obstacles
             for start, end in zip(route, route[1:]):
                 if any(GenericDrawioDocumentBuilder._segment_hits_box(
                         start, end, rectangle, 8.0) for rectangle in unrelated):
@@ -628,21 +629,37 @@ class GenericDrawioDocumentBuilder:
         for node in figure["nodes"]:
             layer = max(0, int(node.get("layer", 0)))
             layers.setdefault(layer, []).append(node)
-        names = {
-            "architecture": ["界面与访问层", "应用服务层", "数据与外部服务层", "基础设施层"],
-            "deployment": ["访问与接入层", "应用服务层", "缓存与会话层", "数据与文件层"],
-            "module": ["访问与控制层", "核心业务层", "数据支撑层", "外部协作层"],
-        }.get(figure.get("figure_type"))
-        if names is None:
+        if figure.get("figure_type") not in {"architecture", "deployment", "module"}:
             return []
         labels = []
-        for order, layer in enumerate(sorted(layers)):
+        for layer in sorted(layers):
             items = layers[layer]
             top = min(positions[item["key"]][1] for item in items)
+            explicit_names = {
+                str(item.get("layer_label") or "").strip() for item in items
+                if str(item.get("layer_label") or "").strip()
+                and not re.fullmatch(r"第\s*[0-9一二三四五六七八九十]+\s*层",
+                                     str(item["layer_label"]).strip())
+            }
+            # A position in the drawing is not evidence of a caching, database,
+            # or infrastructure tier. Retain named groups, and derive legacy
+            # labels from the actual nodes rather than inventing numbered tiers.
+            if len(explicit_names) == 1:
+                label = next(iter(explicit_names))
+            else:
+                node_names = list(dict.fromkeys(
+                    str(item.get("display_label") or item.get("label") or "")
+                    for item in items
+                ))
+                label = " / ".join(node_names[:2])
+                if len(label) > 28:
+                    label = node_names[0]
+                if len(label) > 28:
+                    label = label[:27] + "…"
             labels.append({
                 "key": "layer-label-{0}".format(layer),
-                "label": names[order] if order < len(names) else "第 {0} 层".format(order + 1),
-                "x": 18, "y": top + 18, "width": 112, "height": 28,
+                "label": label,
+                "x": 18, "y": top + 18, "width": 112, "height": 48,
             })
         return labels
 
@@ -883,6 +900,7 @@ class GenericDrawioDocumentBuilder:
         sc, tc = (sx + sw / 2, sy + sh / 2), (tx + tw / 2, ty + th / 2)
         boxes = [value for key, value in positions.items()
                  if key not in {edge["source"], edge["target"]}]
+        boxes.append((48.0, 24.0, float(canvas[0]) - 96.0, 40.0))
         # Keep long return routes out of the layer-label gutter. Routing through
         # that gutter made labels such as“核心业务层”look crossed out.
         semantic_left = min(value[0] for value in positions.values())
@@ -926,9 +944,13 @@ class GenericDrawioDocumentBuilder:
                     width + clearance * 2, height + clearance * 2)
 
         obstacles = {key: inflate(rect) for key, rect in positions.items()}
-        obstacles["__diagram_title__"] = (36.0, 12.0, float(canvas[0]) - 72.0, 60.0)
+        # A first-row top port can otherwise sit just one pixel below the old
+        # title obstacle and route a long return edge under the heading text.
+        # Reserve a full 16-pixel corridor below the title's bottom at y=64.
+        obstacles["__diagram_title__"] = (32.0, 8.0, float(canvas[0]) - 64.0, 72.0)
         unrelated = [rect for key, rect in positions.items()
                      if key not in {edge["source"], edge["target"]}]
+        unrelated.append((48.0, 24.0, float(canvas[0]) - 96.0, 40.0))
 
         def ports(rect: tuple) -> list:
             x, y, width, height = rect

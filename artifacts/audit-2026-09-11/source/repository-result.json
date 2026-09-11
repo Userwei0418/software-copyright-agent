@@ -1,0 +1,82 @@
+{
+  "task_id": "fd92ef88-8ad8-436e-9038-617b3093495c",
+  "plan": {
+    "selected_files": 71,
+    "selected_code_lines": 30240
+  },
+  "preview": {
+    "available_buckets": [
+      "frontend_other",
+      "other"
+    ],
+    "available_visual_lines": 32907,
+    "generated_pages": 59,
+    "included_buckets": [
+      "frontend_other",
+      "other"
+    ],
+    "included_files": 33,
+    "included_languages": [
+      "Python",
+      "Rust",
+      "TypeScript TSX"
+    ],
+    "required_visual_lines": 2950,
+    "selected_files": 71,
+    "sufficient": true,
+    "target_pages": 59,
+    "truncated": true,
+    "used_visual_lines": 2950
+  },
+  "docx": "/private/tmp/copyright-source-audit/repository/data/tasks/fd92ef88-8ad8-436e-9038-617b3093495c/artifacts/source-code/source-code.v1.docx",
+  "qa": {
+    "passed": true,
+    "check_count": 19,
+    "failed_check_count": 0,
+    "rendered_pages": 60,
+    "blank_pages": [],
+    "minimum_body_fill_ratio": 0.8812,
+    "underfilled_pages": [],
+    "page_dimensions": [
+      827,
+      1170
+    ],
+    "document_sha256": "4637b5049188a6c15a0683f0d117e90af2ddd7859e279deecd1b7e64fe2aec1b",
+    "visual_review_required": true,
+    "cjk_font": {
+      "families": [
+        "Noto Sans CJK SC",
+        "Noto Sans Symbols 2"
+      ],
+      "fonts": [
+        {
+          "family": "Noto Sans CJK SC",
+          "path": "/Users/zhouwei5/Documents/ChatGPT/软著Agent/src/software_copyright_agent/assets/fonts/noto-cjk/NotoSansCJKsc-Regular.otf",
+          "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+          "required_codepoints": 0,
+          "missing_codepoints": 0,
+          "license": "SIL Open Font License 1.1"
+        },
+        {
+          "family": "Noto Sans Symbols 2",
+          "path": "/Users/zhouwei5/Documents/ChatGPT/软著Agent/src/software_copyright_agent/assets/fonts/noto-cjk/NotoSansSymbols2-Regular.ttf",
+          "sha256": "630846d528dbe4c4981370a4d0a9475a1fd1491a129bb411f8e157cdb5de13c6",
+          "required_codepoints": 0,
+          "missing_codepoints": 0,
+          "license": "SIL Open Font License 1.1"
+        }
+      ],
+      "required_codepoints": 480,
+      "missing_codepoints": 0,
+      "system_fallback_codepoints": 0,
+      "system_fallback_sample": ""
+    }
+  },
+  "failed_checks": [],
+  "render": "/private/tmp/copyright-source-audit/repository/data/tasks/fd92ef88-8ad8-436e-9038-617b3093495c/qa/source-code/v1/render",
+  "integrity": {
+    "status": "verified",
+    "size_bytes": 13983826
+  },
+  "quality": "passed"
+}

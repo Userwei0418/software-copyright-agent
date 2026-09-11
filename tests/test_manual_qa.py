@@ -2,13 +2,15 @@ import hashlib
 import json
 import tempfile
 import unittest
+from subprocess import CompletedProcess
+from unittest.mock import patch
 from pathlib import Path
 from uuid import uuid4
 
 from docx import Document
 from PIL import Image, ImageDraw
 
-from software_copyright_agent.manual_document import ManualDocumentService
+from software_copyright_agent.manual_document import FormalManualBuilder, ManualDocumentService
 from software_copyright_agent.manual_pipeline import ManualPipelineService
 from software_copyright_agent.manual_qa import (
     CompanionRenderResult, ManualCompanionRenderer, ManualDocxInspector,
@@ -17,7 +19,107 @@ from software_copyright_agent.manual_qa import (
 from software_copyright_agent.storage import Database
 
 
+class StemNamedCompanionRenderer(ManualCompanionRenderer):
+    """Exercise the LibreOffice PDF naming contract without an office dependency."""
+
+    def render(self, document_path, *args):
+        result = super().render(document_path, *args)
+        pdf = result.pdf_path.with_name(document_path.stem + ".pdf")
+        result.pdf_path.rename(pdf)
+        return CompanionRenderResult(pdf, result.page_paths, result.page_kinds,
+                                     result.fill_ratios, (3,))
+
+
 class ManualQaServiceTests(unittest.TestCase):
+    def test_toc_cache_must_match_actual_rendered_chapter_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "toc.docx"
+            for cached_page, expected_pass in (("1", False), ("3", True)):
+                with self.subTest(cached_page=cached_page):
+                    document = Document()
+                    paragraph = document.add_paragraph("01    引言\t")
+                    FormalManualBuilder._field(paragraph, "PAGEREF manual_section_1 \\h", cached_page)
+                    document.save(path)
+                    result = ManualDocxInspector().inspect(
+                        path, hashlib.sha256(path.read_bytes()).hexdigest(), [], [], [],
+                        CompanionRenderResult(root / "preview.pdf", (), (), (), ()),
+                        {"rendered_toc_pages": {1: 3}})
+                    check = next(item for item in result.checks
+                                 if item.key == "structure.toc_page_numbers")
+                    self.assertEqual(check.passed, expected_pass)
+
+    def test_rendered_toc_uses_preserved_chapter_ordinals(self) -> None:
+        sections = [{"title": "引言", "ordinal": 1},
+                    {"title": "用户界面与操作说明", "ordinal": 7}]
+        rendered = "封面\f目录\f 1  引言\n正文\f 7  用户界面与操作说明\n正文\f"
+        with patch("software_copyright_agent.manual_qa.shutil.which", return_value="/bin/cat"), \
+                patch("software_copyright_agent.manual_qa.LibreOfficeRenderer._resolve_tools",
+                      return_value=(None, None)), \
+                patch("software_copyright_agent.manual_qa.subprocess.run",
+                      return_value=CompletedProcess([], 0, rendered.encode(), b"")):
+            self.assertEqual(ManualQaService._rendered_toc_pages(Path("fixture.pdf"), sections),
+                             {1: 3, 7: 4})
+
+    def test_table_and_nested_table_claims_are_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "table-claims.docx"
+            document = Document()
+            document.add_paragraph("普通说明正文")
+            table = document.add_table(rows=2, cols=2)
+            table.cell(0, 0).text = "TODO"
+            table.cell(1, 0).text = "系统已通过验收。"
+            nested = table.cell(1, 1).add_table(rows=1, cols=1)
+            nested.cell(0, 0).text = "根据项目证据推断系统能力。"
+            document.save(path)
+            render = CompanionRenderResult(root / "preview.pdf", (), (), (), ())
+            result = ManualDocxInspector().inspect(
+                path, hashlib.sha256(path.read_bytes()).hexdigest(), [], [], [], render)
+            checks = {item.key: item for item in result.checks}
+            self.assertFalse(checks["content.placeholders"].passed)
+            self.assertIn("TODO", checks["content.placeholders"].actual)
+            self.assertFalse(checks["content.unverified_outcomes"].passed)
+            self.assertFalse(checks["content.epistemic_caveats"].passed)
+
+    def test_screenshot_requires_complete_description_and_explicit_sensitive_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "incomplete-screenshot.docx"
+            Document().save(path)
+            screenshot = {"screenshot_key": "screen", "interpretation_revision_id": "reviewed-v1",
+                          "description": {"page_purpose": "查看项目状态。"}}
+            result = ManualDocxInspector().inspect(
+                path, hashlib.sha256(path.read_bytes()).hexdigest(), [], [], [screenshot],
+                CompanionRenderResult(root / "preview.pdf", (), (), (), ()))
+            checks = {item.key: item for item in result.checks}
+            self.assertFalse(checks["content.screenshot_description_complete"].passed)
+            self.assertEqual(len(checks["content.screenshot_description_complete"].actual[0][
+                "missing_fields"]), 5)
+            self.assertFalse(checks["content.screenshot_sensitive_review"].passed)
+
+    def test_old_document_detects_duplicate_labels_and_distinguishes_screenshot_claims(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "old.docx"
+            document = Document()
+            document.add_paragraph("表 3  表1 本地接口", style="Caption")
+            document.save(path)
+            screenshot = {"asset_id": "source", "title": "源码材料", "interpretation": {
+                "warnings": ["未观察到失败提示", "依据按钮推断后台保存成功"]}}
+            result = ManualDocxInspector().inspect(
+                path, hashlib.sha256(path.read_bytes()).hexdigest(), [], [], [screenshot],
+                CompanionRenderResult(root / "preview.pdf", (), (), (), ()))
+            checks = {item.key: item for item in result.checks}
+            self.assertFalse(checks["structure.caption_prefixes"].passed)
+            claim = checks["content.screenshot_unresolved_claims"]
+            reminder = checks["content.screenshot_analysis_warnings"]
+            self.assertFalse(claim.passed)
+            self.assertEqual(claim.severity, "blocker")
+            self.assertEqual(claim.actual[0]["asset_id"], "source")
+            self.assertEqual(reminder.severity, "warning")
+            self.assertEqual(reminder.actual[0]["warnings"], ["未观察到失败提示"])
+
     def test_header_footer_only_body_page_is_a_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -202,7 +304,7 @@ class ManualQaServiceTests(unittest.TestCase):
                 )
             assembled_v2 = documents.assemble(job["id"])
             checked_v2 = ManualQaService(database, root, documents=documents,
-                                         renderer=ManualCompanionRenderer()).execute(
+                                         renderer=StemNamedCompanionRenderer()).execute(
                 job["id"], assembled_v2["version"]
             )
             self.assertEqual(checked_v2["document"]["version"], 2)
@@ -211,6 +313,14 @@ class ManualQaServiceTests(unittest.TestCase):
             self.assertEqual([item["version"] for item in versions], [2, 1])
             self.assertTrue(all(item["status"] == "qa_passed" for item in versions))
             self.assertNotEqual(versions[0]["sha256"], versions[1]["sha256"])
+            self.assertTrue(checked_v2["document"]["preview_pdf_relative_path"].endswith(
+                "software-manual-review.v2.pdf"))
+            self.assertTrue(ManualQaService(database, root).read_pdf(job["id"], 2).startswith(b"%PDF"))
+            self.assertEqual(checked_v2["document"]["qa"]["warning_count"], 1)
+            repeated_qa = ManualQaService(database, root, documents=documents,
+                                          renderer=StemNamedCompanionRenderer()).execute(job["id"], 2)
+            self.assertEqual(repeated_qa["qa_run"]["qa_version"], 2)
+            self.assertEqual(repeated_qa["document"]["qa"]["warning_count"], 1)
 
             with database.connect() as connection:
                 row = connection.execute(

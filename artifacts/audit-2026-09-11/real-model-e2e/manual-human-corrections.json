@@ -1,0 +1,370 @@
+{
+  "disclosure": "隔离回归样例的人工证据修订；未重跑模型，旧AI解读、旧章节修订、旧final v3均保留。",
+  "model_calls": 0,
+  "task_id": "99f67040-d30c-4019-8eef-1670be1eeda7",
+  "job_id": "d749c750-47af-4704-8685-6cb59969cb4d",
+  "changes": [
+    {
+      "kind": "screenshot",
+      "asset_id": "b36fa657-f7d2-4c90-b5b8-ea990e4b53bf",
+      "title": "源码材料",
+      "from_version": 2,
+      "to_version": 3,
+      "reason": "保留可见DOCX完成横幅；删除generate_manual/scan_project等仅按按钮推断的后台动作和相关错误引用，明确图片无法提供后台过程。",
+      "before": {
+        "confidence": 0.92,
+        "entry_conditions": [
+          "本地服务已连接",
+          "当前项目已选择"
+        ],
+        "failure_and_recovery": "",
+        "key_controls": [
+          "重新生成计划",
+          "重新分页预检",
+          "重新生成 DOCX",
+          "程序内查看",
+          "导出",
+          "严格度切换",
+          "搜索文件路径或语言",
+          "等级筛选",
+          "查看分页内容"
+        ],
+        "page_title": "源码材料",
+        "page_type": "工作台页面",
+        "purpose": "展示源码筛选、分页预检与 DOCX 生成状态，并提供重新执行与导出操作。",
+        "related_backend_actions": [
+          "build_source_plan",
+          "generate_manual",
+          "scan_project"
+        ],
+        "related_evidence_refs": [
+          "47823394-e74d-46a2-92bc-7d6114bfcd0c",
+          "9043b1f3-5ecc-499f-ba16-536a711517de"
+        ],
+        "route_guess": "/source-materials",
+        "success_state": "源代码文档已生成，DOCX v1 逐页质量检查通过（60 页）",
+        "suggested_caption": "源码材料工作台：展示三阶段流程、统计指标与入选源码列表",
+        "suggested_group": "专业工作台",
+        "suggested_order": 4,
+        "target_roles": [
+          "软件版权申请操作员"
+        ],
+        "visible_regions": [
+          "左侧导航栏",
+          "顶部标题与项目选择器",
+          "成功状态横幅",
+          "三阶段卡片区域",
+          "严格度与统计指标区",
+          "代码分页信息条",
+          "入选源码列表"
+        ],
+        "warnings": [
+          "未观察到失败或异常状态提示",
+          "具体后端调用结果不可见，仅依据界面按钮推断"
+        ],
+        "workflow_steps": [
+          "源码筛选计划",
+          "代码分页预检",
+          "生成源代码 DOCX"
+        ]
+      },
+      "after": {
+        "confidence": 0.92,
+        "entry_conditions": [
+          "本地服务已连接",
+          "当前项目已选择"
+        ],
+        "failure_and_recovery": "本图未显示失败状态；可见重新生成计划、重新分页预检和重新生成 DOCX 的操作入口。",
+        "key_controls": [
+          "重新生成计划",
+          "重新分页预检",
+          "重新生成 DOCX",
+          "程序内查看",
+          "导出",
+          "严格度切换",
+          "搜索文件路径或语言",
+          "等级筛选",
+          "查看分页内容"
+        ],
+        "page_title": "源码材料",
+        "page_type": "工作台页面",
+        "purpose": "展示源码筛选、分页预检与 DOCX 生成状态，并提供重新执行与导出操作。",
+        "related_backend_actions": [],
+        "related_evidence_refs": [],
+        "route_guess": "",
+        "success_state": "本图横幅显示源代码文档已生成，DOCX v1 的逐页质量检查通过（60 页）。",
+        "suggested_caption": "源码材料工作台：展示三阶段流程、统计指标与入选源码列表",
+        "suggested_group": "专业工作台",
+        "suggested_order": 4,
+        "target_roles": [
+          "软件版权申请操作员"
+        ],
+        "unresolved_claims": [],
+        "visible_regions": [
+          "左侧导航栏",
+          "顶部标题与项目选择器",
+          "成功状态横幅",
+          "三阶段卡片区域",
+          "严格度与统计指标区",
+          "代码分页信息条",
+          "入选源码列表"
+        ],
+        "warnings": [
+          "本图未显示失败状态或恢复操作"
+        ],
+        "workflow_steps": [
+          "源码筛选计划",
+          "代码分页预检",
+          "生成源代码 DOCX"
+        ]
+      }
+    },
+    {
+      "kind": "screenshot",
+      "asset_id": "9e676059-351e-4576-b2c2-53376dce7dc4",
+      "title": "模型与生成设置",
+      "from_version": 2,
+      "to_version": 3,
+      "reason": "截图处于0连接空状态，未展示API Key输入框、保存操作或保存成功；删除不可见后续步骤和后台函数名。",
+      "before": {
+        "confidence": 0.95,
+        "entry_conditions": [
+          "本地服务已连接",
+          "用户进入设置页面"
+        ],
+        "failure_and_recovery": "",
+        "key_controls": [
+          "添加按钮",
+          "服务商列表项",
+          "生成偏好入口"
+        ],
+        "page_title": "模型与生成设置",
+        "page_type": "settings_page",
+        "purpose": "配置模型服务提供商、API密钥及文档生成参数",
+        "related_backend_actions": [
+          "save_model_config",
+          "store_model_credential",
+          "save_app_settings"
+        ],
+        "related_evidence_refs": [
+          "47823394-e74d-46a2-92bc-7d6114bfcd0c",
+          "9043b1f3-5ecc-499f-ba16-536a711517de"
+        ],
+        "route_guess": "/settings/model-config",
+        "success_state": "成功选择并配置模型服务商，系统保存相关凭证与参数",
+        "suggested_caption": "模型与生成设置界面，展示服务商选择列表及生成偏好配置入口",
+        "suggested_group": "系统设置",
+        "suggested_order": 1,
+        "target_roles": [
+          "系统管理员",
+          "普通用户"
+        ],
+        "visible_regions": [
+          "左侧导航栏",
+          "模型服务状态区",
+          "服务商选择网格",
+          "生成偏好设置区"
+        ],
+        "warnings": [],
+        "workflow_steps": [
+          "点击添加按钮",
+          "选择目标服务商",
+          "输入API Key",
+          "确认保存配置"
+        ]
+      },
+      "after": {
+        "confidence": 0.95,
+        "entry_conditions": [
+          "本地服务已连接",
+          "当前位于设置页面"
+        ],
+        "failure_and_recovery": "本图未显示错误提示或异常恢复操作。",
+        "key_controls": [
+          "添加按钮",
+          "服务商列表项",
+          "生成偏好入口"
+        ],
+        "page_title": "模型与生成设置",
+        "page_type": "settings_page",
+        "purpose": "查看模型服务连接状态、选择服务商并进入生成偏好设置。",
+        "related_backend_actions": [],
+        "related_evidence_refs": [],
+        "route_guess": "",
+        "success_state": "本图显示 0 个模型连接，右侧为添加模型服务的服务商选择列表。",
+        "suggested_caption": "模型与生成设置界面，展示服务商选择列表及生成偏好配置入口",
+        "suggested_group": "系统设置",
+        "suggested_order": 1,
+        "target_roles": [
+          "系统管理员",
+          "普通用户"
+        ],
+        "unresolved_claims": [],
+        "visible_regions": [
+          "左侧导航栏",
+          "模型服务状态区",
+          "服务商选择网格",
+          "生成偏好设置区"
+        ],
+        "warnings": [
+          "本图未显示失败状态或恢复操作"
+        ],
+        "workflow_steps": [
+          "查看模型服务列表及连接数量",
+          "通过添加按钮或服务商卡片选择服务商",
+          "通过生成偏好入口查看相关设置"
+        ]
+      }
+    },
+    {
+      "kind": "section",
+      "section_key": "introduction",
+      "to_version": 2,
+      "origin": "user",
+      "reason": "人工核对当前源码与扫描口径，缩小无证据支持的全系统断言。",
+      "edits": [
+        {
+          "before": "最终产出可供申报使用的源代码文档与说明书文档",
+          "after": "最终产出可供审阅和后续申报整理的源代码文档与说明书文档"
+        },
+        {
+          "before": "前端与 sidecar 之间通过环境变量 COPYRIGHT_AGENT_PARENT_PID 建立父子进程关联",
+          "after": "桌面壳启动 sidecar 时通过环境变量 COPYRIGHT_AGENT_PARENT_PID 记录父进程标识"
+        }
+      ]
+    },
+    {
+      "kind": "section",
+      "section_key": "data_interfaces",
+      "to_version": 2,
+      "origin": "user",
+      "reason": "人工核对当前源码与扫描口径，缩小无证据支持的全系统断言。",
+      "edits": [
+        {
+          "before": "保证只有本机合法前端实例可以调用接口",
+          "after": "在配置会话令牌时要求请求提供对应令牌"
+        },
+        {
+          "before": "所有写入型端点均由 Pydantic 请求模型约束请求体结构",
+          "after": "包含请求体的主要写入端点由 Pydantic 请求模型约束请求体结构"
+        },
+        {
+          "before": "本地 SQLite 数据库共包含四十七张数据表，可归纳为几类",
+          "after": "静态建表声明涉及的 SQLite 数据实体可归纳为几类"
+        },
+        {
+          "before": "该机制与状态机配合，使失败任务的产物不会进入可见状态，用户可通过重试接口重新触发执行",
+          "after": "该机制与状态机配合记录生成失败，保留已有版本供审阅，用户可通过重试接口重新触发相关阶段"
+        }
+      ]
+    },
+    {
+      "kind": "section",
+      "section_key": "security_reliability",
+      "to_version": 2,
+      "origin": "user",
+      "reason": "人工核对当前源码与扫描口径，缩小无证据支持的全系统断言。",
+      "edits": [
+        {
+          "before": "从而限制本地 HTTP 接口只服务于本进程链路",
+          "after": "用于本地接口的会话令牌校验与父进程退出检测"
+        },
+        {
+          "before": "所有业务写入通过工作单元组件完成",
+          "after": "扫描等业务流程通过工作单元组件组织写入"
+        },
+        {
+          "before": "失败信息仅记录异常类型等安全内容，不将原始异常细节写入持久化记录。",
+          "after": "失败记录包含阶段错误类别及提示；模型请求失败时提示可能包含截取的服务端错误响应，具体内容随错误路径而异。"
+        }
+      ]
+    },
+    {
+      "kind": "section",
+      "section_key": "testing_summary",
+      "to_version": 2,
+      "origin": "user",
+      "reason": "人工核对当前源码与扫描口径，缩小无证据支持的全系统断言。",
+      "edits": [
+        {
+          "before": "项目采用 Python 标准库 unittest 框架构建单元测试体系，代码库中共包含 47 个测试文件",
+          "after": "项目的 Python 测试使用标准库 unittest，扫描清单还包含前端交互测试文件"
+        },
+        {
+          "before": "测试文件数量",
+          "after": "测试文件范围"
+        },
+        {
+          "before": "47 个",
+          "after": "Python 测试及前端交互测试"
+        },
+        {
+          "before": "基于 unittest 的 47 个测试文件构成单元级验证基础",
+          "after": "Python unittest 与前端交互测试文件构成可执行检查的基础"
+        }
+      ]
+    },
+    {
+      "kind": "section",
+      "section_key": "ui_operations",
+      "to_version": 2,
+      "origin": "user",
+      "reason": "使用已人工修订截图版本重新编写界面章节，保留当前版本引用；仅本地保存，没有模型调用。"
+    }
+  ],
+  "original_document": {
+    "version": 3,
+    "relative_path": "artifacts/manual/jobs/job-v1/software-manual-final.v3.docx",
+    "sha256": "6024909b70a4d3858b6af4967af9549db8b597769dd5dca842151e3cecf5b073"
+  },
+  "new_policy_findings_on_original": [
+    {
+      "key": "structure.caption_prefixes",
+      "passed": false,
+      "severity": "blocker",
+      "expected": [],
+      "actual": [
+        "表 1  表1 主要运行入口与职责",
+        "表 2  表1 任务与阶段的状态集合",
+        "表 3  表1 本地接口代表性端点分组",
+        "表 4  表 1 可从代码结构确认的技术构成指标"
+      ],
+      "message": "图表标题重复编号，请重新装配文档"
+    },
+    {
+      "key": "content.screenshot_unresolved_claims",
+      "passed": false,
+      "severity": "blocker",
+      "expected": [],
+      "actual": [
+        {
+          "asset_id": "b36fa657-f7d2-4c90-b5b8-ea990e4b53bf",
+          "screenshot_key": "source-workspace-1440-b36fa657",
+          "title": "源码材料",
+          "claims": [
+            "具体后端调用结果不可见，仅依据界面按钮推断"
+          ]
+        }
+      ],
+      "message": "截图解读仍包含未解决的事实推断，请到界面截图修改解读、补充证据或取消采用"
+    },
+    {
+      "key": "content.screenshot_analysis_warnings",
+      "passed": false,
+      "severity": "warning",
+      "expected": [],
+      "actual": [
+        {
+          "asset_id": "b36fa657-f7d2-4c90-b5b8-ea990e4b53bf",
+          "screenshot_key": "source-workspace-1440-b36fa657",
+          "title": "源码材料",
+          "warnings": [
+            "未观察到失败或异常状态提示"
+          ]
+        }
+      ],
+      "message": "截图保留了普通观察提醒，可审阅后按允许提醒的设置继续"
+    }
+  ],
+  "original_document_unchanged": true
+}

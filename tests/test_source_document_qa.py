@@ -2,6 +2,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image, ImageDraw
@@ -11,6 +12,7 @@ from software_copyright_agent.source_document_qa import (
     LibreOfficeRenderer,
     RenderResult,
     SourceDocumentQaInspector,
+    SourceDocumentQaError,
 )
 
 
@@ -29,6 +31,57 @@ def pages() -> list:
 
 
 class SourceDocumentQaInspectorTests(unittest.TestCase):
+    def test_renderer_retry_replaces_stale_pages_only_after_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = root / "source.docx"
+            document.write_bytes(b"fixture")
+            output = root / "render"
+            output.mkdir()
+            (output / "source.pdf").write_bytes(b"previous PDF")
+            (output / "page-01.png").write_bytes(b"previous first page")
+            (output / "page-60.png").write_bytes(b"stale last page")
+
+            def process(args, **_kwargs):
+                if "--outdir" in args:
+                    folder = Path(args[args.index("--outdir") + 1])
+                    (folder / "source.pdf").write_bytes(b"current PDF")
+                else:
+                    Path(str(args[-1]) + "-1.png").write_bytes(b"current first page")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with patch.object(LibreOfficeRenderer, "_resolve_tools", return_value=("soffice", "pdftoppm")), \
+                    patch("software_copyright_agent.source_document_qa.subprocess.run", side_effect=process):
+                result = LibreOfficeRenderer().render(document, output)
+            self.assertEqual([path.name for path in result.page_paths], ["page-1.png"])
+            self.assertEqual(result.pdf_path.read_bytes(), b"current PDF")
+            self.assertEqual(result.page_paths[0].read_bytes(), b"current first page")
+            self.assertFalse((output / "page-60.png").exists())
+
+    def test_failed_rasterization_keeps_previous_render_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            document = root / "source.docx"
+            document.write_bytes(b"fixture")
+            output = root / "render"
+            output.mkdir()
+            (output / "source.pdf").write_bytes(b"previous PDF")
+            (output / "page-1.png").write_bytes(b"previous first page")
+
+            def process(args, **_kwargs):
+                if "--outdir" in args:
+                    (Path(args[args.index("--outdir") + 1]) / "source.pdf").write_bytes(b"current PDF")
+                    return SimpleNamespace(returncode=0, stdout="", stderr="")
+                Path(str(args[-1]) + "-1.png").write_bytes(b"incomplete new page")
+                return SimpleNamespace(returncode=1, stdout="", stderr="interrupted")
+
+            with patch.object(LibreOfficeRenderer, "_resolve_tools", return_value=("soffice", "pdftoppm")), \
+                    patch("software_copyright_agent.source_document_qa.subprocess.run", side_effect=process):
+                with self.assertRaises(SourceDocumentQaError):
+                    LibreOfficeRenderer().render(document, output)
+            self.assertEqual((output / "source.pdf").read_bytes(), b"previous PDF")
+            self.assertEqual((output / "page-1.png").read_bytes(), b"previous first page")
+
     def test_renderer_capability_reports_missing_components_for_the_ui(self) -> None:
         with patch.object(LibreOfficeRenderer, "_resolve_tools", return_value=(None, None)):
             capability = LibreOfficeRenderer.capability()

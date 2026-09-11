@@ -3,10 +3,12 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from software_copyright_agent.service import ScanProjectService
 from software_copyright_agent.source_plan_service import SourcePlanError, SourcePlanService
 from software_copyright_agent.source_selection import SourceSelector
+from software_copyright_agent.source_materials import SourceMaterialsService
 from software_copyright_agent.storage import Database
 
 
@@ -128,6 +130,59 @@ class SourceSelectorTests(unittest.TestCase):
 
 
 class SourcePlanServiceTests(unittest.TestCase):
+    def test_materials_workspace_can_search_beyond_first_thirty_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            project.mkdir()
+            create_project(project)
+            for index in range(45):
+                (project / "src" / "features" / ("module_%02d_service.py" % index)).write_text(
+                    "def process_order():\n    return True\n", encoding="utf-8"
+                )
+            database = Database(root / "app.db")
+            result = ScanProjectService(database, root / "data").execute(project)
+            plan = SourcePlanService(database, root / "data").execute(result.task_id)
+            snapshot = SourceMaterialsService(database, root / "data").snapshot(result.task_id)
+            candidates = snapshot["source_plan"]["candidates"]
+            self.assertGreater(len(candidates), 30)
+            self.assertEqual(len(candidates), snapshot["source_plan"]["summary"]["selected_files"])
+            self.assertIn("src/features/module_44_service.py", {row["relative_path"] for row in candidates})
+
+    def test_failed_source_plan_can_resume_from_existing_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            project.mkdir()
+            create_project(project)
+            data_root = root / "data"
+            database = Database(data_root / "app.db")
+            task = ScanProjectService(database, data_root).execute(project)
+            service = SourcePlanService(database, data_root)
+            with patch.object(service, "_write_json_atomic", side_effect=OSError("temporary failure")):
+                with self.assertRaises(OSError):
+                    service.execute(task.task_id)
+            snapshot = SourceMaterialsService(database, data_root).snapshot(task.task_id)
+            self.assertEqual(snapshot["task"]["failure_category"], "source_plan_error")
+            self.assertTrue(snapshot["actions"]["source_plan"])
+            self.assertFalse(any("暂不能生成" in blocker for blocker in snapshot["blockers"]))
+
+            plan = service.execute(task.task_id)
+
+            self.assertEqual(plan.version, 1)
+            self.assertTrue(plan.artifact_path.is_file())
+            with database.connect() as connection:
+                row = connection.execute(
+                    "SELECT status, failure_category FROM tasks WHERE id = ?", (task.task_id,),
+                ).fetchone()
+                scans = connection.execute(
+                    "SELECT COUNT(*) FROM project_snapshots WHERE id = "
+                    "(SELECT snapshot_id FROM tasks WHERE id = ?)", (task.task_id,),
+                ).fetchone()[0]
+            self.assertEqual(row["status"], "completed")
+            self.assertIsNone(row["failure_category"])
+            self.assertEqual(scans, 1)
+
     def test_plan_is_versioned_persisted_and_updates_task_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)

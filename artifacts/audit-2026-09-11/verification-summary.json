@@ -1,0 +1,72 @@
+{
+  "date": "2026-09-11",
+  "base_revision": "a3e5ee9",
+  "branch": "codex/audit-experience-quality",
+  "python": {
+    "passed": true,
+    "tests": 214,
+    "seconds": 87.618
+  },
+  "frontend_build": {
+    "passed": true
+  },
+  "ui_handlers": {
+    "passed": true,
+    "tests": 18,
+    "scope": "real TSX hooks/handlers with controlled async responses; not DOM"
+  },
+  "connection_behavior": {
+    "passed": true,
+    "checks": 7
+  },
+  "rust": {
+    "passed": true,
+    "tests": 15
+  },
+  "real_browser": {
+    "checks": 30,
+    "pages": 9,
+    "widths": [
+      1440,
+      1080,
+      900
+    ],
+    "errors": 0,
+    "dataset": "isolated snapshot of the initial real-model audit task; includes historical documents"
+  },
+  "manual_browser": {
+    "checks": 3,
+    "errors": 0,
+    "writes_reached_backend": 0
+  },
+  "frozen_sidecar": {
+    "artifact": "src-tauri/binaries/copyright-agent-sidecar-aarch64-apple-darwin",
+    "rebuilt": true,
+    "sha256": "9557f4e8bce35f6b693684cefe02e8a8510c20df7aa3a4a63c9bf24c33e6b4d3",
+    "size_bytes": 35060416,
+    "source_fingerprint": "6da3446211d3fa6d43e62d9e1dc28dc2dd670922560fd943d660b27a899a9506",
+    "target_triple": "aarch64-apple-darwin"
+  },
+  "parent_exit": {
+    "exit_code": 0,
+    "parent_pid": 12839,
+    "sidecar_pid": 12841,
+    "startup_seconds": 17.505,
+    "status": "ok"
+  },
+  "limits": [
+    "Not a release installer or Microsoft Word/WPS/Windows validation",
+    "Product manual QA renders 20 pages; independent Office alpha renders 19 with its own correct TOC"
+  ],
+  "ui_contract": {
+    "passed": true,
+    "tests": 16
+  },
+  "diagram_browser": {
+    "third_party_editor_ready": true,
+    "manual_reconnect_exercised": false,
+    "selected_model": "商汤 · glm-5.3-flash",
+    "errors": [],
+    "dataset": "initial real-model task UI review snapshot; actual embedded editor; reconnect covered by controlled handler tests"
+  }
+}

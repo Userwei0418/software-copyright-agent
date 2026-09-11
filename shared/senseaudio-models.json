@@ -1,0 +1,12 @@
+{
+  "updatedAt": "2026-09-11",
+  "source": "https://docs.senseaudio.cn/guides/account/model-list",
+  "baseUrl": "https://api.senseaudio.cn/v1",
+  "models": [
+    "senseaudio-s2", "senseaudio-s2-flash", "senseaudio-s2-lite", "senseaudio-s1",
+    "senseaudio-vl-1.0-260319", "senseaudio-vl-lite-1.0-260319",
+    "sensenova-6.8-flash-lite", "qwen3.8-27b", "qwen3.6-35b-a3b",
+    "deepseek-v4-flash-0731", "kimi-k2.6", "glm-5.3-flash", "glm-5.2",
+    "minimax-m2.7", "doubao-seed-2-0-pro-260215"
+  ]
+}

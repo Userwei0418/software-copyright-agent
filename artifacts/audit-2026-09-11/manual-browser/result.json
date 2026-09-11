@@ -1,0 +1,9 @@
+{
+  "checks": [
+    "manual_actual_preview_page_7_and_escape",
+    "unsaved_chapter_survives_real_dom_offline_and_recovery",
+    "all_editor_controls_lock_and_failed_save_retains_draft_no_replay"
+  ],
+  "errors": [],
+  "writes_reached_backend": 0
+}

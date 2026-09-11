@@ -41,7 +41,7 @@ def main() -> int:
     if not executable:
         raise RuntimeError("未找到 Tauri CLI；请先安装项目依赖")
     if arguments and arguments[0] == "dev":
-        os.environ["COPYRIGHT_AGENT_DATA_DIR"] = str(installed_app_data_dir())
+        os.environ.setdefault("COPYRIGHT_AGENT_DATA_DIR", str(installed_app_data_dir()))
     os.execv(executable, [executable, *arguments])
     return 0
 

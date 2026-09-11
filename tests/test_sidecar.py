@@ -14,6 +14,29 @@ from software_copyright_agent.sidecar import (
 
 
 class SidecarFastApiTests(unittest.TestCase):
+    def test_formal_download_requires_current_final_quality_but_review_remains_available(self) -> None:
+        endpoint = "/api/v1/manual-jobs/job/documents/1/download"
+        item = {"document_kind": "final_document", "freshness": {"status": "current"},
+                "quality": {"status": "failed"}, "filename": "manual.docx", "sha256": "a" * 64}
+        with patch("software_copyright_agent.manual_document.ManualDocumentService.get",
+                   return_value=item), \
+                patch("software_copyright_agent.manual_document.ManualDocumentService.read",
+                      return_value=b"PK-fixture") as read:
+            for status in ("not_checked", "failed", "outdated"):
+                with self.subTest(status=status):
+                    item["quality"]["status"] = status
+                    blocked = self.client.get(endpoint, headers=self.headers)
+                    self.assertEqual(blocked.status_code, 409)
+                    self.assertEqual(blocked.json()["error"]["code"], "manual_document_quality_required")
+                    read.assert_not_called()
+            review = self.client.get(endpoint + "?review=true", headers=self.headers)
+            self.assertEqual(review.status_code, 200)
+            self.assertEqual(review.content, b"PK-fixture")
+            item["quality"]["status"] = "passed"
+            formal = self.client.get(endpoint, headers=self.headers)
+            self.assertEqual(formal.status_code, 200)
+            self.assertEqual(formal.headers["x-artifact-sha256"], "a" * 64)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.data_dir = Path(self.temporary.name)

@@ -1,4 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
+import { Dialog } from "./Dialog";
 import { DragEvent, useEffect, useMemo, useState } from "react";
 import {
   analyzeScreenshotEvidence, captureProjectPage, CaptureLaunchPlan,
@@ -580,10 +581,10 @@ export function ScreenshotAssetWorkspace({ connection, taskId, onTaskChange, onO
       </details>
       <footer className="screenshot-page-footer"><button onClick={onOpenManual}>返回任务驾驶舱</button></footer>
     </section>}
-    {profileOpen && <div className="profile-dialog"><section><header><div><strong>截图理解项目概要</strong>
-      <small>复用项目研究结果，控制每张图片的上下文长度；保存后生成新版本。</small></div><button onClick={() => setProfileOpen(false)}>×</button></header>
-      <textarea value={profileText} onChange={(event) => setProfileText(event.target.value)} spellCheck={false} />
-      <footer><button onClick={() => setProfileOpen(false)}>取消</button><button className="primary" onClick={saveProfile} disabled={busy}>保存新版本</button></footer></section></div>}
+    {profileOpen && <Dialog className="profile-dialog" label="截图理解项目概要" onClose={() => setProfileOpen(false)}><section><header><div><strong>截图理解项目概要</strong>
+      <small>复用项目研究结果，控制每张图片的上下文长度；保存后生成新版本。</small></div><button data-dialog-close aria-label="关闭项目概要" onClick={() => setProfileOpen(false)}>×</button></header>
+      <textarea aria-label="项目概要内容" value={profileText} onChange={(event) => setProfileText(event.target.value)} spellCheck={false} />
+      <footer><button onClick={() => setProfileOpen(false)}>取消</button><button className="primary" onClick={saveProfile} disabled={busy}>保存新版本</button></footer></section></Dialog>}
   </main>;
 }
 

@@ -17,12 +17,16 @@ class AssetManagementUiContractTests(unittest.TestCase):
         self.assertNotIn("removeTask", source)
         self.assertNotIn("deleteTask", source)
 
-    def test_final_document_is_a_ready_asset_without_qa_gate(self) -> None:
+    def test_assets_require_current_quality_and_offer_repair_for_failed_documents(self) -> None:
         source = (self.root / "ui" / "AssetLibrary.tsx").read_text(encoding="utf-8")
         self.assertIn('item.document_kind === "final_document"', source)
+        self.assertIn('item.quality.status === "passed"', source)
+        self.assertIn('item.freshness.status === "current"', source)
         self.assertIn('item.integrity.status === "verified"', source)
-        self.assertIn("finalManual || passedManual", source)
-        self.assertIn("已由人工定稿，可随时导出", source)
+        self.assertIn("const manual = row.manuals[0] || null", source)
+        self.assertIn("检查并修复说明书", source)
+        self.assertIn("质量检查未通过，待修复", source)
+        self.assertIn("manual.version, destination, reviewDraft", source)
 
 
 if __name__ == "__main__":

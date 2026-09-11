@@ -1,0 +1,15 @@
+{
+  "run_id": "6b94e538-227f-46e8-aae2-0bdba9e54d93",
+  "task_id": "99f67040-d30c-4019-8eef-1670be1eeda7",
+  "manual_job_id": "d749c750-47af-4704-8685-6cb59969cb4d",
+  "status": "completed",
+  "elapsed_seconds": 137.11,
+  "request_count": 16,
+  "requests_by_model": {
+    "senseaudio-s2": 14,
+    "senseaudio-vl-1.0-260319": 2
+  },
+  "outcomes": {
+    "completed": 16
+  }
+}

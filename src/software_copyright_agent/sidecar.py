@@ -59,7 +59,7 @@ from .run_diagnostics import RunDiagnosticsService
 
 
 SIDECAR_PROTOCOL_VERSION = 1
-SIDECAR_VERSION = "0.1.0"
+SIDECAR_VERSION = "0.1.1"
 MAX_REQUEST_BYTES = 1024 * 1024
 MAX_DRAWIO_EDITOR_REQUEST_BYTES = 16 * 1024 * 1024
 SESSION_HEADER = "X-Session-Token"
@@ -2152,6 +2152,11 @@ def create_app(data_dir: Path, session_token: str) -> FastAPI:
                 return JSONResponse(status_code=409, content={
                     "error": {"code": "manual_document_outdated",
                               "message": "正文、图表或截图已有更新，请重新装配并质检后导出"}
+                })
+            if not review and item["quality"]["status"] != "passed":
+                return JSONResponse(status_code=409, content={
+                    "error": {"code": "manual_document_quality_required",
+                              "message": "终稿尚未通过当前质量检查；请处理检查项后重试，仍可导出审阅稿"}
                 })
             return Response(
                 content=manual_document_service.read(job_id, version),

@@ -1,0 +1,39 @@
+{
+  "revision_id": "7ff4b7f2-8c81-4c50-ad53-fa6941c097bc",
+  "figure_key": "runtime_deployment_topology",
+  "section_key": "runtime",
+  "version": 2,
+  "title": "桌面部署形态与进程协作拓扑图",
+  "status": "clean",
+  "edit_source": "manual",
+  "operations": [],
+  "conflicts": [],
+  "drawio_relative_path": "artifacts/manual/jobs/job-v1/diagrams/runtime_deployment_topology/v2.drawio",
+  "svg_relative_path": "artifacts/manual/jobs/job-v1/diagrams/runtime_deployment_topology/v2.svg",
+  "png_relative_path": "artifacts/manual/jobs/job-v1/diagrams/runtime_deployment_topology/v2.png",
+  "qa": {
+    "structure": {
+      "passed": true,
+      "errors": [],
+      "vertex_count": 8,
+      "edge_count": 10
+    },
+    "build": {
+      "node_count": 8,
+      "edge_count": 10,
+      "canvas": [
+        760,
+        1000
+      ],
+      "sha256": "52c3150f9c044a429f6341f0b1ccd8e34c0a94aa32df00a9643564a913f61012"
+    },
+    "png": {
+      "width": 2280,
+      "height": 3000,
+      "size_bytes": 230359,
+      "sha256": "965242b8fda4235a8ba667dbf8332a19e7a131f90bc17b8aa8cd7aae35b45095"
+    },
+    "visual_review": "pending_final_document_qa"
+  },
+  "elapsed_ms": 0
+}

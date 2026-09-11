@@ -1,0 +1,100 @@
+{
+  "checked_at": "2026-09-10T18:32:10.961580Z",
+  "job_id": "d749c750-47af-4704-8685-6cb59969cb4d",
+  "task_id": "99f67040-d30c-4019-8eef-1670be1eeda7",
+  "figure_key": "architecture_overview",
+  "data_root": "/tmp/copyright-audit-20260911",
+  "manual_model_id": "2142c5d5-0de4-4b07-802e-f6b5f6281a4d",
+  "expected_diagram_model_id": "1281b4e4-1b98-4b1c-8a3b-b35772e4e449",
+  "actual_model_calls": [
+    {
+      "model_id": "1281b4e4-1b98-4b1c-8a3b-b35772e4e449",
+      "model_name": "glm-5.3-flash",
+      "endpoint_mode": "messages",
+      "started_at": "2026-09-10T18:31:55.786127Z",
+      "prompt_chars": 5765,
+      "status": "completed",
+      "nonempty_content": true,
+      "response_chars": 5419,
+      "elapsed_ms": 14316
+    }
+  ],
+  "new_revisions": [
+    {
+      "figure_key": "architecture_overview",
+      "version": 2,
+      "model_name": "glm-5.3-flash"
+    }
+  ],
+  "before_revision_count": 4,
+  "after_revision_count": 5,
+  "documents_unchanged": true,
+  "result": {
+    "version": 2,
+    "status": "clean",
+    "drawio_relative_path": "artifacts/manual/jobs/job-v1/diagrams/architecture_overview/v2.drawio",
+    "svg_relative_path": "artifacts/manual/jobs/job-v1/diagrams/architecture_overview/v2.svg",
+    "png_relative_path": "artifacts/manual/jobs/job-v1/diagrams/architecture_overview/v2.png",
+    "elapsed_ms": 14321
+  },
+  "verified": true,
+  "local_layout_refinement": {
+    "checked_at": "2026-09-10T18:34:46.672500Z",
+    "external_calls": 0,
+    "version": 3,
+    "status": "clean",
+    "layer_labels": [
+      "桌面层",
+      "本地服务层",
+      "子服务层"
+    ],
+    "drawio": "/tmp/copyright-audit-20260911/tasks/99f67040-d30c-4019-8eef-1670be1eeda7/artifacts/manual/jobs/job-v1/diagrams/architecture_overview/v3.drawio",
+    "svg": "/tmp/copyright-audit-20260911/tasks/99f67040-d30c-4019-8eef-1670be1eeda7/artifacts/manual/jobs/job-v1/diagrams/architecture_overview/v3.svg",
+    "png": "/tmp/copyright-audit-20260911/tasks/99f67040-d30c-4019-8eef-1670be1eeda7/artifacts/manual/jobs/job-v1/diagrams/architecture_overview/v3.png",
+    "visual_review": "Full PNG inspected: named layers, legible labels, no clipped text, no title collision; several outer routes remain long. Final Word-size readability is reviewed separately by manual QA."
+  },
+  "revision_count_scope": "The before/after counts and new_revisions describe the single real GLM regeneration to v2; the separately recorded local refinement then published v3 with no model call.",
+  "checks": {
+    "drawio_document_tests": {
+      "passed": 19,
+      "command": "PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_drawio_document.py'"
+    },
+    "manual_figure_tests": {
+      "passed": 7,
+      "command": "PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_manual_figures.py'"
+    },
+    "manual_workflow_tests": {
+      "passed": 5,
+      "command": "PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_manual_workflow.py'"
+    },
+    "skill_structure_validator": "passed on actual v2 XML; v3 published through runtime structure gate",
+    "skill_layout_validator": {
+      "passed": true,
+      "warnings": 0,
+      "semantic_nodes": 10,
+      "edges": 9,
+      "qa_copy": "/tmp/copyright-diagram-role-review/semantic-geometry.drawio",
+      "scope": "Only decorative layer-band background rectangles excluded from the analyzer copy; all semantic nodes, title, layer labels, edges retained. Original exported XML unchanged."
+    },
+    "drawio_desktop_export": {
+      "svg": "/tmp/copyright-diagram-role-review/drawio-desktop.svg",
+      "png": "/tmp/copyright-diagram-role-review/drawio-desktop.png",
+      "verified": "Export success and PNG visually inspected; node/edge geometry agrees, but edge annotation positions differ from app internal renderer."
+    },
+    "git_diff_check": "passed"
+  },
+  "other_role_review": {
+    "quick_start_manual": "quick_start.py:234 passes manual_model_id to job creation",
+    "text_research": "manual_research.py:132 uses job text model",
+    "text_drafting": "manual_drafting.py:384 uses job text model",
+    "screenshot_vision": "quick_start.py:258,266 passes vision_model_id for analysis and retries",
+    "editor_ui_followup": "Root identified initial AI model default using text job model, which would become an explicit override; root is fixing UI, outside this backend patch."
+  },
+  "limitations": [
+    "Architecture only regenerated with a real model; remaining figures retain their existing semantics. Manual QA owns any local deployment-figure rerender and final Word assembly.",
+    "Some orthogonal routes remain long; not a claim of optimal visual layout.",
+    "Draw.io Desktop and the internal SVG/PNG renderer place edge labels differently; fixed XML offset versus internal collision-aware annotation placement. Node and edge geometry unchanged.",
+    "Model probe is one real short task, not sustained provider reliability or model-quality comparison."
+  ],
+  "evidence_updated_at": "2026-09-10T18:35:58.755942Z"
+}

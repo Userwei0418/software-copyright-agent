@@ -25,11 +25,14 @@ export function DrawioEditor({ title, xml, onSave, onXmlChange, canUndoAi,
   const lastLoadedRef = useRef("");
   const currentXmlRef = useRef(xml);
   const exportTimeoutRef = useRef<number | null>(null);
+  const loadTimeoutRef = useRef<number | null>(null);
   const saveCallbackRef = useRef(onSave);
   const xmlCallbackRef = useRef(onXmlChange);
   const [status, setStatus] = useState("正在加载官方 Draw.io…");
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadTimedOut, setLoadTimedOut] = useState(false);
+  const [frameVersion, setFrameVersion] = useState(0);
   saveCallbackRef.current = onSave;
   xmlCallbackRef.current = onXmlChange;
 
@@ -49,6 +52,21 @@ export function DrawioEditor({ title, xml, onSave, onXmlChange, canUndoAi,
       window.clearTimeout(exportTimeoutRef.current);
       exportTimeoutRef.current = null;
     }
+  }
+
+  function clearLoadTimeout() {
+    if (loadTimeoutRef.current !== null) {
+      window.clearTimeout(loadTimeoutRef.current);
+      loadTimeoutRef.current = null;
+    }
+  }
+
+  function reconnectEditor() {
+    if (savingRef.current) return;
+    readyRef.current = false;
+    setReady(false); setLoadTimedOut(false);
+    setStatus("正在重新连接官方 Draw.io，当前图表内容已保留…");
+    setFrameVersion((current) => current + 1);
   }
 
   function failExport(message: string) {
@@ -83,11 +101,25 @@ export function DrawioEditor({ title, xml, onSave, onXmlChange, canUndoAi,
   }
 
   useEffect(() => {
-    if (readyRef.current && xml && xml !== lastLoadedRef.current) {
-      load(xml);
-      setStatus("画布已重新载入，请审阅后确认并装配");
+    if (xml && xml !== lastLoadedRef.current) {
+      currentXmlRef.current = xml;
+      if (readyRef.current) {
+        load(xml);
+        setStatus("画布已重新载入，请审阅后确认并装配");
+      }
     }
   }, [xml, title]);
+
+  useEffect(() => {
+    clearLoadTimeout();
+    loadTimeoutRef.current = window.setTimeout(() => {
+      loadTimeoutRef.current = null;
+      if (readyRef.current) return;
+      setLoadTimedOut(true);
+      setStatus("Draw.io 网络连接尚未就绪，当前图表内容已保留，请检查网络后重新连接编辑器。");
+    }, 25000);
+    return clearLoadTimeout;
+  }, [frameVersion]);
 
   useEffect(() => {
     const receive = (event: MessageEvent) => {
@@ -101,7 +133,8 @@ export function DrawioEditor({ title, xml, onSave, onXmlChange, canUndoAi,
           defaultGridSize: 10, enableCustomLibraries: true,
         } });
       } else if (message.event === "init") {
-        readyRef.current = true; setReady(true); load(xml);
+        clearLoadTimeout(); setLoadTimedOut(false);
+        readyRef.current = true; setReady(true); load(currentXmlRef.current);
         setStatus("完整编辑器已就绪 · 修改会保留图层、分组与样式");
       } else if (message.event === "autosave" && message.xml) {
         currentXmlRef.current = message.xml;
@@ -158,6 +191,7 @@ export function DrawioEditor({ title, xml, onSave, onXmlChange, canUndoAi,
   return <section className="drawio-inline-editor" aria-label={`${title} Draw.io 完整编辑器`}>
     <header><div><strong>{title}</strong><span>{status}</span></div><div>
       <span className="drawio-network-badge">Draw.io 渲染 / 微调</span>
+      {loadTimedOut && !ready && <button disabled={saving} onClick={reconnectEditor}>重新连接编辑器</button>}
       {canUndoAi && <button className="drawio-undo-ai" disabled={saving}
         onClick={onUndoAi}>撤销本次 AI</button>}
       {hasUnconfirmedChanges && <button className="drawio-restore-confirmed" disabled={saving}
@@ -166,7 +200,7 @@ export function DrawioEditor({ title, xml, onSave, onXmlChange, canUndoAi,
         {saving ? "正在确认并装配…" : "确认并装配说明书"}
       </button>
     </div></header>
-    <iframe ref={iframeRef} title={`${title} - Draw.io`} src={DRAWIO_URL}
+    <iframe key={frameVersion} ref={iframeRef} title={`${title} - Draw.io`} src={DRAWIO_URL}
       allow="clipboard-read; clipboard-write; fullscreen" />
   </section>;
 }

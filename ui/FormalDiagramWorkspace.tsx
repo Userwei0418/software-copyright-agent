@@ -3,7 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import {
   assembleFormalManualDocument, exportFormalFigureAsset, FormalFigureRevision, FormalManualFigure,
   listFormalFigureRevisions, listFormalManualFigures, listFormalManualJobs, listModelConfigs,
-  loadFormalFigureAsset, ModelConfig, regenerateFormalManualFigure,
+  loadAppSettings, loadFormalFigureAsset, ModelConfig, regenerateFormalManualFigure,
   revealExportedAsset, rollbackFormalFigure, runFormalManualQa, saveFormalFigureEditorRevision,
   SidecarConnection, streamFormalFigureAiPatch,
 } from "./api";
@@ -46,6 +46,7 @@ export function FormalDiagramWorkspace({ connection, taskId, onTaskChange, onOpe
   const [aiBusy, setAiBusy] = useState(false);
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [jobModelId, setJobModelId] = useState("");
+  const [defaultDiagramModelId, setDefaultDiagramModelId] = useState("");
   const [aiModelId, setAiModelId] = useState("");
   const [chatByFigure, setChatByFigure] = useState<Record<string, ChatMessage[]>>({});
   const [canvasUndoStack, setCanvasUndoStack] = useState<CanvasUndoSnapshot[]>([]);
@@ -59,8 +60,11 @@ export function FormalDiagramWorkspace({ connection, taskId, onTaskChange, onOpe
   useEffect(() => {
     if (!connection) { setModels([]); return; }
     let active = true;
-    listModelConfigs(connection).then((items) => {
-      if (active) setModels(items.filter((item) => item.enabled));
+    Promise.all([listModelConfigs(connection), loadAppSettings(connection)]).then(([items, settings]) => {
+      if (active) {
+        setModels(items.filter((item) => item.enabled));
+        setDefaultDiagramModelId(settings.diagram_model_id || "");
+      }
     }).catch((error) => {
       if (active) setMessage(error instanceof Error ? error.message : "模型配置读取失败");
     });
@@ -70,10 +74,11 @@ export function FormalDiagramWorkspace({ connection, taskId, onTaskChange, onOpe
   useEffect(() => {
     setAiModelId((current) => {
       if (models.some((item) => item.id === current)) return current;
+      if (models.some((item) => item.id === defaultDiagramModelId)) return defaultDiagramModelId;
       if (models.some((item) => item.id === jobModelId)) return jobModelId;
       return models[0]?.id || "";
     });
-  }, [models, jobModelId]);
+  }, [models, jobModelId, defaultDiagramModelId]);
 
   useEffect(() => {
     activeJobRef.current = ""; liveXmlRef.current = ""; persistedXmlRef.current = "";
@@ -104,7 +109,6 @@ export function FormalDiagramWorkspace({ connection, taskId, onTaskChange, onOpe
           if (activeJobRef.current !== chosen.id) {
             activeJobRef.current = chosen.id;
             setJobModelId(chosen.model_config_id);
-            setAiModelId(chosen.model_config_id);
           }
           setJobId(chosen.id); setJobStatus(chosen.status);
           setJobModelId(chosen.model_config_id); setFigures(items);
@@ -349,7 +353,7 @@ export function FormalDiagramWorkspace({ connection, taskId, onTaskChange, onOpe
             <button disabled={revision.version === selected.version || busy} onClick={() => restore(revision.version)}>
               {revision.version === selected.version ? "当前" : "恢复"}</button></article>)}</div></div>}
       </section>
-      <aside className="diagram-ai-column"><header><div><strong>AI 图表助手</strong><small>当前 XML · 专用提示词 · 图/模型独立缓存</small></div>
+      <aside className="diagram-ai-column"><header><div><strong>AI 图表助手</strong><small>描述要调整的内容，审阅后保存新版本</small></div>
         <div className="diagram-ai-model"><select aria-label="AI 图表模型" value={aiModelId}
           disabled={aiBusy || !models.length} onChange={(event) => setAiModelId(event.target.value)}>
           {models.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.model_name}</option>)}

@@ -372,6 +372,18 @@ export async function connectSidecar(): Promise<SidecarConnection> {
   return invoke<SidecarConnection>("start_sidecar");
 }
 
+export async function checkSidecarHealth(connection: SidecarConnection): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 3000);
+  try {
+    const response = await fetch(`${connection.baseUrl}/api/v1/health`, {
+      headers: { "X-Session-Token": connection.sessionToken }, signal: controller.signal,
+    });
+    return response.ok;
+  } catch { return false; }
+  finally { window.clearTimeout(timeout); }
+}
+
 async function localFetch(connection: SidecarConnection, path: string, init?: RequestInit) {
   const execute = () => {
     const headers = new Headers(init?.headers);
@@ -383,6 +395,11 @@ async function localFetch(connection: SidecarConnection, path: string, init?: Re
   try { return await execute(); }
   catch (error) {
     if (!(error instanceof TypeError)) throw error;
+    // A lost response does not prove a write failed. Replaying POST/PUT/DELETE
+    // can create another paid job or document version; let the UI refresh first.
+    if (!["GET", "HEAD"].includes((init?.method || "GET").toUpperCase())) {
+      throw new Error("本地服务通信中断，操作结果尚未确认。请重新连接并刷新状态，再决定是否继续。");
+    }
     try {
       const refreshed = await connectSidecar();
       Object.assign(connection, refreshed);

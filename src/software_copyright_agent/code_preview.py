@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable, List
 
 
-FORMATTER_VERSION = "code-preview-v5"
+FORMATTER_VERSION = "code-preview-v6"
 
 
 class CodePreviewError(ValueError):
@@ -154,16 +154,24 @@ class CodePreviewBuilder:
                     suffix = " (excerpt from source line {0})".format(source_line)
                 else:
                     suffix = ""
-                entries.append(
-                    {
+                # File labels are rendered with the same font and line height as
+                # source code. Count their wrapped lines too: a long package path
+                # must not silently add Word lines after pagination is complete.
+                header = "FILE: {0}{1}".format(item.relative_path, suffix)
+                for segment_index, segment in enumerate(
+                    hard_wrap_visual(header, self.config.max_visual_width)
+                ):
+                    entries.append({
                         "kind": "file_header",
                         "path": item.relative_path,
                         "grade": item.grade,
                         "score": item.score,
                         "language": item.language,
-                        "text": "FILE: {0}{1}".format(item.relative_path, suffix),
-                    }
-                )
+                        "segment": segment_index + 1,
+                        "continuation": segment_index > 0,
+                        "visual_width": visual_width(segment),
+                        "text": segment,
+                    })
                 entries.extend(chunk)
                 entries.append({"kind": "separator", "text": ""})
         if entries and entries[-1]["kind"] == "separator":

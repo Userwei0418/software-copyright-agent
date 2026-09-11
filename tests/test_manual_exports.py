@@ -1,9 +1,12 @@
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from software_copyright_agent.manual_exports import ManualExportError, ManualExportService
+from software_copyright_agent.manual_document import GENERATOR_VERSION
+from software_copyright_agent.manual_qa import QA_POLICY_VERSION
 from software_copyright_agent.storage import Database
 
 
@@ -68,6 +71,42 @@ class ManualExportServiceTests(unittest.TestCase):
             ManualExportService(self.database).record(
                 "job", 1, "formal", str(destination), len(self.body), self.digest,
             )
+
+    def test_final_export_requires_passed_current_qa_and_generator(self) -> None:
+        destination = self.root / "final.docx"
+        destination.write_bytes(self.body)
+        with self.database.connect() as connection:
+            connection.execute("UPDATE manual_document_artifacts SET qa_json=? WHERE id='document'",
+                               (json.dumps({"document_kind": "final_document",
+                                            "generator_version": GENERATOR_VERSION}),))
+        export = lambda: ManualExportService(self.database).record(
+            "job", 1, "formal", str(destination), len(self.body), self.digest)
+        with self.assertRaisesRegex(ManualExportError, "质量检查"):
+            export()
+        with self.database.connect() as connection:
+            connection.execute(
+                """INSERT INTO manual_document_qa_runs(id,document_artifact_id,job_id,qa_version,
+                policy_version,renderer_kind,passed,checks_json,summary_json,report_relative_path,
+                render_relative_path,preview_pdf_relative_path,created_at)
+                VALUES ('qa','document','job',1,?,'libreoffice_word',0,'[]','{}','report','render','pdf','now')""",
+                (QA_POLICY_VERSION,))
+        with self.assertRaisesRegex(ManualExportError, "质量检查"):
+            export()
+        with self.database.connect() as connection:
+            connection.execute("UPDATE manual_document_qa_runs SET passed=1,policy_version='old'")
+        with self.assertRaisesRegex(ManualExportError, "质量检查"):
+            export()
+        with self.database.connect() as connection:
+            connection.execute("UPDATE manual_document_qa_runs SET policy_version=?", (QA_POLICY_VERSION,))
+            connection.execute("UPDATE manual_document_artifacts SET qa_json=? WHERE id='document'",
+                               (json.dumps({"document_kind": "final_document", "generator_version": "old"}),))
+        with self.assertRaisesRegex(ManualExportError, "质量检查"):
+            export()
+        with self.database.connect() as connection:
+            connection.execute("UPDATE manual_document_artifacts SET qa_json=? WHERE id='document'",
+                               (json.dumps({"document_kind": "final_document",
+                                            "generator_version": GENERATOR_VERSION}),))
+        self.assertTrue(export()["verified"])
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from typing import Callable, Optional
 from uuid import uuid4
 
 from .service import utc_now
+from .screenshot_claims import unresolved_screenshot_claims
 from .storage import Database, encode_json
 
 
@@ -268,22 +269,7 @@ class QuickStartService:
                 if failed:
                     raise QuickStartError("仍有 {0} 张截图解读失败：{1}".format(
                         len(failed), "、".join(item["title"] for item in failed[:4])))
-                reviewed, reused = [], []
-                for index, item in enumerate(self._screenshots.list_assets(task_id), 1):
-                    interpretation = item.get("interpretation")
-                    if item["analysis_status"] != "completed" or not interpretation:
-                        continue
-                    if (item.get("adoption_status") == "adopted"
-                            and item.get("review_status") == "reviewed"
-                            and item.get("sensitive_status") == "confirmed_safe"):
-                        reused.append(item)
-                        continue
-                    reviewed.append(self._screenshots.review(
-                        task_id, item["id"], interpretation, adopted=True,
-                        group_title=interpretation.get("suggested_group") or "界面说明",
-                        sort_order=interpretation.get("suggested_order") or index,
-                        sensitive_status="confirmed_safe",
-                    ))
+                reviewed, reused = self._adopt_analyzed_screenshots(task_id)
                 if not reviewed and not reused:
                     raise QuickStartError("截图文件夹中没有可自动采用的真实截图")
                 return {"imported": imported.get("imported_count", 0),
@@ -342,11 +328,7 @@ class QuickStartService:
                         pass
                 return self._qa.execute(job_id, document["version"])
 
-            # A previous recovery may already have assembled a final document
-            # before a later QA rule rejected it.  Recheck that durable artifact
-            # under the current policy instead of assembling v4/v5 copies.
-            existing_final = next((item for item in documents
-                                   if item["document_kind"] == "final_document"), None)
+            candidate, existing_final = self._current_manual_documents(documents)
             if existing_final is not None:
                 final_qa = inspect_document(existing_final)
                 final_summary = final_qa["qa_run"].get("summary") or {}
@@ -356,6 +338,7 @@ class QuickStartService:
                     or len(final_summary.get("failed_checks") or [])
                 )
                 if final_blockers == 0 and final_qa["qa_run"].get("passed"):
+                    self._check_warning_policy(final_qa, config["finalize_with_warnings"])
                     return {"manual_document": final_qa["document"],
                             "manual_quality": final_qa["qa_run"],
                             "source_document": source_snapshot["source_document"]}
@@ -370,10 +353,6 @@ class QuickStartService:
                                  for item in checks if not item.get("passed")
                              ], "summary": final_summary},
                 )
-            # list() is version-descending. Always inspect the newest candidate;
-            # an older implementation kept rechecking v2 after v3 already existed.
-            candidate = next((item for item in documents
-                              if item["document_kind"] == "formal_candidate"), None)
             if candidate is None:
                 candidate = self._documents.assemble(job_id)
             qa_result = inspect_document(candidate)
@@ -399,10 +378,7 @@ class QuickStartService:
                              "failed_checks": failed_details,
                              "warning_count": qa_summary.get("warning_count", 0)},
                 )
-            if not qa_result["qa_run"].get("passed") and not config["finalize_with_warnings"]:
-                raise QuickStartBlocked("说明书质量检查存在警告，当前配置不允许自动定稿",
-                                        details={"document_version": candidate["version"],
-                                                 "summary": qa_summary})
+            self._check_warning_policy(qa_result, config["finalize_with_warnings"])
             final = self._documents.finalize(job_id, candidate["version"])
             final_qa = self._qa.execute(job_id, final["version"])
             # QA updates status, preview and quality metadata in place. Return
@@ -422,6 +398,7 @@ class QuickStartService:
                     details={"document_version": final["version"],
                              "summary": final_summary},
                 )
+            self._check_warning_policy(final_qa, config["finalize_with_warnings"])
             return {"manual_document": final, "manual_quality": final_qa["qa_run"],
                     "source_document": source_snapshot["source_document"]}
         # Re-rendering an unchanged document cannot repair a content/layout gate.
@@ -431,6 +408,60 @@ class QuickStartService:
         self._set_run(run_id, outputs=outputs)
         self._stage(run_id, "delivery", lambda: {"ready": True})
         self._set_run(run_id, status="completed", finished=True, current_stage="delivery")
+
+    @staticmethod
+    def _current_manual_documents(documents: list) -> tuple[Optional[dict], Optional[dict]]:
+        current = sorted((item for item in documents
+                          if item.get("freshness", {}).get("status") == "current"
+                          and item.get("integrity", {}).get("status") == "verified"
+                          and item.get("quality", {}).get("current_generator")),
+                         key=lambda item: item["version"], reverse=True)
+        candidate = next((item for item in current
+                          if item["document_kind"] == "formal_candidate"), None)
+        final = next((item for item in current if item["document_kind"] == "final_document"), None)
+        # A new human-reviewed candidate takes precedence over an older final.
+        if final is not None and candidate is not None and candidate["version"] > final["version"]:
+            final = None
+        return candidate, final
+
+    @staticmethod
+    def _check_warning_policy(result: dict, allow_warnings: bool) -> None:
+        summary = result["qa_run"].get("summary") or {}
+        if int(summary.get("warning_count") or 0) and not allow_warnings:
+            raise QuickStartBlocked(
+                "本任务不允许带提醒自动定稿，请到说明书工作台处理提醒，或审阅后手动生成终稿并导出。",
+                details={"document_version": result["document"]["version"], "summary": summary},
+            )
+
+    def _adopt_analyzed_screenshots(self, task_id: str) -> tuple[list, list]:
+        assets = [item for item in self._screenshots.list_assets(task_id)
+                  if item.get("adoption_status") != "excluded"]
+        unresolved = [{"asset_id": item["id"], "title": item["title"], "claims": claims}
+                      for item in assets
+                      if (claims := unresolved_screenshot_claims(item.get("interpretation")))]
+        if unresolved:
+            raise QuickStartBlocked(
+                "截图事实仍需核实，请进入界面截图修改解读、补充证据或取消采用后重试：" +
+                "、".join(item["title"] for item in unresolved[:4]),
+                details={"reason": "screenshot_unresolved_claims", "screenshots": unresolved},
+            )
+        reviewed, reused = [], []
+        for index, item in enumerate(assets, 1):
+            interpretation = item.get("interpretation")
+            if item["analysis_status"] != "completed" or not interpretation:
+                continue
+            if (item.get("adoption_status") == "adopted"
+                    and item.get("review_status") == "reviewed"
+                    and item.get("sensitive_status") == "confirmed_safe"):
+                reused.append(item)
+                continue
+            reviewed.append(self._screenshots.review(
+                task_id, item["id"], interpretation, adopted=True,
+                group_title=interpretation.get("suggested_group") or "界面说明",
+                sort_order=interpretation.get("suggested_order") or index,
+                sensitive_status="confirmed_safe",
+            ))
+        return reviewed, reused
 
     def _confirm_metadata(self, task_id: str, name: str, version: str) -> dict:
         inspection = self._inspection.inspect(task_id)

@@ -1,0 +1,204 @@
+{
+  "results": [
+    {
+      "width": 1440,
+      "page": "quick",
+      "scrollWidth": 1216,
+      "clientWidth": 1216,
+      "tiny": []
+    },
+    {
+      "width": 1440,
+      "page": "overview",
+      "scrollWidth": 1216,
+      "clientWidth": 1216,
+      "tiny": []
+    },
+    {
+      "width": 1440,
+      "page": "source",
+      "scrollWidth": 1216,
+      "clientWidth": 1216,
+      "tiny": []
+    },
+    {
+      "width": 1440,
+      "page": "manual",
+      "scrollWidth": 1216,
+      "clientWidth": 1216,
+      "tiny": []
+    },
+    {
+      "width": 1440,
+      "page": "screenshots",
+      "scrollWidth": 1216,
+      "clientWidth": 1216,
+      "tiny": []
+    },
+    {
+      "width": 1440,
+      "page": "diagrams",
+      "scrollWidth": 1216,
+      "clientWidth": 1216,
+      "tiny": []
+    },
+    {
+      "width": 1440,
+      "page": "assets",
+      "scrollWidth": 1216,
+      "clientWidth": 1216,
+      "tiny": []
+    },
+    {
+      "width": 1440,
+      "page": "logs",
+      "scrollWidth": 1216,
+      "clientWidth": 1216,
+      "tiny": []
+    },
+    {
+      "width": 1440,
+      "page": "settings",
+      "scrollWidth": 1216,
+      "clientWidth": 1216,
+      "tiny": []
+    },
+    {
+      "width": 1080,
+      "page": "quick",
+      "scrollWidth": 888,
+      "clientWidth": 888,
+      "tiny": []
+    },
+    {
+      "width": 1080,
+      "page": "overview",
+      "scrollWidth": 888,
+      "clientWidth": 888,
+      "tiny": []
+    },
+    {
+      "width": 1080,
+      "page": "source",
+      "scrollWidth": 888,
+      "clientWidth": 888,
+      "tiny": []
+    },
+    {
+      "width": 1080,
+      "page": "manual",
+      "scrollWidth": 888,
+      "clientWidth": 888,
+      "tiny": []
+    },
+    {
+      "width": 1080,
+      "page": "screenshots",
+      "scrollWidth": 888,
+      "clientWidth": 888,
+      "tiny": []
+    },
+    {
+      "width": 1080,
+      "page": "diagrams",
+      "scrollWidth": 888,
+      "clientWidth": 888,
+      "tiny": []
+    },
+    {
+      "width": 1080,
+      "page": "assets",
+      "scrollWidth": 888,
+      "clientWidth": 888,
+      "tiny": []
+    },
+    {
+      "width": 1080,
+      "page": "logs",
+      "scrollWidth": 888,
+      "clientWidth": 888,
+      "tiny": []
+    },
+    {
+      "width": 1080,
+      "page": "settings",
+      "scrollWidth": 888,
+      "clientWidth": 888,
+      "tiny": []
+    },
+    {
+      "width": 900,
+      "page": "quick",
+      "scrollWidth": 720,
+      "clientWidth": 720,
+      "tiny": []
+    },
+    {
+      "width": 900,
+      "page": "overview",
+      "scrollWidth": 720,
+      "clientWidth": 720,
+      "tiny": []
+    },
+    {
+      "width": 900,
+      "page": "source",
+      "scrollWidth": 720,
+      "clientWidth": 720,
+      "tiny": []
+    },
+    {
+      "width": 900,
+      "page": "manual",
+      "scrollWidth": 720,
+      "clientWidth": 720,
+      "tiny": []
+    },
+    {
+      "width": 900,
+      "page": "screenshots",
+      "scrollWidth": 720,
+      "clientWidth": 720,
+      "tiny": []
+    },
+    {
+      "width": 900,
+      "page": "diagrams",
+      "scrollWidth": 720,
+      "clientWidth": 720,
+      "tiny": []
+    },
+    {
+      "width": 900,
+      "page": "assets",
+      "scrollWidth": 720,
+      "clientWidth": 720,
+      "tiny": []
+    },
+    {
+      "width": 900,
+      "page": "logs",
+      "scrollWidth": 720,
+      "clientWidth": 720,
+      "tiny": []
+    },
+    {
+      "width": 900,
+      "page": "settings",
+      "scrollWidth": 720,
+      "clientWidth": 720,
+      "tiny": []
+    },
+    {
+      "source_preview_keyboard": "passed",
+      "actual_image": true
+    },
+    {
+      "source_preview_one_shot": "passed"
+    },
+    {
+      "disconnected_reconnect": "passed"
+    }
+  ],
+  "errors": []
+}

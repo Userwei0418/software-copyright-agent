@@ -133,6 +133,30 @@ class ScreenshotEvidenceServiceTests(unittest.TestCase):
                     sensitive_status="unreviewed",
                 )
 
+    def test_unresolved_claim_can_be_saved_for_review_but_cannot_be_adopted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_root, database = self._fixture(root)
+            image = root / "review-claim.png"
+            Image.new("RGB", (1280, 720), "white").save(image)
+            service = ScreenshotEvidenceService(database, data_root)
+            asset_id = service.import_batch("task", [str(image)])["results"][0]["asset"]["id"]
+            value = self._analysis()
+            value["warnings"] = ["未观察到失败提示", "依据按钮推断保存成功"]
+            with self.assertRaisesRegex(ScreenshotEvidenceError, "事实仍需核实"):
+                service.review("task", asset_id, value, adopted=True,
+                               group_title="项目管理", sort_order=1)
+            pending = service.review("task", asset_id, value, adopted=False,
+                                     group_title="项目管理", sort_order=1)
+            self.assertEqual(pending["unresolved_claims"], ["依据按钮推断保存成功"])
+            with self.assertRaisesRegex(ScreenshotEvidenceError, "事实仍需核实"):
+                service.set_adoption_status("task", [asset_id], "adopted")
+            value["warnings"] = ["未观察到失败提示"]
+            reviewed = service.review("task", asset_id, value, adopted=True,
+                                      group_title="项目管理", sort_order=1)
+            self.assertEqual(reviewed["interpretation"]["warnings"], ["未观察到失败提示"])
+            self.assertEqual(reviewed["interpretation_version"], 2)
+
     def test_single_image_failure_is_retryable_without_rerunning_batch(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

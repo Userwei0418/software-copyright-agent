@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from uuid import uuid4
+from unittest.mock import patch
 
 from software_copyright_agent.manual_drafting import ManualDraftingService, unverified_outcome_hits
 from software_copyright_agent.manual_pipeline import ManualPipelineService
@@ -196,6 +197,31 @@ class ManualDraftingServiceTests(unittest.TestCase):
             draft_step = next(item for item in refreshed["steps"] if item["key"] == "draft")
             self.assertEqual(draft_step["summary"]["completed_items"], 7)
             self.assertEqual(draft_step["summary"]["total_items"], 7)
+            # Human corrections to chapter 7 must preserve screenshot-version
+            # references instead of sending them through the source-ref filter.
+            refs = ["screenshot:screen:v2"]
+            ui_blocks = [
+                {"type": "subheading", "title": "项目页面", "evidence_refs": refs},
+                {"type": "paragraph", "text": "截图显示项目页面的标题、当前任务状态以及材料生成入口。" * 12,
+                 "evidence_refs": refs},
+                {"type": "paragraph", "text": "操作人员通过当前可见的列表和按钮定位已有材料的处理结果。" * 12,
+                 "evidence_refs": refs},
+                {"type": "list", "items": ["查看页面当前可见状态"], "evidence_refs": refs},
+            ]
+            seed = service._normalize_ui_payload({"blocks": ui_blocks}, refs)
+            service._persist_section(service._context(job["id"]), "ui_operations", "用户界面与操作说明",
+                                     7, seed, "ai", "fixture", 0)
+            with patch("software_copyright_agent.manual_screenshot_evidence.ScreenshotEvidenceService") as mocked:
+                mocked.return_value.snapshot_for_job.return_value = {
+                    "profile": {"id": "profile"},
+                    "screenshots": [{"id": "screen", "interpretation_version": 2}],
+                }
+                ui_edit = service.save_edit(job["id"], "ui_operations", "用户界面与操作说明", ui_blocks)
+                self.assertEqual(ui_edit["evidence_refs"], refs)
+                self.assertEqual((ui_edit["origin"], ui_edit["version"]), ("user", 2))
+                mocked.return_value.record_ui_sources.assert_called_once_with(
+                    job["id"], ui_edit["id"], "profile",
+                    [{"id": "screen", "interpretation_version": 2}])
 
 
 if __name__ == "__main__":

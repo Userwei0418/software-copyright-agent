@@ -21,7 +21,7 @@ from .service import utc_now
 from .storage import Database
 
 
-GENERATOR_VERSION = "formal-manual-docx-v12"
+GENERATOR_VERSION = "formal-manual-docx-v15"
 BODY_LINE_SPACING = 1.18
 BODY_SPACE_AFTER_PT = 4.0
 FONT_NAME = "Noto Sans CJK SC"
@@ -63,6 +63,8 @@ class ManualDocumentService:
             raise ManualDocumentError("正文、图表或截图已有更新，请先重新装配审阅稿")
         if source["quality"]["status"] in {"not_checked", "outdated"}:
             raise ManualDocumentError("请先完成当前审阅稿的逐页检查，再由人工决定是否生成终稿")
+        if source["quality"]["status"] != "passed":
+            raise ManualDocumentError("质量检查仍有阻断问题，请修复后重新检查；当前审阅稿仍可导出")
         return self._assemble(
             job_id, document_kind="final_document", advance_pipeline=False,
             source_document_version=source_version,
@@ -116,6 +118,8 @@ class ManualDocumentService:
                 temporary, build_context, sections, figures, screenshots, task_root
             )
             summary["document_kind"] = document_kind
+            summary["software_name"] = str(context["software_name"])
+            summary["software_version"] = str(context["software_version"])
             if source_document_version is not None:
                 summary["source_document_version"] = source_document_version
             digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
@@ -348,6 +352,7 @@ class ManualDocumentService:
             "svg_relative_path": row["svg_relative_path"],
             "drawio_relative_path": row["drawio_relative_path"],
             "qa": json.loads(row["qa_json"]),
+            "semantic": json.loads(row["semantic_json"] or "{}"),
         } for row in rows]
 
     def _screenshots(self, job_id: str) -> list:
@@ -409,14 +414,17 @@ class ManualDocumentService:
 
     @staticmethod
     def _interpretation_description(value: dict) -> dict:
+        def combine(parts):
+            return "；".join(str(part).strip().rstrip("。；; ") for part in parts
+                            if str(part or "").strip().rstrip("。；; "))
         def joined(key):
             item = value.get(key, [])
-            return "；".join(str(entry) for entry in item) if isinstance(item, list) else str(item or "")
-        backend = joined("related_backend_actions")
+            return combine(item) if isinstance(item, list) else str(item or "")
+        backend = joined("related_backend_actions") or "当前截图未展示后台接口或数据写入过程。"
         warnings = joined("warnings")
         recovery = str(value.get("failure_and_recovery") or "")
         if warnings:
-            recovery = (recovery + "；分析警告：" + warnings).strip("；")
+            recovery = combine([recovery, "分析提醒：" + warnings])
         return {
             "page_purpose": str(value.get("purpose") or ""),
             "entry_conditions": joined("entry_conditions"),
@@ -424,9 +432,9 @@ class ManualDocumentService:
                                                        joined("key_controls")])),
             "typical_workflow": joined("workflow_steps"),
             "backend_interactions": backend,
-            "result_validation_recovery": "；".join(filter(None, [
+            "result_validation_recovery": combine([
                 str(value.get("success_state") or ""), recovery,
-            ])),
+            ]),
         }
 
     def _next_version(self, job_id: str) -> int:
@@ -510,6 +518,12 @@ class ManualDocumentService:
             ).fetchone()
         freshness = "outdated" if latest and latest > row["created_at"] else "current"
         assembly = json.loads(row["qa_json"])
+        artifact_context = dict(context)
+        for key in ("software_name", "software_version"):
+            if key in assembly:
+                artifact_context[key] = assembly[key]
+                if str(assembly[key]) != str(context[key]):
+                    freshness = "outdated"
         # Keep the persisted status as immutable history, but never present an
         # artifact produced or checked by an obsolete policy as deliverable.
         from .manual_qa import QA_POLICY_VERSION
@@ -539,9 +553,9 @@ class ManualDocumentService:
         return {
             "id": row["id"], "job_id": row["job_id"], "task_id": context["task_id"],
             "version": row["version"], "status": row["status"],
-            "project_name": str(context["software_name"]),
-            "project_version": str(context["software_version"]),
-            "filename": self.export_filename(context, assembly.get("document_kind")),
+            "project_name": str(artifact_context["software_name"]),
+            "project_version": str(artifact_context["software_version"]),
+            "filename": self.export_filename(artifact_context, assembly.get("document_kind")),
             "document_kind": assembly.get("document_kind", "formal_candidate"),
             "docx_relative_path": relative, "preview_pdf_relative_path": row["preview_pdf_relative_path"],
             "qa": assembly, "quality": quality, "sha256": row["sha256"],
@@ -664,9 +678,7 @@ class FormalManualBuilder:
                                 document, path, figure["title"], "图", figure_number,
                                 self._figure_height(figure.get("figure_type")),
                             )
-                            purpose = str(block.get("purpose", "")).strip()
-                            if purpose:
-                                self._figure_note(document, purpose)
+                            self._figure_note(document, self._figure_description(figure))
                             inserted_figures += 1
                             inserted_section_figures.add(figure["figure_key"])
                         else:
@@ -688,7 +700,7 @@ class FormalManualBuilder:
                     document, path, figure["title"], "图", inserted_figures + 1,
                     self._figure_height(figure.get("figure_type")),
                 )
-                self._figure_note(document, "补充呈现本章的核心结构、职责边界与协作关系。")
+                self._figure_note(document, self._figure_description(figure))
                 inserted_figures += 1
                 inserted_section_figures.add(figure["figure_key"])
             section_screenshots = screenshots_by_section.get(section["section_key"], [])
@@ -913,7 +925,8 @@ class FormalManualBuilder:
             caption = document.add_paragraph(style="Caption")
             caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
             self._run(
-                caption.add_run("表 {0}  {1}".format(number, block["title"])),
+                caption.add_run("表 {0}  {1}".format(
+                    number, self._clean_caption_number(block["title"]))),
                 9, MUTED,
             )
         table = document.add_table(rows=1, cols=len(headers))
@@ -959,7 +972,8 @@ class FormalManualBuilder:
         caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
         caption.paragraph_format.keep_with_next = True
         self._run(
-            caption.add_run("{0} {1}  {2}".format(prefix, number, title)),
+            caption.add_run("{0} {1}  {2}".format(
+                prefix, number, self._clean_caption_number(title))),
             9, MUTED,
         )
 
@@ -974,21 +988,39 @@ class FormalManualBuilder:
             "module": 5.05,
         }.get(str(figure_type or ""), 4.6)
 
+    @staticmethod
+    def _clean_caption_number(title: str) -> str:
+        # Model titles sometimes already carry a local label (表1 / Figure 2-1).
+        # The document owns the continuous numbering across all chapters.
+        return re.sub(r"^(?:(?:图|表|Figure|Table)\s*[0-9０-９]+"
+                      r"(?:[.．-][0-9０-９]+)*\s*[、:：.．]?\s*)+", "",
+                      str(title).strip(), flags=re.I) or "图表说明"
+
+    @staticmethod
+    def _figure_description(figure: dict) -> str:
+        # The original figure_request describes an intention, not the contents
+        # of a later generated/edited revision. Never present it as image fact.
+        semantic = figure.get("semantic") or {}
+        nodes = semantic.get("nodes", []) if isinstance(semantic, dict) else []
+        labels = list(dict.fromkeys(str(node.get("label") or "").strip()
+                                    for node in nodes if isinstance(node, dict)
+                                    and str(node.get("label") or "").strip()))
+        if labels and not figure.get("qa", {}).get("editor_managed"):
+            return "图中展示{0}{1}。各对象之间的关系由连线及其标注说明。".format(
+                "、".join(labels[:8]), "等对象" if len(labels) > 8 else "")
+        return "图中展示本章相关对象与关系，具体内容以当前图内标注为准。"
+
     def _screenshot_description(self, document: Document, description: dict,
                                 *, final_document: bool = False) -> None:
+        description_start = len(document.paragraphs)
         purpose = str(description.get("page_purpose", "")).strip()
-        workflow = str(description.get("typical_workflow", "")).strip()
         if purpose:
-            narrative = "该功能模块主要用于{0}".format(purpose.rstrip("。"))
-            if workflow:
-                narrative += "。用户可在该页面按照界面提供的操作入口完成{0}".format(
-                    workflow.rstrip("。").replace("；", "、")
-                )
-            if not final_document:
-                narrative += "。页面实际内容和操作范围以图中已审核的真实界面为准。"
-            self._body(document, narrative, compact=True)
+            # The reviewed purpose is already a complete sentence. Wrapping it
+            # in a template both changed its voice and repeated the entire
+            # purpose/workflow again in the detail rows below.
+            self._body(document, purpose, compact=True)
         labels = (
-            ("page_purpose", "页面用途"), ("entry_conditions", "进入条件"),
+            ("entry_conditions", "进入条件"),
             ("visible_regions", "可见区域与控件"), ("typical_workflow", "典型操作流程"),
             ("backend_interactions", "后台、接口与数据交互"),
             ("result_validation_recovery", "结果、校验与异常恢复"),
@@ -1001,6 +1033,14 @@ class FormalManualBuilder:
             label_run = paragraph.add_run(label + "：")
             self._run(label_run, 10, INK, bold=True)
             self._run(paragraph.add_run(value), 10, INK)
+        # Keep a short screenshot explanation with its image as one readable
+        # unit. Word can still break an explanation that is longer than a page;
+        # there is no hard page break here to create an empty intermediate page.
+        paragraphs = document.paragraphs[description_start:]
+        for paragraph in paragraphs[:-1]:
+            paragraph.paragraph_format.keep_with_next = True
+        if paragraphs:
+            paragraphs[-1].paragraph_format.keep_with_next = False
 
     @staticmethod
     def _clean_heading_number(value: object) -> str:

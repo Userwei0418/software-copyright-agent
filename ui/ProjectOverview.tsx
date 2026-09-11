@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   answerConfirmation, listRecentTasks, loadInspection, ProjectScanResult, RecentTask,
   scanProject, SidecarConnection,
@@ -45,13 +45,22 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
   const [recentLoaded, setRecentLoaded] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [expandedFacts, setExpandedFacts] = useState<Set<string>>(new Set());
+  const actionPending = useRef(false);
+  const actionRequest = useRef(0);
+
+  useEffect(() => () => { actionRequest.current += 1; }, []);
 
   useEffect(() => {
     if (!connection) { setRecentLoaded(false); return; }
+    let disposed = false;
     setRecentLoaded(false);
-    listRecentTasks(connection).then((items) => { setRecent(items); setRecentLoaded(true); })
-      .catch((error) => { setRecentLoaded(true); setMessage(error instanceof Error
+    listRecentTasks(connection).then((items) => {
+      if (!disposed) { setRecent(items); setRecentLoaded(true); }
+    }).catch((error) => {
+      if (disposed) return;
+      setRecentLoaded(true); setMessage(error instanceof Error
         ? `最近任务读取失败：${error.message}` : "最近任务读取失败，请重试"); });
+    return () => { disposed = true; };
   }, [connection]);
 
   async function choose(kind: "directory" | "zip") {
@@ -73,31 +82,40 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
   }
 
   async function scan() {
-    if (!selectedPath) return;
+    if (!selectedPath || actionPending.current) return;
+    actionPending.current = true;
+    const request = ++actionRequest.current;
     setBusy(true);
     setMessage(connection ? "正在扫描项目、过滤依赖并提取确定性事实…" :
       "正在重新连接本地服务…");
     try {
       const activeConnection = connection ?? await ensureConnection();
+      if (request !== actionRequest.current) return;
       setMessage("正在扫描项目、过滤依赖并提取确定性事实…");
       const value = await scanProject(activeConnection, selectedPath);
+      if (request !== actionRequest.current) return;
       setResult(value);
-      setRecent(await listRecentTasks(activeConnection));
+      const items = await listRecentTasks(activeConnection);
+      if (request !== actionRequest.current) return;
+      setRecent(items);
       onTaskCreated(value.task_id);
       setMessage(`扫描完成 · 任务 ${value.task_id.slice(0, 8)}…`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "项目扫描失败");
+      if (request === actionRequest.current) setMessage(error instanceof Error ? error.message : "项目扫描失败");
     } finally {
-      setBusy(false);
+      if (request === actionRequest.current) { actionPending.current = false; setBusy(false); }
     }
   }
 
   async function openRecent(task: RecentTask) {
-    if (!connection || !task.summary || !task.snapshot_id) return;
+    if (!connection || !task.summary || !task.snapshot_id || actionPending.current) return;
+    actionPending.current = true;
+    const request = ++actionRequest.current;
     setBusy(true);
     setMessage(`正在打开 ${task.display_name}…`);
     try {
       const inspection = await loadInspection(connection, task.task_id);
+      if (request !== actionRequest.current) return;
       setResult({
         task_id: task.task_id, snapshot_id: task.snapshot_id,
         summary: task.summary, inspection,
@@ -106,29 +124,34 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
       setSelectedPath(null);
       setMessage(`已恢复任务 ${task.task_id.slice(0, 8)}…`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "最近任务打开失败");
+      if (request === actionRequest.current) setMessage(error instanceof Error ? error.message : "最近任务打开失败");
     } finally {
-      setBusy(false);
+      if (request === actionRequest.current) { actionPending.current = false; setBusy(false); }
     }
   }
 
   async function confirm(fieldKey: string) {
     const value = (answers[fieldKey] ?? (fieldKey === "project.version" ? "V1.0" : "")).trim();
-    if (!connection || !result || !value) return;
+    if (!connection || !result || !value || actionPending.current) return;
+    actionPending.current = true;
+    const request = ++actionRequest.current;
     setBusy(true);
     setMessage(`正在确认 ${fieldKey}…`);
     try {
       const response = await answerConfirmation(connection, result.task_id, fieldKey, value);
+      if (request !== actionRequest.current) return;
       setResult({ ...result, inspection: response.inspection });
       setAnswers((current) => ({ ...current, [fieldKey]: "" }));
-      setRecent(await listRecentTasks(connection));
+      const items = await listRecentTasks(connection);
+      if (request !== actionRequest.current) return;
+      setRecent(items);
       setMessage(response.remaining_required
         ? `已确认，仍有 ${response.remaining_required} 项必填信息`
         : "全部必填信息已确认，项目任务已完成");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "确认提交失败");
+      if (request === actionRequest.current) setMessage(error instanceof Error ? error.message : "确认提交失败");
     } finally {
-      setBusy(false);
+      if (request === actionRequest.current) { actionPending.current = false; setBusy(false); }
     }
   }
 
@@ -144,8 +167,8 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
       <div className="intake-card">
         <div><span className="step-mark">01</span><h2>选择项目</h2>
           <p>目录将原地只读扫描；ZIP 会隔离解压到应用任务目录。</p></div>
-        <div className="picker-actions"><button onClick={() => choose("directory")}>选择项目目录</button>
-          <button onClick={() => choose("zip")}>选择 ZIP</button></div>
+        <div className="picker-actions"><button disabled={busy} onClick={() => choose("directory")}>选择项目目录</button>
+          <button disabled={busy} onClick={() => choose("zip")}>选择 ZIP</button></div>
         <div className="selected-path"><small>已授权路径</small>
           <strong>{selectedPath ?? "尚未选择"}</strong></div>
         <button className="scan-button" disabled={!selectedPath || busy} onClick={scan}>
@@ -189,10 +212,10 @@ export function ProjectOverview({ connection, ensureConnection, onTaskCreated }:
             {pending.length ? pending.map((item) => <div className="confirmation-row" key={item.field_key}>
               <strong>{item.question}</strong><small>{item.field_key}</small>
               {item.candidates.length > 0 && <div className="candidate-list">{item.candidates.map(
-                (candidate) => <button key={String(candidate)} onClick={() => setAnswers(
+                (candidate) => <button disabled={busy} key={String(candidate)} onClick={() => setAnswers(
                   (current) => ({ ...current, [item.field_key]: String(candidate) })
                 )}>{String(candidate)}</button>)}</div>}
-              <div className="confirmation-form"><input value={answers[item.field_key] ?? (
+              <div className="confirmation-form"><input disabled={busy} value={answers[item.field_key] ?? (
                 item.field_key === "project.version" ? "V1.0" : "")}
                 onChange={(event) => setAnswers((current) => ({
                   ...current, [item.field_key]: event.target.value,
