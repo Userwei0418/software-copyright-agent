@@ -480,7 +480,7 @@ export function QuickStart({ connection, ensureConnection, onTaskChange, onOpenA
 
   return <main className="workspace quick-start-page">
     <section className="quick-hero">
-      <div><small>UNATTENDED PIPELINE</small><h1>快速开始</h1>
+      <div><small>申请材料制作</small><h1>快速开始</h1>
         <p>选择项目源码和真实界面截图，生成源代码文档与软件说明书。</p></div>
       <div className={`quick-orb ${run?.status || "idle"}`}><i /><span>{run ? `${progress}%` : "AUTO"}</span></div>
     </section>
@@ -545,7 +545,7 @@ export function QuickStart({ connection, ensureConnection, onTaskChange, onOpenA
           "可切换页面；请保持应用运行"}</small></span></div><b>{progress}%</b></section>}
 
     {run && <section className={`quick-flow-board ${run.status}`}>
-      <header><div><small>LIVE ORCHESTRATION</small><h2>{run.status === "completed" ? "本次生成已完成" :
+      <header><div><small>当前生成任务</small><h2>{run.status === "completed" ? "本次生成已完成" :
         ["failed", "waiting_for_user"].includes(run.status) ? "需要处理后继续" : "自动化流水线正在运行"}</h2><p>{run.status === "completed"
           ? "本次运行记录已保留。当前版本和最新质检状态可在“我的资产”中查看。" : notice}</p></div></header>
       {["failed", "waiting_for_user"].includes(run.status) && <div className="quick-recovery" role="status"><span>
